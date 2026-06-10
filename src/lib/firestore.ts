@@ -50,6 +50,7 @@ export const COLLECTIONS = {
   MEMBERSHIP_CONFIG: 'membership_config',
   POINT_TRANSACTIONS: 'point_transactions',
   SYSTEM_SETTINGS: 'system_settings',
+  PRODUCTION_ORDERS: 'production_orders',
 } as const
 
 // Convert Firestore timestamps to Date
