@@ -1,0 +1,34 @@
+import type { Metadata, Viewport } from 'next'
+import { Sarabun } from 'next/font/google'
+import './globals.css'
+import { Toaster } from 'sonner'
+
+const sarabun = Sarabun({
+  weight: ['300', '400', '500', '600', '700'],
+  subsets: ['latin', 'thai'],
+  variable: '--font-sarabun',
+  display: 'swap',
+})
+
+export const metadata: Metadata = {
+  title: 'WigPro ERP - ระบบบริหารร้านวิกผมและร้านตัดผม',
+  description: 'ระบบบริหารจัดการร้านวิกผมและร้านตัดผมครบวงจร รองรับหลายสาขา',
+  icons: { icon: '/favicon.ico' },
+}
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="th" className={`${sarabun.variable} h-full antialiased`}>
+      <body className="min-h-full">
+        {children}
+        <Toaster position="top-right" richColors />
+      </body>
+    </html>
+  )
+}

@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+/* ปิด dark mode — ใช้แค่ light theme เสมอ */
+@variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* ─── Background ─── */
+  --bg-page:        #fdf5f9;
+  --bg-base:        #fdf5f9;
+  --bg-surface:     #ffffff;
+  --bg-subtle:      #fff0f7;
+  --bg-muted:       #fce8f3;
+
+  /* ─── Pink palette ─── */
+  --pink-50:        #fff0f7;
+  --pink-100:       #fce4ee;
+  --pink-200:       #f9c8dd;
+  --pink-300:       #f4a0c0;
+  --pink-400:       #ed72a0;
+  --pink-500:       #e44d82;
+  --pink-600:       #cc2d65;
+
+  /* ─── Purple accent ─── */
+  --purple-300:     #d8b4fe;
+  --purple-400:     #c084fc;
+  --purple-500:     #a855f7;
+
+  /* ─── Text — NO black, uses deep rose-plum ─── */
+  --text-primary:   #4a1a42;
+  --text-secondary: #7a4a72;
+  --text-muted:     #b08aaa;
+  --text-light:     #d4b8d0;
+
+  /* ─── Borders ─── */
+  --border:         #f0d5e8;
+  --border-light:   #f8eaf4;
+
+  /* ─── Shadows (pink-tinted, no black) ─── */
+  --shadow-sm:    0 1px 4px rgba(200, 80, 150, 0.07);
+  --shadow-md:    0 4px 20px rgba(200, 80, 150, 0.10);
+  --shadow-lg:    0 8px 40px rgba(200, 80, 150, 0.14);
+  --shadow-card:  0 2px 16px rgba(200, 80, 150, 0.07);
+
+  /* ─── Radius ─── */
+  --radius-sm:  8px;
+  --radius-md:  14px;
+  --radius-lg:  20px;
+  --radius-xl:  28px;
+
+  --sidebar-w: 240px;
+}
+
+@theme inline {
+  --color-background: var(--bg-page);
+  --color-foreground: var(--text-primary);
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: linear-gradient(155deg, #fdf5f9 0%, #fef8fc 40%, #f8f0ff 100%);
+  min-height: 100vh;
+  color: var(--text-primary);
+  font-family: 'Sarabun', 'Noto Sans Thai', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--pink-200); border-radius: 99px; }
+
+/* ─── Glass ─── */
+.glass {
+  background: rgba(255,255,255,0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,0.9);
+}
+
+/* ─── Luxury gradient (pink → purple) ─── */
+.luxury-gradient {
+  background: linear-gradient(135deg, #f472b6 0%, #e044a0 50%, #c084fc 100%);
+}
+
+/* ─── Soft gradients ─── */
+.gradient-pink   { background: linear-gradient(135deg, #f472b6 0%, #e879a0 100%); }
+.gradient-purple { background: linear-gradient(135deg, #c084fc 0%, #a855f7 100%); }
+.gradient-soft   { background: linear-gradient(135deg, #fce4ee 0%, #f3e8ff 100%); }
+.gradient-hero   { background: linear-gradient(135deg, #fff0f7 0%, #f8e8ff 100%); }
+
+/* ─── Card ─── */
+.card {
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--border-light);
+}
+
+/* ─── Badges ─── */
+.badge-pink   { background: var(--pink-100);  color: var(--pink-600); }
+.badge-green  { background: #dcfce7; color: #166534; }
+.badge-blue   { background: #dbeafe; color: #1e40af; }
+.badge-amber  { background: #fef9c3; color: #92400e; }
+.badge-purple { background: #f3e8ff; color: #6d28d9; }
+
+/* ─── Input focus ring ─── */
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(228, 77, 130, 0.12);
+}
+
+@media print { .no-print { display: none !important; } }

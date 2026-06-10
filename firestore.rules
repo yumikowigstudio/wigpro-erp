@@ -1,0 +1,214 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(roles) {
+      return isAuthenticated() && getUserData().role in roles;
+    }
+
+    function isSuperAdmin() {
+      return hasRole(['super_admin']);
+    }
+
+    function isOwner() {
+      return hasRole(['super_admin', 'owner']);
+    }
+
+    function isBranchManager() {
+      return hasRole(['super_admin', 'owner', 'branch_manager']);
+    }
+
+    function isStaff() {
+      return hasRole(['super_admin', 'owner', 'branch_manager', 'sales', 'stylist', 'staff', 'accountant']);
+    }
+
+    function belongsToCompany(companyId) {
+      return isAuthenticated() && getUserData().companyId == companyId;
+    }
+
+    // Companies
+    match /companies/{companyId} {
+      allow read: if belongsToCompany(companyId);
+      allow write: if isSuperAdmin();
+    }
+
+    // Branches
+    match /branches/{branchId} {
+      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow write: if isOwner();
+    }
+
+    // Users
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isBranchManager());
+      allow create: if isOwner();
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isBranchManager());
+      allow delete: if isOwner();
+    }
+
+    // Employees
+    match /employees/{employeeId} {
+      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow write: if isBranchManager();
+    }
+
+    // Customers
+    match /customers/{customerId} {
+      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow create: if isStaff();
+      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow delete: if isBranchManager();
+    }
+
+    match /customer_images/{imageId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+    }
+
+    match /customer_documents/{docId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+    }
+
+    match /customer_timeline/{timelineId} {
+      allow read: if isStaff();
+      allow create: if isStaff();
+      allow update, delete: if isBranchManager();
+    }
+
+    // Appointments
+    match /appointments/{appointmentId} {
+      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow create: if isStaff();
+      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow delete: if isBranchManager();
+    }
+
+    // Products & Services
+    match /products/{productId} {
+      allow read: if isStaff();
+      allow write: if isBranchManager();
+    }
+
+    match /services/{serviceId} {
+      allow read: if isStaff();
+      allow write: if isBranchManager();
+    }
+
+    // Inventory
+    match /inventory/{inventoryId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+    }
+
+    match /transfer_orders/{orderId} {
+      allow read: if isStaff();
+      allow create: if isStaff();
+      allow update: if isBranchManager();
+      allow delete: if isOwner();
+    }
+
+    match /stock_movements/{movementId} {
+      allow read: if isStaff();
+      allow create: if isStaff();
+      allow update, delete: if false; // Immutable
+    }
+
+    // Work Orders (Production)
+    match /work_orders/{orderId} {
+      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow create: if isStaff();
+      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow delete: if isBranchManager();
+    }
+
+    // Sales & POS
+    match /sales/{saleId} {
+      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow create: if isStaff();
+      allow update: if isBranchManager();
+      allow delete: if isOwner();
+    }
+
+    match /deposits/{depositId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+    }
+
+    // Accounting
+    match /expenses/{expenseId} {
+      allow read: if hasRole(['super_admin', 'owner', 'branch_manager', 'accountant']);
+      allow create: if isStaff();
+      allow update: if isBranchManager();
+      allow delete: if isOwner();
+    }
+
+    // Commission
+    match /commission_records/{recordId} {
+      allow read: if isStaff();
+      allow create: if isStaff();
+      allow update: if isBranchManager();
+      allow delete: if isOwner();
+    }
+
+    // Documents
+    match /documents/{docId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isStaff();
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Logs - append only
+    match /activity_logs/{logId} {
+      allow read: if isOwner();
+      allow create: if isStaff();
+      allow update, delete: if false;
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if isOwner();
+      allow create: if isStaff();
+      allow update, delete: if false; // Immutable
+    }
+
+    // Settings
+    match /system_settings/{settingId} {
+      allow read: if isStaff();
+      allow write: if isOwner();
+    }
+
+    match /membership_config/{configId} {
+      allow read: if isStaff();
+      allow write: if isOwner();
+    }
+
+    match /point_transactions/{txId} {
+      allow read: if isStaff();
+      allow create: if isStaff();
+      allow update, delete: if isOwner();
+    }
+
+    match /discount_requests/{requestId} {
+      allow read: if isStaff();
+      allow create: if isStaff();
+      allow update: if isBranchManager();
+      allow delete: if isOwner();
+    }
+  }
+}

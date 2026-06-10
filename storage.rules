@@ -1,0 +1,57 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Images under 10MB
+    function isValidImage() {
+      return request.resource.contentType.matches('image/.*')
+        && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    // Documents under 20MB
+    function isValidDocument() {
+      return request.resource.contentType.matches('application/.*')
+        && request.resource.size < 20 * 1024 * 1024;
+    }
+
+    // Customer images
+    match /customers/{customerId}/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isValidImage();
+    }
+
+    // Product images
+    match /products/{productId}/{allPaths=**} {
+      allow read: if true; // Public
+      allow write: if isAuthenticated();
+    }
+
+    // Work order images
+    match /work_orders/{orderId}/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isValidImage();
+    }
+
+    // Documents
+    match /documents/{docId}/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (isValidImage() || isValidDocument());
+    }
+
+    // Payment slips
+    match /payment_slips/{slipId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isValidImage();
+    }
+
+    // Company logos
+    match /company/{companyId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+  }
+}
