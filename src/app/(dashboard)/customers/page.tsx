@@ -4,7 +4,7 @@ import { Customer } from '@/types'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { Search, Plus, Download, Eye, Edit, Phone, MessageCircle, Star, Users, UserPlus, TrendingUp, Calendar, Loader2 } from 'lucide-react'
 import Link from 'next/link'
-import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, orderBy, Timestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 
@@ -30,19 +30,41 @@ export default function CustomersPage() {
   const [search, setSearch]         = useState('')
   const [filterCase, setFilterCase] = useState('')
   const [filterLevel, setFilterLevel] = useState('')
+  const [newThisMonth, setNewThisMonth] = useState(0)
+  const [todayApts, setTodayApts]   = useState(0)
 
   useEffect(() => {
+    // Simple query without composite index — filter deleted client-side
     const q = query(
       collection(db, COLLECTIONS.CUSTOMERS),
-      where('status', '!=', 'deleted'),
-      orderBy('status'),
       orderBy('createdAt', 'desc')
     )
     const unsub = onSnapshot(q, snap => {
-      setCustomers(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Customer[])
+      const all = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Customer[]
+      setCustomers(all.filter(c => c.status !== 'deleted'))
+
+      // New customers this month
+      const now = new Date()
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+      setNewThisMonth(all.filter(c => {
+        const d = c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt as unknown as string)
+        return d >= monthStart
+      }).length)
+
       setLoading(false)
     }, () => setLoading(false))
-    return unsub
+
+    // Today's appointments count
+    const today = new Date(); today.setHours(0,0,0,0)
+    const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1)
+    const aptQ = query(
+      collection(db, COLLECTIONS.APPOINTMENTS),
+      where('date', '>=', Timestamp.fromDate(today)),
+      where('date', '<', Timestamp.fromDate(tomorrow))
+    )
+    const unsubApt = onSnapshot(aptQ, snap => setTodayApts(snap.size), () => {})
+
+    return () => { unsub(); unsubApt() }
   }, [])
 
   const filtered = customers.filter(c => {
@@ -70,9 +92,9 @@ export default function CustomersPage() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { label:'ลูกค้าทั้งหมด',   value: customers.length, icon: Users,      color:'text-[var(--pink-500)]',  bg:'bg-[var(--pink-50)]'  },
-          { label:'ลูกค้าใหม่เดือนนี้', value: 12,              icon: UserPlus,   color:'text-emerald-500',        bg:'bg-emerald-50'        },
-          { label:'กลับมาซ้ำ',       value: '68%',            icon: TrendingUp, color:'text-purple-500',         bg:'bg-purple-50'         },
-          { label:'นัดหมายวันนี้',   value: 5,                icon: Calendar,   color:'text-blue-500',           bg:'bg-blue-50'           },
+          { label:'ลูกค้าใหม่เดือนนี้', value: newThisMonth,   icon: UserPlus,   color:'text-emerald-500',        bg:'bg-emerald-50'        },
+          { label:'VIP / Platinum',  value: customers.filter(c => c.memberLevel === 'vip' || c.memberLevel === 'platinum').length, icon: TrendingUp, color:'text-purple-500', bg:'bg-purple-50' },
+          { label:'นัดหมายวันนี้',   value: todayApts,        icon: Calendar,   color:'text-blue-500',           bg:'bg-blue-50'           },
         ].map(s => (
           <div key={s.label} className="bg-white rounded-2xl border border-[var(--border-light)] p-4 shadow-[var(--shadow-card)]">
             <div className={`w-9 h-9 rounded-xl ${s.bg} flex items-center justify-center mb-3`}>
