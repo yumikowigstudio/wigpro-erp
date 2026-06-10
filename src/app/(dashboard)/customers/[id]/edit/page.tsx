@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag, Loader2, Trash2 } from 'lucide-react'
 import { getDocument, updateDocument, softDelete, COLLECTIONS } from '@/lib/firestore'
 import { Customer } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 const caseOptions = [
   { id: 'chemo',        label: 'คีโม',          color: 'bg-pink-50 text-pink-600 border-pink-200'     },
@@ -25,6 +26,7 @@ const memberLevels = [
 export default function EditCustomerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
+  const { userId } = useAuth()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
   const [form, setForm] = useState({
@@ -82,7 +84,7 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
 
   const handleDelete = async () => {
     if (!confirm('ต้องการลบลูกค้านี้ใช่หรือไม่?')) return
-    await softDelete(COLLECTIONS.CUSTOMERS, id, 'demo_user')
+    await softDelete(COLLECTIONS.CUSTOMERS, id, userId)
     router.push('/customers')
   }
 

@@ -6,6 +6,7 @@ import { collection, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
 import { WorkOrder } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 type ProdStatus = 'waiting' | 'in_production' | 'qc' | 'ready_to_ship' | 'shipped' | 'at_branch' | 'ready_to_pickup' | 'delivered'
 
@@ -23,6 +24,7 @@ const statusCfg: Record<ProdStatus, { label: string; color: string; next?: ProdS
 const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
 
 export default function ProductionPage() {
+  const { companyId, branchId, userId } = useAuth()
   const [orders, setOrders]             = useState<WorkOrder[]>([])
   const [loading, setLoading]           = useState(true)
   const [search, setSearch]             = useState('')
@@ -61,16 +63,16 @@ export default function ProductionPage() {
       const dep    = parseFloat(form.depositAmount) || 0
       await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, {
         id: '',
-        companyId: 'demo_company', branchId: 'demo_branch',
+        companyId, branchId,
         orderNo, customerId: '', customerName: form.customerName,
         saleOrderId: '', notes: form.notes || undefined,
         wigType: form.wigType, wigColor: form.wigColor, wigLength: form.wigLength,
         manufacturer: form.manufacturer || undefined,
         totalAmount: total, depositAmount: dep, remainingAmount: total - dep,
         status: 'waiting', progressImages: [], completedImages: [],
-        performedBy: 'demo_user', orderDate: now,
+        performedBy: userId, orderDate: now,
         expectedDate: form.expectedDate ? new Date(form.expectedDate) : undefined,
-        createdBy: 'demo_user', createdAt: now, updatedAt: now,
+        createdBy: userId, createdAt: now, updatedAt: now,
       } as WorkOrder)
       setShowModal(false)
       setForm({ customerName:'', customerPhone:'', wigType:'', wigColor:'', wigLength:'', manufacturer:'', totalAmount:'', depositAmount:'', expectedDate:'', notes:'' })

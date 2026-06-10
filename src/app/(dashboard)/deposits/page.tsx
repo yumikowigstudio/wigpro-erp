@@ -6,6 +6,7 @@ import { collection, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
 import { Deposit } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 type DepositStatus = 'pending' | 'deposited' | 'paid_full' | 'cancelled'
 
@@ -155,6 +156,7 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
 }
 
 export default function DepositsPage() {
+  const { companyId, branchId, userId } = useAuth()
   const [deposits, setDeposits]         = useState<Deposit[]>([])
   const [loading, setLoading]           = useState(true)
   const [search, setSearch]             = useState('')
@@ -190,14 +192,14 @@ export default function DepositsPage() {
       const now     = new Date()
       const depositNo = `DEP-${String(now.getMonth()+1).padStart(2,'0')}${String(now.getFullYear()).slice(-2)}-${String(deposits.length+1).padStart(3,'0')}`
       await addDocument<Deposit>(COLLECTIONS.DEPOSITS, {
-        companyId: 'demo_company', branchId: 'demo_branch',
+        companyId, branchId,
         depositNo, customerId: '', customerName: form.customerName,
         items: [{ name: form.itemName, quantity: 1, unitPrice: total, total }],
         totalAmount: total, depositAmount: deposit, paidAmount: deposit,
         remainingAmount: total - deposit,
         status: deposit >= total ? 'paid_full' : deposit > 0 ? 'deposited' : 'pending',
         notes: form.notes || undefined,
-        createdBy: 'demo_user', createdAt: now, updatedAt: now,
+        createdBy: userId, createdAt: now, updatedAt: now,
       })
       setShowModal(false)
       setForm({ customerName: '', itemName: '', totalAmount: '', depositAmount: '', notes: '' })

@@ -12,6 +12,7 @@ import {
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Product, StockMovement } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 /* ─── Types ─── */
 type ProductWithStock = Product & { stockQty?: number }
@@ -78,8 +79,8 @@ function ReceiveModal({
         })
         // Write stock movement
         await addDoc(collection(db, COLLECTIONS.STOCK_MOVEMENTS), {
-          companyId:    'demo_company',
-          branchId:     'demo_branch',
+          companyId:    companyId,
+          branchId:     branchId,
           productId:    item.productId,
           productName:  item.productName,
           sku:          item.sku,
@@ -91,7 +92,7 @@ function ReceiveModal({
           supplier:     supplier || null,
           notes:        note || null,
           referenceType: 'purchase',
-          performedBy:  'demo_user',
+          performedBy:  userId,
           createdAt:    serverTimestamp(),
         })
       }
@@ -254,6 +255,7 @@ function MoveBadge({ type }: { type: string }) {
 
 /* ─── Main Page ─── */
 export default function InventoryPage() {
+  const { companyId, branchId, userId } = useAuth()
   const [products, setProducts]     = useState<ProductWithStock[]>([])
   const [movements, setMovements]   = useState<(StockMovement & { productName?: string; sku?: string; supplier?: string })[]>([])
   const [loading, setLoading]       = useState(true)
@@ -280,7 +282,7 @@ export default function InventoryPage() {
   useEffect(() => {
     const q = query(
       collection(db, COLLECTIONS.STOCK_MOVEMENTS),
-      where('companyId', '==', 'demo_company'),
+      where('companyId', '==', companyId),
       orderBy('createdAt', 'desc'),
       limit(100),
     )
@@ -316,8 +318,8 @@ export default function InventoryPage() {
         stockQty: newQty, updatedAt: serverTimestamp(),
       })
       await addDoc(collection(db, COLLECTIONS.STOCK_MOVEMENTS), {
-        companyId:    'demo_company',
-        branchId:     'demo_branch',
+        companyId:    companyId,
+        branchId:     branchId,
         productId:    adjustItem.id,
         productName:  adjustItem.name,
         sku:          adjustItem.sku,
@@ -328,7 +330,7 @@ export default function InventoryPage() {
         costPrice:    adjustItem.costPrice ?? 0,
         notes:        adjustNote || null,
         referenceType: 'manual_adjust',
-        performedBy:  'demo_user',
+        performedBy:  userId,
         createdAt:    serverTimestamp(),
       })
       setAdjustItem(null); setAdjustQty(''); setAdjustNote('')

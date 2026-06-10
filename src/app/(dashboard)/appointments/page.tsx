@@ -12,6 +12,7 @@ import {
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
 import { Appointment } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 type AptStatus = 'pending' | 'confirmed' | 'arrived' | 'completed' | 'cancelled'
 
@@ -127,6 +128,7 @@ interface NewAptForm {
 }
 
 export default function AppointmentsPage() {
+  const { companyId, branchId, userId } = useAuth()
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [view, setView]                 = useState<'day' | 'week'>('day')
   const [appointments, setAppointments] = useState<Appointment[]>([])
@@ -176,9 +178,9 @@ export default function AppointmentsPage() {
     const msg = lineMessage(apt, status)
     if (msg) {
       await addDoc(collection(db, COLLECTIONS.NOTIFICATIONS), {
-        companyId:    'demo_company',
-        branchId:     'demo_branch',
-        userId:       'demo_user',
+        companyId,
+        branchId,
+        userId,
         type:         'line_notification',
         title:        `LINE → ${apt.customerName}`,
         message:      msg,
@@ -204,13 +206,13 @@ export default function AppointmentsPage() {
       const endDate = new Date(0, 0, 0, h, m + svc.duration)
       const endTime = `${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}`
       await addDocument<Appointment>(COLLECTIONS.APPOINTMENTS, {
-        companyId: 'demo_company', branchId: 'demo_branch',
+        companyId, branchId,
         customerId: '',
         customerName: form.customerName, customerPhone: form.customerPhone,
         services: [{ serviceId: '', serviceName: svc.name, price: 0, duration: svc.duration }],
         date: new Date(form.date), startTime: form.startTime, endTime,
         duration: svc.duration, status: 'pending',
-        notes: form.notes || undefined, lineNotified: false, createdBy: 'demo_user',
+        notes: form.notes || undefined, lineNotified: false, createdBy: userId,
         createdAt: new Date(), updatedAt: new Date(),
       })
       setShowModal(false)

@@ -6,6 +6,7 @@ import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag } fro
 import { addDocument, generateRunningNumber } from '@/lib/firestore'
 import { COLLECTIONS } from '@/lib/firestore'
 import { Customer } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 const caseOptions = [
   { id: 'chemo',        label: 'คีโม',          color: 'bg-pink-50 text-pink-600 border-pink-200'     },
@@ -25,6 +26,7 @@ const memberLevels = [
 
 export default function NewCustomerPage() {
   const router = useRouter()
+  const { companyId, branchId } = useAuth()
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
     firstName: '',
@@ -51,12 +53,10 @@ export default function NewCustomerPage() {
     if (!form.firstName || !form.phone) return
     setSaving(true)
     try {
-      const COMPANY_ID = 'demo_company'
-      const BRANCH_ID  = 'demo_branch'
-      const customerId = await generateRunningNumber('CUS-', COLLECTIONS.CUSTOMERS, COMPANY_ID, BRANCH_ID)
+      const customerId = await generateRunningNumber('CUS-', COLLECTIONS.CUSTOMERS, companyId, branchId)
       await addDocument<Customer>(COLLECTIONS.CUSTOMERS, {
-        companyId: COMPANY_ID,
-        branchId: BRANCH_ID,
+        companyId,
+        branchId,
         customerId,
         firstName:   form.firstName,
         lastName:    form.lastName,

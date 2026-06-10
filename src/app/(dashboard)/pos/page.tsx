@@ -10,6 +10,7 @@ import { addDocument, generateRunningNumber, COLLECTIONS, convertTimestamps } fr
 import { Sale, Product, Service, Deposit } from '@/types'
 import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
+import { useAuth } from '@/hooks/useAuth'
 
 type ProductWithStock = Product & { stockQty?: number }
 type PosMode = 'sale' | 'deposit'
@@ -46,6 +47,7 @@ const payMethods = [
 ]
 
 export default function POSPage() {
+  const { companyId, branchId, userId } = useAuth()
   const [products, setProducts]       = useState<ProductWithStock[]>([])
   const [services, setServices]       = useState<Service[]>([])
   const [dataLoading, setDataLoading] = useState(true)
@@ -69,12 +71,12 @@ export default function POSPage() {
     let p = false, s = false
     const check = () => { if (p && s) setDataLoading(false) }
     const u1 = onSnapshot(
-      query(collection(db, COLLECTIONS.PRODUCTS), where('status', '!=', 'deleted'), orderBy('status'), orderBy('name')),
+      query(collection(db, COLLECTIONS.PRODUCTS), where('isActive', '==', true), orderBy('name')),
       snap => { setProducts(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as ProductWithStock[]); p = true; check() },
       () => { p = true; check() }
     )
     const u2 = onSnapshot(
-      query(collection(db, COLLECTIONS.SERVICES), where('status', '!=', 'deleted'), orderBy('status'), orderBy('name')),
+      query(collection(db, COLLECTIONS.SERVICES), orderBy('name')),
       snap => { setServices(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Service[]); s = true; check() },
       () => { s = true; check() }
     )
@@ -133,17 +135,16 @@ export default function POSPage() {
     if (cart.length === 0 || saving) return
     setSaving(true)
     try {
-      const C = 'demo_company', B = 'demo_branch'
-      const receiptNo = await generateRunningNumber('RCP-', COLLECTIONS.SALES, C, B)
+      const receiptNo = await generateRunningNumber('RCP-', COLLECTIONS.SALES, companyId, branchId)
       await addDocument<Sale>(COLLECTIONS.SALES, {
-        companyId: C, branchId: B, receiptNo,
+        companyId, branchId, receiptNo,
         customerName: customerName || undefined,
         items: cart.map(c => ({ type: c.type, name: c.name, sku: c.sku, quantity: c.quantity, unitPrice: c.price, discountAmount: 0, taxType: c.taxType, taxAmount: c.price * c.quantity * 0.07, total: c.price * c.quantity })),
         subtotal, discountAmount: discountAmt, discountPercent: discountType === 'percent' ? discount : 0,
         taxAmount: vatAmt, totalAmount: total,
         payments: [{ method: payMethod as Sale['payments'][0]['method'], amount: total }],
         paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total,
-        changeAmount: change, status: 'completed', createdBy: 'demo_user', createdAt: new Date(), updatedAt: new Date(),
+        changeAmount: change, status: 'completed', createdBy: userId, createdAt: new Date(), updatedAt: new Date(),
       })
       setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt: total, remaining: 0, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total, change, date: new Date() })
       setCart([]); setCash(''); setDiscount(0); setCustomerName('')
@@ -156,10 +157,9 @@ export default function POSPage() {
     if (cart.length === 0 || depositAmt <= 0 || saving) return
     setSaving(true)
     try {
-      const C = 'demo_company', B = 'demo_branch'
-      const depositNo = await generateRunningNumber('DEP-', COLLECTIONS.DEPOSITS, C, B)
+      const depositNo = await generateRunningNumber('DEP-', COLLECTIONS.DEPOSITS, companyId, branchId)
       await addDocument<Deposit>(COLLECTIONS.DEPOSITS, {
-        companyId: C, branchId: B, depositNo,
+        companyId, branchId, depositNo,
         customerId: '', customerName: customerName || 'ลูกค้าทั่วไป',
         items: cart.map(c => ({ name: c.name, quantity: c.quantity, unitPrice: c.price, total: c.price * c.quantity })),
         totalAmount:    total,
@@ -168,7 +168,7 @@ export default function POSPage() {
         remainingAmount: remaining,
         status: remaining <= 0 ? 'paid_full' : 'deposited',
         notes: [depositNote, pickupDate ? `นัดรับ: ${pickupDate}` : ''].filter(Boolean).join(' | ') || undefined,
-        createdBy: 'demo_user',
+        createdBy: userId,
         createdAt: new Date(),
         updatedAt: new Date(),
       })
