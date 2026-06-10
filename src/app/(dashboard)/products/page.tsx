@@ -4,8 +4,7 @@ import {
   collection, query, where, onSnapshot,
   addDoc, deleteDoc, doc, serverTimestamp, updateDoc,
 } from 'firebase/firestore'
-import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage'
-import { db, storage } from '@/lib/firebase'
+import { db } from '@/lib/firebase'
 import { addDocument, COLLECTIONS } from '@/lib/firestore'
 import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
@@ -34,6 +33,20 @@ const defaultForm: ProductForm = {
 const inputCls = 'w-full px-3 py-2.5 bg-[var(--bg-base)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] border border-[var(--border-light)] transition-all'
 
 const EMOJI_OPTIONS = ['📦','👗','💇','✂️','🎀','💄','🪮','🛍️','🎁','⭐','💎','🌸']
+
+const CLOUDINARY_CLOUD = 'dqea32qab'
+const CLOUDINARY_PRESET = 'wigpro_products'
+
+async function uploadToCloudinary(file: File): Promise<string> {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('upload_preset', CLOUDINARY_PRESET)
+  fd.append('folder', 'wigpro/products')
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`, { method: 'POST', body: fd })
+  if (!res.ok) throw new Error('Upload failed')
+  const data = await res.json()
+  return data.secure_url as string
+}
 
 /* ─── Category Modal ─── */
 function CategoryModal({ categories, companyId, onClose }: {
@@ -203,12 +216,10 @@ export default function ProductsPage() {
     setSubmitting(true)
     try {
       let imageUrl = ''
-      // Upload image if selected
+      // Upload image to Cloudinary
       if (imageFile) {
         setUploadProgress(true)
-        const path = `products/${companyId}/${Date.now()}_${imageFile.name}`
-        const snap = await uploadBytes(storageRef(storage, path), imageFile)
-        imageUrl = await getDownloadURL(snap.ref)
+        imageUrl = await uploadToCloudinary(imageFile)
         setUploadProgress(false)
       }
 
