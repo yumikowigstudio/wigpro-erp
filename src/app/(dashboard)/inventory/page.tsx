@@ -30,11 +30,14 @@ const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--
 
 /* ─── Receive Stock Modal ─── */
 function ReceiveModal({
-  products, onClose, onDone,
+  products, onClose, onDone, companyId, branchId, userId,
 }: {
   products: ProductWithStock[]
   onClose: () => void
   onDone: () => void
+  companyId: string
+  branchId: string
+  userId: string
 }) {
   const [supplier, setSupplier] = useState('')
   const [note, setNote]         = useState('')
@@ -581,6 +584,9 @@ export default function InventoryPage() {
           products={products}
           onClose={() => setShowReceive(false)}
           onDone={() => setTab('history')}
+          companyId={companyId}
+          branchId={branchId}
+          userId={userId}
         />
       )}
     </div>
