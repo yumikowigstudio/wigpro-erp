@@ -30,8 +30,8 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
   const [form, setForm] = useState({
-    firstName: '', lastName: '', phone: '', lineId: '',
-    birthDate: '', address: '', notes: '',
+    firstName: '', lastName: '', nickname: '', phone: '', lineId: '',
+    birthDate: '', address: '', notes: '', otherCaseNote: '',
     caseTypes: [] as string[], memberLevel: 'silver',
   })
 
@@ -39,15 +39,17 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
     getDocument<Customer>(COLLECTIONS.CUSTOMERS, id).then(c => {
       if (c) {
         setForm({
-          firstName:   c.firstName,
-          lastName:    c.lastName,
-          phone:       c.phone,
-          lineId:      c.lineId ?? '',
-          birthDate:   c.birthDate ? new Date(c.birthDate).toISOString().split('T')[0] : '',
-          address:     c.address ?? '',
-          notes:       c.notes ?? '',
-          caseTypes:   c.caseTypes,
-          memberLevel: c.memberLevel ?? 'silver',
+          firstName:     c.firstName,
+          lastName:      c.lastName,
+          nickname:      c.nickname      ?? '',
+          phone:         c.phone,
+          lineId:        c.lineId        ?? '',
+          birthDate:     c.birthDate ? new Date(c.birthDate).toISOString().split('T')[0] : '',
+          address:       c.address       ?? '',
+          notes:         c.notes         ?? '',
+          otherCaseNote: c.otherCaseNote ?? '',
+          caseTypes:     c.caseTypes,
+          memberLevel:   c.memberLevel   ?? 'silver',
         })
       }
       setLoading(false)
@@ -63,15 +65,17 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
     setSaving(true)
     try {
       await updateDocument(COLLECTIONS.CUSTOMERS, id, {
-        firstName:   form.firstName,
-        lastName:    form.lastName,
-        phone:       form.phone,
-        lineId:      form.lineId || null,
-        birthDate:   form.birthDate ? new Date(form.birthDate) : null,
-        address:     form.address || null,
-        notes:       form.notes || null,
-        caseTypes:   form.caseTypes,
-        memberLevel: form.memberLevel,
+        firstName:     form.firstName,
+        lastName:      form.lastName,
+        nickname:      form.nickname      || null,
+        phone:         form.phone,
+        lineId:        form.lineId        || null,
+        birthDate:     form.birthDate ? new Date(form.birthDate) : null,
+        address:       form.address       || null,
+        notes:         form.notes         || null,
+        otherCaseNote: form.otherCaseNote || null,
+        caseTypes:     form.caseTypes,
+        memberLevel:   form.memberLevel,
       })
       router.push(`/customers/${id}`)
     } catch (err) {
@@ -129,6 +133,10 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
             </div>
           </div>
           <div>
+            <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ชื่อเล่น</label>
+            <input value={form.nickname} onChange={e => set('nickname', e.target.value)} placeholder="ชื่อเล่น" className={inputClass} />
+          </div>
+          <div>
             <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">วันเกิด</label>
             <input type="date" value={form.birthDate} onChange={e => set('birthDate', e.target.value)} className={inputClass} />
           </div>
@@ -170,6 +178,14 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
               </button>
             ))}
           </div>
+          {form.caseTypes.includes('other') && (
+            <div>
+              <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ระบุรายละเอียด "อื่นๆ"</label>
+              <textarea value={form.otherCaseNote} onChange={e => set('otherCaseNote', e.target.value)}
+                placeholder="เช่น ผมร่วงจากฮอร์โมน, สวมใส่เพื่อแฟชั่น, ฯลฯ"
+                rows={2} className={inputClass + ' resize-none'} />
+            </div>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-5 space-y-4">

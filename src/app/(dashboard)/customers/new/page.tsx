@@ -31,11 +31,13 @@ export default function NewCustomerPage() {
   const [form, setForm] = useState({
     firstName: '',
     lastName: '',
+    nickname: '',
     phone: '',
     lineId: '',
     birthDate: '',
     address: '',
     notes: '',
+    otherCaseNote: '',
     caseTypes: [] as string[],
     memberLevel: 'silver',
   })
@@ -58,16 +60,18 @@ export default function NewCustomerPage() {
         companyId,
         branchId,
         customerId,
-        firstName:   form.firstName,
-        lastName:    form.lastName,
-        phone:       form.phone,
-        lineId:      form.lineId || undefined,
-        birthDate:   form.birthDate ? new Date(form.birthDate) : undefined,
-        address:     form.address  || undefined,
-        notes:       form.notes    || undefined,
-        caseTypes:   form.caseTypes,
-        memberLevel: form.memberLevel as Customer['memberLevel'],
-        points:      0,
+        firstName:     form.firstName,
+        lastName:      form.lastName,
+        nickname:      form.nickname      || undefined,
+        phone:         form.phone,
+        lineId:        form.lineId        || undefined,
+        birthDate:     form.birthDate ? new Date(form.birthDate) : undefined,
+        address:       form.address       || undefined,
+        notes:         form.notes         || undefined,
+        otherCaseNote: form.otherCaseNote || undefined,
+        caseTypes:     form.caseTypes,
+        memberLevel:   form.memberLevel as Customer['memberLevel'],
+        points:        0,
         totalPurchase: 0,
         status: 'active',
         createdAt: new Date(),
@@ -117,6 +121,11 @@ export default function NewCustomerPage() {
             </div>
           </div>
           <div>
+            <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ชื่อเล่น</label>
+            <input value={form.nickname} onChange={e => set('nickname', e.target.value)}
+              placeholder="ชื่อเล่น" className={inputClass} />
+          </div>
+          <div>
             <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">วันเกิด</label>
             <input type="date" value={form.birthDate} onChange={e => set('birthDate', e.target.value)} className={inputClass} />
           </div>
@@ -163,6 +172,14 @@ export default function NewCustomerPage() {
               </button>
             ))}
           </div>
+          {form.caseTypes.includes('other') && (
+            <div>
+              <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ระบุรายละเอียด "อื่นๆ"</label>
+              <textarea value={form.otherCaseNote} onChange={e => set('otherCaseNote', e.target.value)}
+                placeholder="เช่น ผมร่วงจากฮอร์โมน, สวมใส่เพื่อแฟชั่น, ฯลฯ"
+                rows={2} className={inputClass + ' resize-none'} />
+            </div>
+          )}
         </div>
 
         {/* ระดับสมาชิก */}

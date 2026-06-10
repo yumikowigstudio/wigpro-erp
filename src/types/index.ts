@@ -96,11 +96,13 @@ export interface Customer {
   customerId: string // Auto-generated e.g. "CUS-000001"
   firstName: string
   lastName: string
+  nickname?: string
   phone: string
   lineId?: string
   birthDate?: Date
   address?: string
   caseTypes: string[] // CustomerCaseType or custom
+  otherCaseNote?: string // free-text when 'other' is selected
   notes?: string
   memberId?: string
   memberLevel?: MemberLevel
