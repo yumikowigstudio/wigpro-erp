@@ -74,9 +74,10 @@ export default function NewCustomerPage() {
         updatedAt: new Date(),
       })
       router.push('/customers')
-    } catch (err) {
-      console.error(err)
-      alert('เกิดข้อผิดพลาด กรุณาลองใหม่')
+    } catch (err: unknown) {
+      console.error('Add customer error:', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      alert('เกิดข้อผิดพลาด: ' + msg)
     } finally {
       setSaving(false)
     }
