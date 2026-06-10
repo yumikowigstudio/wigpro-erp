@@ -17,18 +17,12 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Appointment, Sale } from '@/types'
 
-const productionData = [
-  { name: 'รอผลิต',     value: 8,  color: '#fbbf24' },
-  { name: 'กำลังผลิต', value: 12, color: '#c084fc' },
-  { name: 'QC',         value: 3,  color: '#60a5fa' },
-  { name: 'พร้อมส่ง',  value: 5,  color: '#4ade80' },
-]
-
-const lowStock = [
-  { name: 'วิกผมสั้น สีดำ',        sku: 'WIG-001', qty: 2,  min: 5  },
-  { name: 'อุปกรณ์ดูแลวิก พรีเมียม', sku: 'ACC-012', qty: 1,  min: 3  },
-  { name: 'เจลกันความชื้น 200ml',  sku: 'PRD-008', qty: 3,  min: 10 },
-]
+const PROD_COLORS: Record<string, string> = {
+  pending: '#fbbf24', in_progress: '#c084fc', qc: '#60a5fa', ready: '#4ade80'
+}
+const PROD_LABELS: Record<string, string> = {
+  pending: 'รอผลิต', in_progress: 'กำลังผลิต', qc: 'QC', ready: 'พร้อมส่ง'
+}
 
 const statusCfg: Record<string, { label: string; cls: string }> = {
   pending:   { label: 'รอยืนยัน',  cls: 'badge-amber' },
@@ -39,8 +33,13 @@ const statusCfg: Record<string, { label: string; cls: string }> = {
 export default function DashboardPage() {
   const { currentBranch } = useAuth()
   const [period, setPeriod] = useState<'day' | 'week' | 'month' | 'year'>('month')
-  const [todayApts, setTodayApts]   = useState<Appointment[]>([])
-  const [todaySales, setTodaySales] = useState<Sale[]>([])
+  const [todayApts, setTodayApts]     = useState<Appointment[]>([])
+  const [todaySales, setTodaySales]   = useState<Sale[]>([])
+  const [newCustomers, setNewCustomers] = useState(0)
+  const [productionData, setProductionData] = useState<{ name: string; value: number; color: string }[]>([])
+  const [lowStockItems, setLowStockItems]   = useState<{ name: string; sku: string; qty: number; min: number }[]>([])
+  const [stockStats, setStockStats]         = useState({ skuCount: 0, totalValue: 0 })
+  const [monthlySales, setMonthlySales]     = useState<Sale[]>([])
   const [salesData, setSalesData]   = useState([
     { name: 'ม.ค.', sales: 0 }, { name: 'ก.พ.', sales: 0 }, { name: 'มี.ค.', sales: 0 },
     { name: 'เม.ย.', sales: 0 }, { name: 'พ.ค.', sales: 0 }, { name: 'มิ.ย.', sales: 0 },
@@ -68,20 +67,69 @@ export default function DashboardPage() {
       where('createdAt', '<', Timestamp.fromDate(tomorrow))
     )
     const unsubSale = onSnapshot(saleQ, snap => {
-      const sales = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]
-      setTodaySales(sales)
-      // Aggregate monthly for chart
-      const monthly: Record<number, number> = {}
-      sales.forEach(s => {
-        const m = (s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt)).getMonth()
-        monthly[m] = (monthly[m] ?? 0) + s.totalAmount
+      setTodaySales(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[])
+    }, () => {})
+
+    // 6-month sales for chart
+    const sixMonthsAgo = new Date(today); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5); sixMonthsAgo.setDate(1); sixMonthsAgo.setHours(0,0,0,0)
+    const monthSaleQ = query(collection(db, COLLECTIONS.SALES), where('createdAt', '>=', Timestamp.fromDate(sixMonthsAgo)), orderBy('createdAt'))
+    const unsubMonthSale = onSnapshot(monthSaleQ, snap => {
+      const allSales = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]
+      setMonthlySales(allSales)
+      const monthNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
+      const now2 = new Date()
+      const chart = Array.from({ length: 6 }, (_, i) => {
+        const mIdx = (now2.getMonth() - 5 + i + 12) % 12
+        const yr   = now2.getFullYear() - (now2.getMonth() - 5 + i < 0 ? 1 : 0)
+        const sales = allSales.filter(s => {
+          const d = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt)
+          return d.getMonth() === mIdx && d.getFullYear() === yr
+        }).reduce((a,s) => a + s.totalAmount, 0)
+        return { name: monthNames[mIdx], sales }
+      })
+      setSalesData(chart)
+    }, () => {})
+
+    // New customers this month
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
+    const custQ = query(collection(db, COLLECTIONS.CUSTOMERS), where('createdAt', '>=', Timestamp.fromDate(monthStart)))
+    const unsubCust = onSnapshot(custQ, snap => setNewCustomers(snap.size), () => {})
+
+    // Production orders
+    const prodQ = query(collection(db, COLLECTIONS.PRODUCTION_ORDERS), where('status', 'in', ['pending','in_progress','qc','ready']))
+    const unsubProd = onSnapshot(prodQ, snap => {
+      const counts: Record<string, number> = {}
+      snap.docs.forEach(d => {
+        const s = d.data().status as string
+        counts[s] = (counts[s] ?? 0) + 1
+      })
+      setProductionData(
+        Object.entries(counts).map(([status, value]) => ({
+          name: PROD_LABELS[status] ?? status,
+          value,
+          color: PROD_COLORS[status] ?? '#ccc',
+        }))
+      )
+    }, () => {})
+
+    // Low stock products
+    const prodSkuQ = query(collection(db, COLLECTIONS.PRODUCTS), orderBy('stockQty'))
+    const unsubStock = onSnapshot(prodSkuQ, snap => {
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() })) as { id: string; name: string; sku: string; stockQty: number; minStockQty: number; costPrice?: number }[]
+      const low = all.filter(p => p.stockQty <= (p.minStockQty || 5)).slice(0, 5)
+      setLowStockItems(low.map(p => ({ name: p.name, sku: p.sku, qty: p.stockQty, min: p.minStockQty || 5 })))
+      setStockStats({
+        skuCount: all.length,
+        totalValue: all.reduce((s, p) => s + (p.stockQty * (p.costPrice ?? 0)), 0),
       })
     }, () => {})
 
-    return () => { unsubApt(); unsubSale() }
+    return () => { unsubApt(); unsubSale(); unsubMonthSale(); unsubCust(); unsubProd(); unsubStock() }
   }, [])
 
-  const todaySalesTotal = todaySales.reduce((s, r) => s + r.totalAmount, 0)
+  const todaySalesTotal   = todaySales.reduce((s, r) => s + r.totalAmount, 0)
+  const totalProdPending  = productionData.reduce((s, p) => s + p.value, 0)
+  const sixMonthTotal     = monthlySales.reduce((s, r) => s + r.totalAmount, 0)
 
   return (
     <div className="space-y-6">
@@ -117,8 +165,8 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="ยอดขายวันนี้"   value={formatCurrency(todaySalesTotal)} subtitle={`${todaySales.length} รายการ`} icon={TrendingUp} trend={{ value: 0, label: '' }} color="pink"   />
         <StatCard title="คิววันนี้"      value={todayApts.length}               subtitle={`${todayApts.filter(a=>a.status==='pending').length} รอยืนยัน`} icon={Calendar} trend={{ value: 0, label: '' }} color="teal"   />
-        <StatCard title="งานผลิตค้าง"    value={28}                             subtitle="3 ใกล้กำหนดส่ง"  icon={Factory}                                              color="amber"  />
-        <StatCard title="ลูกค้าใหม่"     value={4}                              subtitle="เดือนนี้"         icon={Users}    trend={{ value: 0, label: '' }}               color="purple" />
+        <StatCard title="งานผลิตค้าง"    value={totalProdPending}               subtitle={`${productionData.find(p=>p.name==='พร้อมส่ง')?.value ?? 0} พร้อมส่ง`} icon={Factory} color="amber" />
+        <StatCard title="ลูกค้าใหม่"     value={newCustomers}                   subtitle="เดือนนี้"         icon={Users}    trend={{ value: 0, label: '' }}               color="purple" />
       </div>
 
       {/* Charts row */}
@@ -132,8 +180,8 @@ export default function DashboardPage() {
               <p className="text-xs text-[var(--text-muted)] mt-0.5">รายได้รวม</p>
             </div>
             <div className="text-right">
-              <p className="text-xl font-bold text-[var(--pink-500)]">{formatCurrency(628000)}</p>
-              <p className="text-xs text-emerald-500 font-medium mt-0.5">↑ 15% จากปีก่อน</p>
+              <p className="text-xl font-bold text-[var(--pink-500)]">{formatCurrency(sixMonthTotal)}</p>
+              <p className="text-xs text-[var(--text-muted)] font-medium mt-0.5">6 เดือนล่าสุด</p>
             </div>
           </div>
 
@@ -166,13 +214,17 @@ export default function DashboardPage() {
             </Link>
           </div>
 
-          <div className="flex justify-center my-1">
-            <PieChart width={150} height={150}>
-              <Pie data={productionData} cx={75} cy={75} innerRadius={48} outerRadius={68} paddingAngle={4} dataKey="value" startAngle={90} endAngle={-270}>
-                {productionData.map((e, i) => <Cell key={i} fill={e.color} />)}
-              </Pie>
-            </PieChart>
-          </div>
+          {productionData.length === 0 ? (
+            <div className="py-8 text-center text-sm text-[var(--text-muted)]">ไม่มีงานผลิตค้าง ✅</div>
+          ) : (
+            <div className="flex justify-center my-1">
+              <PieChart width={150} height={150}>
+                <Pie data={productionData} cx={75} cy={75} innerRadius={48} outerRadius={68} paddingAngle={4} dataKey="value" startAngle={90} endAngle={-270}>
+                  {productionData.map((e, i) => <Cell key={i} fill={e.color} />)}
+                </Pie>
+              </PieChart>
+            </div>
+          )}
 
           <div className="space-y-2 mt-1">
             {productionData.map(item => (
@@ -241,7 +293,10 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-3">
-            {lowStock.map(item => (
+            {lowStockItems.length === 0 && (
+              <div className="py-6 text-center text-sm text-[var(--text-muted)]">✅ สต๊อกปกติทุกรายการ</div>
+            )}
+            {lowStockItems.map(item => (
               <div key={item.sku} className="p-3.5 rounded-xl bg-amber-50 border border-amber-100">
                 <div className="flex items-center justify-between mb-2">
                   <div>
@@ -265,15 +320,14 @@ export default function DashboardPage() {
 
           {/* Mini stats */}
           <div className="grid grid-cols-2 gap-3 mt-4">
-            {[
-              { label: 'SKU ทั้งหมด', value: '138', color: 'text-[var(--pink-500)]' },
-              { label: 'มูลค่าสต๊อก', value: '฿1.24M', color: 'text-purple-500' },
-            ].map(s => (
-              <div key={s.label} className="bg-[var(--bg-base)] rounded-xl p-3 text-center">
-                <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
-                <p className="text-xs text-[var(--text-muted)]">{s.label}</p>
-              </div>
-            ))}
+            <div className="bg-[var(--bg-base)] rounded-xl p-3 text-center">
+              <p className="text-lg font-bold text-[var(--pink-500)]">{stockStats.skuCount}</p>
+              <p className="text-xs text-[var(--text-muted)]">SKU ทั้งหมด</p>
+            </div>
+            <div className="bg-[var(--bg-base)] rounded-xl p-3 text-center">
+              <p className="text-lg font-bold text-purple-500">{formatCurrency(stockStats.totalValue)}</p>
+              <p className="text-xs text-[var(--text-muted)]">มูลค่าสต๊อก</p>
+            </div>
           </div>
         </div>
       </div>
