@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/hooks/useAuth'
 import { toast } from 'sonner'
 import { Eye, EyeOff, Sparkles } from 'lucide-react'
+import Link from 'next/link'
 
 export default function LoginPage() {
   const [email, setEmail]       = useState('')
@@ -90,9 +91,9 @@ export default function LoginPage() {
                 <input type="checkbox" className="w-4 h-4 rounded accent-[var(--pink-500)]" />
                 จดจำฉัน
               </label>
-              <a href="#" className="text-[var(--pink-500)] hover:text-[var(--pink-600)] font-medium transition-colors">
+              <Link href="/forgot-password" className="text-[var(--pink-500)] hover:text-[var(--pink-600)] font-medium transition-colors">
                 ลืมรหัสผ่าน?
-              </a>
+              </Link>
             </div>
 
             <button

@@ -104,5 +104,11 @@ export function useAuth() {
     return false
   }
 
-  return { user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated, login, logout, hasPermission, canDiscount }
+  // Convenience helpers — falls back to demo values if not yet migrated
+  const companyId  = user?.companyId  ?? 'demo_company'
+  const branchId   = user?.branchId   ?? 'demo_branch'
+  const userId     = user?.id         ?? 'demo_user'
+  const userName   = user?.displayName ?? 'Demo User'
+
+  return { user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated, login, logout, hasPermission, canDiscount, companyId, branchId, userId, userName }
 }
