@@ -133,15 +133,21 @@ export async function generateRunningNumber(
   const today = new Date()
   const month = String(today.getMonth() + 1).padStart(2, '0')
   const year = String(today.getFullYear()).slice(-2)
-  const constraints: QueryConstraint[] = [
-    where('companyId', '==', companyId),
-    orderBy('createdAt', 'desc'),
-    limit(1),
-  ]
-  if (branchId) constraints.splice(1, 0, where('branchId', '==', branchId))
-  const docs = await getCollection<{ id: string }>(collectionName, constraints)
-  const seq = (docs.length + 1).toString().padStart(4, '0')
-  return `${prefix}${month}${year}${seq}`
+  try {
+    // Query only by companyId (no composite index needed)
+    const constraints: QueryConstraint[] = [
+      where('companyId', '==', companyId),
+      limit(500),
+    ]
+    if (branchId) constraints.push(where('branchId', '==', branchId))
+    const docs = await getCollection<{ id: string }>(collectionName, constraints)
+    const seq = (docs.length + 1).toString().padStart(4, '0')
+    return `${prefix}${month}${year}${seq}`
+  } catch {
+    // Fallback: use timestamp-based unique suffix
+    const seq = String(Date.now()).slice(-4)
+    return `${prefix}${month}${year}${seq}`
+  }
 }
 
 export { where, orderBy, limit, onSnapshot, serverTimestamp, writeBatch, runTransaction, Timestamp }
