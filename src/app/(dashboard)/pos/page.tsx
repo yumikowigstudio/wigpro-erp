@@ -6,8 +6,8 @@ import {
   Scissors, Check, Loader2, AlertTriangle, Printer, Wallet,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import { addDocument, generateRunningNumber, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
-import { Sale, Product, Service, Deposit } from '@/types'
+import { addDocument, generateRunningNumber, generateWigOrderNo, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
+import { Sale, Product, Service, Deposit, WorkOrder } from '@/types'
 import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { useAuth } from '@/hooks/useAuth'
@@ -66,6 +66,8 @@ export default function POSPage() {
   const [depositNote, setDepositNote] = useState('')
   const [saving, setSaving]           = useState(false)
   const [receipt, setReceipt]         = useState<ReceiptData | null>(null)
+  const [createWorkOrder, setCreateWorkOrder] = useState(true)
+  const [wigSpec, setWigSpec]         = useState({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
 
   useEffect(() => {
     let p = false, s = false
@@ -158,6 +160,7 @@ export default function POSPage() {
     setSaving(true)
     try {
       const depositNo = await generateRunningNumber('DEP-', COLLECTIONS.DEPOSITS, companyId, branchId)
+      const saleOrderId = depositNo
       await addDocument<Deposit>(COLLECTIONS.DEPOSITS, {
         companyId, branchId, depositNo,
         customerId: '', customerName: customerName || 'ลูกค้าทั่วไป',
@@ -172,8 +175,36 @@ export default function POSPage() {
         createdAt: new Date(),
         updatedAt: new Date(),
       })
+
+      // Auto-create Work Order for wig production
+      if (createWorkOrder) {
+        const orderNo = await generateWigOrderNo(companyId, branchId)
+        await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, {
+          id: '',
+          companyId, branchId, orderNo,
+          customerId: '', customerName: customerName || 'ลูกค้าทั่วไป',
+          saleOrderId,
+          wigType:      wigSpec.wigType      || undefined,
+          wigColor:     wigSpec.wigColor     || undefined,
+          wigLength:    wigSpec.wigLength    || undefined,
+          wigModel:     wigSpec.wigModel     || undefined,
+          manufacturer: wigSpec.manufacturer || undefined,
+          totalAmount:   total,
+          depositAmount: depositAmt,
+          remainingAmount: remaining,
+          status: 'waiting',
+          progressImages: [], completedImages: [],
+          notes: depositNote || undefined,
+          performedBy: userId,
+          orderDate: new Date(),
+          expectedDate: pickupDate ? new Date(pickupDate) : undefined,
+          createdAt: new Date(), updatedAt: new Date(),
+        } as WorkOrder)
+      }
+
       setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt, remaining, pickupDate, depositNote, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: new Date() })
       setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setDepositInput(''); setPickupDate(''); setDepositNote('')
+      setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
     finally { setSaving(false) }
   }
@@ -426,12 +457,57 @@ export default function POSPage() {
                 {/* หมายเหตุ */}
                 <div>
                   <label className="text-xs font-semibold text-[var(--text-secondary)] mb-1.5 block">
-                    📝 หมายเหตุ (สเปควิก)
+                    📝 หมายเหตุ
                   </label>
                   <textarea value={depositNote} onChange={e => setDepositNote(e.target.value)}
-                    rows={2} placeholder="เช่น วิกสีน้ำตาล ยาวไหล่ รหัส WIG-001..."
+                    rows={2} placeholder="หมายเหตุเพิ่มเติม..."
                     className="w-full px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-xs resize-none focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all" />
                 </div>
+
+                {/* Work Order toggle */}
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <div
+                    onClick={() => setCreateWorkOrder(v => !v)}
+                    className={`w-9 h-5 rounded-full transition-all relative shrink-0 ${createWorkOrder ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0]' : 'bg-gray-200'}`}>
+                    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${createWorkOrder ? 'left-4' : 'left-0.5'}`} />
+                  </div>
+                  <span className="text-xs font-semibold text-[var(--text-primary)]">🏭 สร้าง Work Order อัตโนมัติ</span>
+                </label>
+
+                {/* wig spec fields — shown when createWorkOrder is on */}
+                {createWorkOrder && (
+                  <div className="bg-purple-50 border border-purple-100 rounded-xl p-3 space-y-2">
+                    <p className="text-[10px] font-bold text-purple-600 uppercase tracking-wide">สเปควิก (สำหรับ Work Order)</p>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {([
+                        ['wigType',  'ประเภท', 'สั้น/ยาว/กลาง'],
+                        ['wigColor', 'สี',     'สีดำ/น้ำตาล'],
+                        ['wigLength','ความยาว','20 นิ้ว'],
+                      ] as const).map(([k, lbl, ph]) => (
+                        <div key={k}>
+                          <p className="text-[9px] text-purple-500 mb-0.5 font-medium">{lbl}</p>
+                          <input value={wigSpec[k]} onChange={e => setWigSpec(v => ({ ...v, [k]: e.target.value }))}
+                            placeholder={ph}
+                            className="w-full px-2 py-1.5 bg-white border border-purple-100 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-purple-200" />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div>
+                        <p className="text-[9px] text-purple-500 mb-0.5 font-medium">โมเดล/แบบ</p>
+                        <input value={wigSpec.wigModel} onChange={e => setWigSpec(v => ({ ...v, wigModel: e.target.value }))}
+                          placeholder="WIG-001"
+                          className="w-full px-2 py-1.5 bg-white border border-purple-100 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-purple-200" />
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-purple-500 mb-0.5 font-medium">โรงงาน/ผู้ผลิต</p>
+                        <input value={wigSpec.manufacturer} onChange={e => setWigSpec(v => ({ ...v, manufacturer: e.target.value }))}
+                          placeholder="ชื่อโรงงาน"
+                          className="w-full px-2 py-1.5 bg-white border border-purple-100 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-purple-200" />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

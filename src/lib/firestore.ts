@@ -150,4 +150,34 @@ export async function generateRunningNumber(
   }
 }
 
+// Generate wig work order number: BB MM YY(BE) #### e.g. 0105690001
+export async function generateWigOrderNo(companyId: string, branchId: string): Promise<string> {
+  const today  = new Date()
+  const month  = String(today.getMonth() + 1).padStart(2, '0')
+  const beYear = String(today.getFullYear() + 543).slice(-2) // Buddhist Era last 2 digits
+
+  // Get branch code
+  let branchCode = '01'
+  try {
+    const branchDoc = await getDocument<{ code?: string }>(COLLECTIONS.BRANCHES, branchId)
+    if (branchDoc?.code) branchCode = String(branchDoc.code).padStart(2, '0')
+  } catch { /* use default */ }
+
+  const prefix = `${branchCode}${month}${beYear}`
+
+  try {
+    const docs = await getCollection<{ orderNo: string }>(COLLECTIONS.WORK_ORDERS, [
+      where('companyId', '==', companyId),
+      where('branchId', '==', branchId),
+      limit(500),
+    ])
+    const thisMonthOrders = docs.filter(d => d.orderNo?.startsWith(prefix))
+    const seq = (thisMonthOrders.length + 1).toString().padStart(4, '0')
+    return `${prefix}${seq}`
+  } catch {
+    const seq = String(Date.now()).slice(-4)
+    return `${prefix}${seq}`
+  }
+}
+
 export { where, orderBy, limit, onSnapshot, serverTimestamp, writeBatch, runTransaction, Timestamp }
