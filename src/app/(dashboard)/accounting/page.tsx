@@ -1,26 +1,30 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { TrendingUp, TrendingDown, DollarSign, Download, Plus, X, Loader2 } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Download, Plus, X, Loader2, Trash2 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { collection, onSnapshot, query, orderBy, where, Timestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, orderBy, where, Timestamp, doc, deleteDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
-import { Expense, Sale } from '@/types'
+import { Expense, Sale, Deposit } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 const expenseCategories = ['ค่าเช่า','ค่าไฟ/น้ำ','ค่าจ้างพนักงาน','วัตถุดิบ','ค่าขนส่ง','การตลาด','อุปกรณ์สำนักงาน','อื่นๆ']
 
 const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
 
-interface Transaction { id: string; type: 'income' | 'expense'; desc: string; amount: number; date: Date; category: string }
+interface Transaction { id: string; type: 'income' | 'expense'; desc: string; amount: number; date: Date; category: string; deletable: boolean }
 
 export default function AccountingPage() {
+  const { companyId, branchId, userId } = useAuth()
   const [expenses, setExpenses]     = useState<Expense[]>([])
   const [sales, setSales]           = useState<Sale[]>([])
+  const [deposits, setDeposits]     = useState<Deposit[]>([])
   const [loading, setLoading]       = useState(true)
   const [period, setPeriod]         = useState('month')
   const [showModal, setShowModal]   = useState(false)
   const [saving, setSaving]         = useState(false)
+  const [deleting, setDeleting]     = useState<string | null>(null)
   const [form, setForm] = useState({ category: expenseCategories[0], description: '', amount: '', date: new Date().toISOString().split('T')[0] })
 
   useEffect(() => {
@@ -34,8 +38,10 @@ export default function AccountingPage() {
     const expQ = query(collection(db, COLLECTIONS.EXPENSES), where('createdAt', '>=', Timestamp.fromDate(start)), orderBy('createdAt','desc'))
     const saleQ = query(collection(db, COLLECTIONS.SALES), where('createdAt', '>=', Timestamp.fromDate(start)), orderBy('createdAt','desc'))
 
-    let expDone = false, saleDone = false
-    const check = () => { if (expDone && saleDone) setLoading(false) }
+    const depQ = query(collection(db, COLLECTIONS.DEPOSITS), where('createdAt', '>=', Timestamp.fromDate(start)), orderBy('createdAt','desc'))
+
+    let expDone = false, saleDone = false, depDone = false
+    const check = () => { if (expDone && saleDone && depDone) setLoading(false) }
 
     const u1 = onSnapshot(expQ, snap => {
       setExpenses(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Expense[])
@@ -47,12 +53,19 @@ export default function AccountingPage() {
       saleDone = true; check()
     }, () => { saleDone = true; check() })
 
-    return () => { u1(); u2() }
+    const u3 = onSnapshot(depQ, snap => {
+      setDeposits(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Deposit[])
+      depDone = true; check()
+    }, () => { depDone = true; check() })
+
+    return () => { u1(); u2(); u3() }
   }, [period])
 
-  const totalIncome  = sales.reduce((s, r) => s + r.totalAmount, 0)
-  const totalExpense = expenses.reduce((s, r) => s + r.amount, 0)
-  const netProfit    = totalIncome - totalExpense
+  const salesIncome   = sales.reduce((s, r) => s + r.totalAmount, 0)
+  const depositIncome = deposits.reduce((s, d) => s + d.paidAmount, 0)
+  const totalIncome   = salesIncome + depositIncome
+  const totalExpense  = expenses.reduce((s, r) => s + r.amount, 0)
+  const netProfit     = totalIncome - totalExpense
 
   // Build monthly chart (last 6 months)
   const monthNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
@@ -60,31 +73,64 @@ export default function AccountingPage() {
   const chartData = Array.from({ length: 6 }, (_, i) => {
     const m = (now.getMonth() - 5 + i + 12) % 12
     const y = now.getFullYear() - (now.getMonth() - 5 + i < 0 ? 1 : 0)
-    const income  = sales.filter(s => { const d = new Date(s.createdAt); return d.getMonth()===m && d.getFullYear()===y }).reduce((a,s)=>a+s.totalAmount, 0)
+    const sIncome = sales.filter(s => { const d = new Date(s.createdAt); return d.getMonth()===m && d.getFullYear()===y }).reduce((a,s)=>a+s.totalAmount, 0)
+    const dIncome = deposits.filter(d => { const dt = new Date(d.createdAt); return dt.getMonth()===m && dt.getFullYear()===y }).reduce((a,d)=>a+d.paidAmount, 0)
+    const income  = sIncome + dIncome
     const expense = expenses.filter(e => { const d = new Date(e.createdAt); return d.getMonth()===m && d.getFullYear()===y }).reduce((a,e)=>a+e.amount, 0)
     return { name: monthNames[m], income, expense }
   })
 
   // Recent transactions merged
   const transactions: Transaction[] = [
-    ...sales.slice(0,10).map(s => ({ id:'s'+s.id, type:'income' as const, desc: `ขาย #${s.receiptNo}${s.customerName ? ' - '+s.customerName : ''}`, amount: s.totalAmount, date: new Date(s.createdAt), category: 'ยอดขาย' })),
-    ...expenses.slice(0,10).map(e => ({ id:'e'+e.id, type:'expense' as const, desc: e.description, amount: e.amount, date: new Date(e.createdAt), category: e.category })),
-  ].sort((a,b) => b.date.getTime() - a.date.getTime()).slice(0, 15)
+    ...sales.slice(0,10).map(s => ({ id:'s'+s.id, type:'income' as const, desc: `ขาย #${s.receiptNo}${s.customerName ? ' - '+s.customerName : ''}`, amount: s.totalAmount, date: new Date(s.createdAt), category: 'ยอดขาย', deletable: false })),
+    ...deposits.slice(0,10).map(d => ({ id:'d'+d.id, type:'income' as const, desc: `มัดจำ #${d.depositNo} - ${d.customerName}`, amount: d.paidAmount, date: new Date(d.createdAt), category: 'มัดจำ', deletable: false })),
+    ...expenses.slice(0,20).map(e => ({ id:'e'+e.id, type:'expense' as const, desc: e.description, amount: e.amount, date: new Date(e.createdAt), category: e.category, deletable: true })),
+  ].sort((a,b) => b.date.getTime() - a.date.getTime()).slice(0, 20)
 
   const handleAdd = async (evt: React.FormEvent) => {
     evt.preventDefault(); setSaving(true)
     try {
       await addDocument<Expense>(COLLECTIONS.EXPENSES, {
-        companyId: 'demo_company', branchId: 'demo_branch',
+        companyId, branchId,
         category: form.category, description: form.description,
         amount: parseFloat(form.amount) || 0,
-        date: new Date(form.date), recordedBy: 'demo_user',
+        date: new Date(form.date), recordedBy: userId,
         status: 'active', createdAt: new Date(), updatedAt: new Date(),
       })
       setShowModal(false)
       setForm({ category: expenseCategories[0], description: '', amount: '', date: new Date().toISOString().split('T')[0] })
     } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
     finally { setSaving(false) }
+  }
+
+  const handleDelete = async (expenseId: string) => {
+    if (!confirm('ลบรายจ่ายนี้?')) return
+    setDeleting(expenseId)
+    try {
+      await deleteDoc(doc(db, COLLECTIONS.EXPENSES, expenseId))
+    } catch (err) { console.error(err); alert('ลบไม่สำเร็จ') }
+    finally { setDeleting(null) }
+  }
+
+  const handleExport = () => {
+    const rows = [
+      ['ประเภท','วันที่','หมวดหมู่','รายละเอียด','จำนวน (บาท)'],
+      ...transactions.map(tx => [
+        tx.type === 'income' ? 'รายรับ' : 'รายจ่าย',
+        formatDate(tx.date),
+        tx.category,
+        tx.desc,
+        tx.amount.toFixed(2),
+      ])
+    ]
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `accounting-${period}-${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   return (
@@ -101,8 +147,8 @@ export default function AccountingPage() {
             <option value="month">เดือนนี้</option>
             <option value="year">ปีนี้</option>
           </select>
-          <button className="flex items-center gap-2 px-4 py-2 bg-white border border-[var(--border-light)] rounded-xl text-sm hover:bg-[var(--bg-base)] transition-all">
-            <Download className="w-4 h-4" /> Export
+          <button onClick={handleExport} className="flex items-center gap-2 px-4 py-2 bg-white border border-[var(--border-light)] rounded-xl text-sm hover:bg-[var(--bg-base)] transition-all">
+            <Download className="w-4 h-4" /> Export CSV
           </button>
           <button onClick={() => setShowModal(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-semibold shadow-md shadow-pink-200 hover:opacity-95 active:scale-[0.98] transition-all">
@@ -131,6 +177,29 @@ export default function AccountingPage() {
           </div>
         ))}
       </div>
+
+      {/* Income breakdown */}
+      {totalIncome > 0 && (
+        <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-4">
+          <p className="text-xs font-semibold text-[var(--text-muted)] mb-3">แหล่งรายรับ</p>
+          <div className="flex gap-6">
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">ยอดขายปกติ</p>
+              <p className="font-bold text-sm text-emerald-600">{formatCurrency(salesIncome)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">รับมัดจำ</p>
+              <p className="font-bold text-sm text-blue-600">{formatCurrency(depositIncome)}</p>
+            </div>
+            <div className="ml-auto">
+              <p className="text-xs text-[var(--text-muted)]">อัตรากำไร</p>
+              <p className={`font-bold text-sm ${netProfit >= 0 ? 'text-[var(--pink-500)]' : 'text-red-600'}`}>
+                {totalIncome > 0 ? ((netProfit / totalIncome) * 100).toFixed(1) : '0'}%
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Chart */}
       <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-5">
@@ -167,9 +236,17 @@ export default function AccountingPage() {
                   <p className="text-sm font-medium text-[var(--text-primary)] truncate">{tx.desc}</p>
                   <p className="text-xs text-[var(--text-muted)]">{formatDate(tx.date)} · {tx.category}</p>
                 </div>
-                <p className={`font-bold text-sm ${tx.type==='income' ? 'text-emerald-600' : 'text-red-600'}`}>
-                  {tx.type==='income' ? '+' : '-'}{formatCurrency(tx.amount)}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className={`font-bold text-sm ${tx.type==='income' ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {tx.type==='income' ? '+' : '-'}{formatCurrency(tx.amount)}
+                  </p>
+                  {tx.deletable && (
+                    <button onClick={() => handleDelete(tx.id.slice(1))} disabled={deleting === tx.id.slice(1)}
+                      className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-red-500 hover:bg-red-50 transition-all">
+                      {deleting === tx.id.slice(1) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
