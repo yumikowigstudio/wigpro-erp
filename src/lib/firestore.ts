@@ -85,6 +85,11 @@ export async function getCollection<T>(
   return snap.docs.map((d) => ({ id: d.id, ...convertTimestamps(d.data()) })) as T[]
 }
 
+// Strip undefined values (Firestore rejects undefined)
+function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined))
+}
+
 // Generic add document
 export async function addDocument<T extends object>(
   collectionName: string,
@@ -92,7 +97,7 @@ export async function addDocument<T extends object>(
 ): Promise<string> {
   const colRef = collection(db, collectionName)
   const docRef = await addDoc(colRef, {
-    ...data,
+    ...stripUndefined(data as Record<string, unknown>),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   })

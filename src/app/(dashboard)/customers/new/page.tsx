@@ -56,27 +56,27 @@ export default function NewCustomerPage() {
     setSaving(true)
     try {
       const customerId = await generateRunningNumber('CUS-', COLLECTIONS.CUSTOMERS, companyId, branchId)
-      await addDocument<Customer>(COLLECTIONS.CUSTOMERS, {
-        companyId,
-        branchId,
-        customerId,
-        firstName:     form.firstName,
-        lastName:      form.lastName,
-        nickname:      form.nickname      || undefined,
-        phone:         form.phone,
-        lineId:        form.lineId        || undefined,
-        birthDate:     form.birthDate ? new Date(form.birthDate) : undefined,
-        address:       form.address       || undefined,
-        notes:         form.notes         || undefined,
-        otherCaseNote: form.otherCaseNote || undefined,
-        caseTypes:     form.caseTypes,
-        memberLevel:   form.memberLevel as Customer['memberLevel'],
-        points:        0,
+      // Build object without undefined (Firestore rejects undefined values)
+      const data: Record<string, unknown> = {
+        companyId, branchId, customerId,
+        firstName:   form.firstName,
+        lastName:    form.lastName,
+        phone:       form.phone,
+        caseTypes:   form.caseTypes,
+        memberLevel: form.memberLevel,
+        points:      0,
         totalPurchase: 0,
         status: 'active',
         createdAt: new Date(),
         updatedAt: new Date(),
-      })
+      }
+      if (form.nickname)      data.nickname      = form.nickname
+      if (form.lineId)        data.lineId        = form.lineId
+      if (form.birthDate)     data.birthDate     = new Date(form.birthDate)
+      if (form.address)       data.address       = form.address
+      if (form.notes)         data.notes         = form.notes
+      if (form.otherCaseNote) data.otherCaseNote = form.otherCaseNote
+      await addDocument<Customer>(COLLECTIONS.CUSTOMERS, data as Omit<Customer, 'id'>)
       router.push('/customers')
     } catch (err: unknown) {
       console.error('Add customer error:', err)
