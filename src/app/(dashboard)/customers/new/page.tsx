@@ -76,7 +76,12 @@ export default function NewCustomerPage() {
       if (form.address)       data.address       = form.address
       if (form.notes)         data.notes         = form.notes
       if (form.otherCaseNote) data.otherCaseNote = form.otherCaseNote
-      await addDocument<Customer>(COLLECTIONS.CUSTOMERS, data as Omit<Customer, 'id'>)
+      // Extra guard: remove undefined/null before sending to Firestore
+      const cleanData: Record<string, unknown> = {}
+      for (const key of Object.keys(data)) {
+        if (data[key] !== undefined && data[key] !== null) cleanData[key] = data[key]
+      }
+      await addDocument<Customer>(COLLECTIONS.CUSTOMERS, cleanData as Omit<Customer, 'id'>)
       router.push('/customers')
     } catch (err: unknown) {
       console.error('Add customer error:', err)
