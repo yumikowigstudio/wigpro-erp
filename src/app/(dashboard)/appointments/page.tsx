@@ -13,7 +13,7 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
 import type { Appointment } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
-import CustomerSearchInput from '@/components/CustomerSearchInput'
+import { CustomerSearchInput } from '@/components/CustomerSearchInput'
 
 type AptStatus = 'pending' | 'confirmed' | 'arrived' | 'completed' | 'cancelled'
 
@@ -460,12 +460,19 @@ export default function AppointmentsPage() {
               <div>
                 <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ลูกค้าในระบบ (ถ้ามี)</label>
                 <CustomerSearchInput
-                  value={selectedCustomerId}
-                  onChange={(cid, cname) => {
+                  companyId={companyId}
+                  selectedId={selectedCustomerId}
+                  selectedName={selectedCustomerName}
+                  onSelect={(cid, cname) => {
                     setSelectedCustomerId(cid)
                     setSelectedCustomerName(cname)
-                    if (cname) setForm(f => ({ ...f, customerName: cname }))
+                    setForm(f => ({ ...f, customerName: cname }))
                   }}
+                  onClear={() => {
+                    setSelectedCustomerId('')
+                    setSelectedCustomerName('')
+                  }}
+                  placeholder="ค้นหาลูกค้าในระบบ..."
                 />
               </div>
 
