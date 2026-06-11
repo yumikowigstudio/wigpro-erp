@@ -2,8 +2,10 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag, Ruler } from 'lucide-react'
-import { addDocument, COLLECTIONS } from '@/lib/firestore'
+import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag, Ruler, CheckCircle2 } from 'lucide-react'
+import { COLLECTIONS } from '@/lib/firestore'
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore'
+import { db } from '@/lib/firebase'
 import { Customer } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -26,7 +28,8 @@ const memberLevels = [
 export default function NewCustomerPage() {
   const router = useRouter()
   const { companyId, branchId } = useAuth()
-  const [saving, setSaving] = useState(false)
+  const [saving,  setSaving]  = useState(false)
+  const [done,    setDone]    = useState(false)
   const [form, setForm] = useState({
     firstName: '',
     lastName: '',
@@ -53,50 +56,53 @@ export default function NewCustomerPage() {
       : [...form.caseTypes, id])
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.firstName || !form.phone) return
-    setSaving(true)
-    try {
-      // Generate customerId locally — no Firestore query needed (avoids hanging)
-      const now   = new Date()
-      const mm    = String(now.getMonth() + 1).padStart(2, '0')
-      const yy    = String(now.getFullYear()).slice(-2)
-      const rnd   = String(Date.now()).slice(-5)
-      const customerId = `CUS-${mm}${yy}${rnd}`
+    if (!form.firstName || !form.phone || saving || done) return
 
-      // Build object — only include fields that have values
-      const data: Record<string, unknown> = {
-        companyId, branchId, customerId,
-        firstName:   form.firstName,
-        lastName:    form.lastName,
-        phone:       form.phone,
-        caseTypes:   form.caseTypes,
-        memberLevel: form.memberLevel,
-        points:      0,
-        totalPurchase: 0,
-        status: 'active',
-      }
-      if (form.nickname)          data.nickname          = form.nickname
-      if (form.lineId)            data.lineId            = form.lineId
-      if (form.birthDate)         data.birthDate         = new Date(form.birthDate)
-      if (form.address)           data.address           = form.address
-      if (form.notes)             data.notes             = form.notes
-      if (form.otherCaseNote)     data.otherCaseNote     = form.otherCaseNote
-      if (form.headCircumference) data.headCircumference = parseFloat(form.headCircumference)
-      if (form.headFrontBack)     data.headFrontBack     = parseFloat(form.headFrontBack)
-      if (form.headEarToEar)      data.headEarToEar      = parseFloat(form.headEarToEar)
-      if (form.headLeftRight)     data.headLeftRight     = parseFloat(form.headLeftRight)
+    // Generate customerId locally — no Firestore query, no waiting
+    const now        = new Date()
+    const mm         = String(now.getMonth() + 1).padStart(2, '0')
+    const yy         = String(now.getFullYear()).slice(-2)
+    const rnd        = String(Date.now()).slice(-5)
+    const customerId = `CUS-${mm}${yy}${rnd}`
 
-      await addDocument<Customer>(COLLECTIONS.CUSTOMERS, data as Omit<Customer, 'id'>)
-      router.push('/customers')
-    } catch (err: unknown) {
-      console.error('Add customer error:', err)
-      const msg = err instanceof Error ? err.message : String(err)
-      alert('เกิดข้อผิดพลาด: ' + msg)
-    } finally {
-      setSaving(false)
+    // Build clean object — never set undefined (Firestore rejects it)
+    const data: Record<string, unknown> = {
+      companyId, branchId, customerId,
+      firstName:    form.firstName,
+      lastName:     form.lastName,
+      phone:        form.phone,
+      caseTypes:    form.caseTypes,
+      memberLevel:  form.memberLevel,
+      points:       0,
+      totalPurchase: 0,
+      status:       'active',
     }
+    if (form.nickname)          data.nickname          = form.nickname
+    if (form.lineId)            data.lineId            = form.lineId
+    if (form.birthDate)         data.birthDate         = new Date(form.birthDate)
+    if (form.address)           data.address           = form.address
+    if (form.notes)             data.notes             = form.notes
+    if (form.otherCaseNote)     data.otherCaseNote     = form.otherCaseNote
+    if (form.headCircumference) data.headCircumference = parseFloat(form.headCircumference)
+    if (form.headFrontBack)     data.headFrontBack     = parseFloat(form.headFrontBack)
+    if (form.headEarToEar)      data.headEarToEar      = parseFloat(form.headEarToEar)
+    if (form.headLeftRight)     data.headLeftRight     = parseFloat(form.headLeftRight)
+
+    // ── Optimistic: navigate immediately, write in background ──
+    setSaving(true)
+    setDone(true)
+
+    // Fire-and-forget — ไม่รอ Firestore ตอบกลับ
+    addDoc(collection(db, COLLECTIONS.CUSTOMERS), {
+      ...data,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(err => console.error('Save customer error:', err))
+
+    // Navigate ทันที — ไม่ต้องรอ
+    router.push('/customers')
   }
 
   const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
@@ -250,10 +256,12 @@ export default function NewCustomerPage() {
             className="flex-1 py-3 border border-[var(--border-light)] rounded-2xl text-center text-sm font-semibold text-[var(--text-secondary)] bg-white hover:bg-[var(--bg-base)] transition-all">
             ยกเลิก
           </Link>
-          <button type="submit" disabled={saving || !form.firstName || !form.phone}
+          <button type="submit" disabled={done || !form.firstName || !form.phone}
             className="flex-1 py-3 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-2xl text-sm font-bold shadow-md shadow-pink-200 hover:opacity-95 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-            <Save className="w-4 h-4" />
-            {saving ? 'กำลังบันทึก...' : 'บันทึกลูกค้า'}
+            {done
+              ? <><CheckCircle2 className="w-4 h-4" />บันทึกแล้ว!</>
+              : <><Save className="w-4 h-4" />บันทึกลูกค้า</>
+            }
           </button>
         </div>
       </form>

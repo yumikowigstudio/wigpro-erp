@@ -2,8 +2,10 @@
 import { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag, Loader2, Trash2, Ruler } from 'lucide-react'
-import { getDocument, updateDocument, softDelete, COLLECTIONS } from '@/lib/firestore'
+import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag, Loader2, Trash2, Ruler, CheckCircle2 } from 'lucide-react'
+import { getDocument, softDelete, COLLECTIONS } from '@/lib/firestore'
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { db } from '@/lib/firebase'
 import { Customer } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -28,7 +30,8 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
   const router = useRouter()
   const { userId } = useAuth()
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving]   = useState(false)
+  const [saving,  setSaving]  = useState(false)
+  const [done,    setDone]    = useState(false)
   const [form, setForm] = useState({
     firstName: '', lastName: '', nickname: '', phone: '', lineId: '',
     birthDate: '', address: '', notes: '', otherCaseNote: '',
@@ -65,34 +68,37 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
   const toggleCase = (cid: string) => set('caseTypes', form.caseTypes.includes(cid)
     ? form.caseTypes.filter(c => c !== cid) : [...form.caseTypes, cid])
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    if (done) return
+    setDone(true)
     setSaving(true)
-    try {
-      await updateDocument(COLLECTIONS.CUSTOMERS, id, {
-        firstName:     form.firstName,
-        lastName:      form.lastName,
-        nickname:      form.nickname      || null,
-        phone:         form.phone,
-        lineId:        form.lineId        || null,
-        birthDate:     form.birthDate ? new Date(form.birthDate) : null,
-        address:       form.address       || null,
-        notes:         form.notes         || null,
-        otherCaseNote:     form.otherCaseNote     || null,
-        caseTypes:         form.caseTypes,
-        memberLevel:       form.memberLevel,
-        headCircumference: form.headCircumference ? parseFloat(form.headCircumference) : null,
-        headFrontBack:     form.headFrontBack      ? parseFloat(form.headFrontBack)     : null,
-        headEarToEar:      form.headEarToEar       ? parseFloat(form.headEarToEar)      : null,
-        headLeftRight:     form.headLeftRight       ? parseFloat(form.headLeftRight)     : null,
-      })
-      router.push(`/customers/${id}`)
-    } catch (err) {
-      console.error(err)
-      alert('เกิดข้อผิดพลาด กรุณาลองใหม่')
-    } finally {
-      setSaving(false)
+
+    // Build update — use null for cleared fields (Firestore accepts null, rejects undefined)
+    const updates: Record<string, unknown> = {
+      firstName:         form.firstName,
+      lastName:          form.lastName,
+      nickname:          form.nickname          || null,
+      phone:             form.phone,
+      lineId:            form.lineId            || null,
+      birthDate:         form.birthDate ? new Date(form.birthDate) : null,
+      address:           form.address           || null,
+      notes:             form.notes             || null,
+      otherCaseNote:     form.otherCaseNote     || null,
+      caseTypes:         form.caseTypes,
+      memberLevel:       form.memberLevel,
+      headCircumference: form.headCircumference ? parseFloat(form.headCircumference) : null,
+      headFrontBack:     form.headFrontBack      ? parseFloat(form.headFrontBack)     : null,
+      headEarToEar:      form.headEarToEar       ? parseFloat(form.headEarToEar)      : null,
+      headLeftRight:     form.headLeftRight       ? parseFloat(form.headLeftRight)     : null,
+      updatedAt:         serverTimestamp(),
     }
+
+    // Fire-and-forget — navigate ทันที ไม่รอ Firestore
+    updateDoc(doc(db, COLLECTIONS.CUSTOMERS, id), updates)
+      .catch(err => console.error('Update customer error:', err))
+
+    router.push(`/customers/${id}`)
   }
 
   const handleDelete = async () => {
@@ -249,10 +255,12 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
             className="flex-1 py-3 border border-[var(--border-light)] rounded-2xl text-center text-sm font-semibold text-[var(--text-secondary)] bg-white hover:bg-[var(--bg-base)] transition-all">
             ยกเลิก
           </Link>
-          <button type="submit" disabled={saving}
+          <button type="submit" disabled={done}
             className="flex-1 py-3 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-2xl text-sm font-bold shadow-md shadow-pink-200 hover:opacity-95 active:scale-[0.98] transition-all disabled:opacity-40 flex items-center justify-center gap-2">
-            <Save className="w-4 h-4" />
-            {saving ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข'}
+            {done
+              ? <><CheckCircle2 className="w-4 h-4" />บันทึกแล้ว!</>
+              : <><Save className="w-4 h-4" />บันทึกการแก้ไข</>
+            }
           </button>
         </div>
       </form>

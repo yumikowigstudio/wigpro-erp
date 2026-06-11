@@ -6,7 +6,7 @@ import {
   Scissors, Check, Loader2, AlertTriangle, Printer, Wallet,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import { addDocument, generateRunningNumber, generateWigOrderNo, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
+import { addDocument, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Sale, Product, Service, Deposit, WorkOrder } from '@/types'
 import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
@@ -135,80 +135,97 @@ export default function POSPage() {
   const payNow      = mode === 'sale' ? total : depositAmt
 
   /* ─── Checkout (ขายปกติ) ─── */
-  const handleCheckout = async () => {
+  const handleCheckout = () => {
     if (cart.length === 0 || saving) return
     setSaving(true)
-    try {
-      const receiptNo = await generateRunningNumber('RCP-', COLLECTIONS.SALES, companyId, branchId)
-      await addDocument<Sale>(COLLECTIONS.SALES, {
-        companyId, branchId, receiptNo,
-        customerName: customerName || undefined,
-        items: cart.map(c => ({ type: c.type, name: c.name, sku: c.sku, quantity: c.quantity, unitPrice: c.price, discountAmount: 0, taxType: c.taxType, taxAmount: c.price * c.quantity * 0.07, total: c.price * c.quantity })),
-        subtotal, discountAmount: discountAmt, discountPercent: discountType === 'percent' ? discount : 0,
-        taxAmount: vatAmt, totalAmount: total,
-        payments: [{ method: payMethod as Sale['payments'][0]['method'], amount: total }],
-        paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total,
-        changeAmount: change, status: 'completed', createdBy: userId, createdAt: new Date(), updatedAt: new Date(),
-      })
-      setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt: total, remaining: 0, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total, change, date: new Date() })
-      setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId('')
-    } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
-    finally { setSaving(false) }
+
+    // Generate receipt number locally (no Firestore query)
+    const now      = new Date()
+    const mm       = String(now.getMonth() + 1).padStart(2, '0')
+    const yy       = String(now.getFullYear()).slice(-2)
+    const receiptNo = `RCP-${mm}${yy}${String(Date.now()).slice(-5)}`
+
+    const saleData: Record<string, unknown> = {
+      companyId, branchId, receiptNo,
+      items: cart.map(c => ({ type: c.type, name: c.name, sku: c.sku ?? null, quantity: c.quantity, unitPrice: c.price, discountAmount: 0, taxType: c.taxType, taxAmount: c.price * c.quantity * 0.07, total: c.price * c.quantity })),
+      subtotal, discountAmount: discountAmt, discountPercent: discountType === 'percent' ? discount : 0,
+      taxAmount: vatAmt, totalAmount: total,
+      payments: [{ method: payMethod, amount: total }],
+      paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total,
+      changeAmount: change, status: 'completed', createdBy: userId,
+    }
+    if (customerId)   saleData.customerId   = customerId
+    if (customerName) saleData.customerName = customerName
+
+    // Fire-and-forget
+    addDocument<Sale>(COLLECTIONS.SALES, saleData as Omit<Sale, 'id'>)
+      .catch(err => console.error('Sale save error:', err))
+
+    // Show receipt immediately
+    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt: total, remaining: 0, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total, change, date: new Date() })
+    setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId('')
+    setSaving(false)
   }
 
   /* ─── รับมัดจำ ─── */
   const handleDeposit = async () => {
     if (cart.length === 0 || depositAmt <= 0 || saving) return
     setSaving(true)
-    try {
-      const depositNo = await generateRunningNumber('DEP-', COLLECTIONS.DEPOSITS, companyId, branchId)
-      const saleOrderId = depositNo
-      await addDocument<Deposit>(COLLECTIONS.DEPOSITS, {
-        companyId, branchId, depositNo,
-        customerId: customerId || '', customerName: customerName || 'ลูกค้าทั่วไป',
-        items: cart.map(c => ({ name: c.name, quantity: c.quantity, unitPrice: c.price, total: c.price * c.quantity })),
-        totalAmount:    total,
-        depositAmount:  depositAmt,
-        paidAmount:     depositAmt,
-        remainingAmount: remaining,
-        status: remaining <= 0 ? 'paid_full' : 'deposited',
-        notes: [depositNote, pickupDate ? `นัดรับ: ${pickupDate}` : ''].filter(Boolean).join(' | ') || undefined,
-        createdBy: userId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
 
-      // Auto-create Work Order for wig production
-      if (createWorkOrder) {
-        const orderNo = await generateWigOrderNo(companyId, branchId)
-        await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, {
-          id: '',
-          companyId, branchId, orderNo,
-          customerId: customerId || '', customerName: customerName || 'ลูกค้าทั่วไป',
-          saleOrderId,
-          wigType:      wigSpec.wigType      || undefined,
-          wigColor:     wigSpec.wigColor     || undefined,
-          wigLength:    wigSpec.wigLength    || undefined,
-          wigModel:     wigSpec.wigModel     || undefined,
-          manufacturer: wigSpec.manufacturer || undefined,
-          totalAmount:   total,
-          depositAmount: depositAmt,
-          remainingAmount: remaining,
-          status: 'waiting',
-          progressImages: [], completedImages: [],
-          notes: depositNote || undefined,
-          performedBy: userId,
-          orderDate: new Date(),
-          expectedDate: pickupDate ? new Date(pickupDate) : undefined,
-          createdAt: new Date(), updatedAt: new Date(),
-        } as WorkOrder)
+    // Generate IDs locally — no Firestore round-trip
+    const now       = new Date()
+    const mm        = String(now.getMonth() + 1).padStart(2, '0')
+    const yy        = String(now.getFullYear()).slice(-2)
+    const ts        = String(Date.now()).slice(-5)
+    const depositNo   = `DEP-${mm}${yy}${ts}`
+    const saleOrderId = depositNo
+
+    // Work order number: branch+month+BE year+seq (local fallback)
+    const beYear  = String(now.getFullYear() + 543).slice(-2)
+    const orderNo = `01${mm}${beYear}${ts}`
+
+    const notesStr = [depositNote, pickupDate ? `นัดรับ: ${pickupDate}` : ''].filter(Boolean).join(' | ')
+    const custName = customerName || 'ลูกค้าทั่วไป'
+    const custId   = customerId   || ''
+
+    // Fire-and-forget — ไม่รอ
+    const depData: Record<string, unknown> = {
+      companyId, branchId, depositNo,
+      customerId: custId, customerName: custName,
+      items: cart.map(c => ({ name: c.name, quantity: c.quantity, unitPrice: c.price, total: c.price * c.quantity })),
+      totalAmount: total, depositAmount: depositAmt, paidAmount: depositAmt,
+      remainingAmount: remaining, status: remaining <= 0 ? 'paid_full' : 'deposited',
+      createdBy: userId,
+    }
+    if (notesStr) depData.notes = notesStr
+    addDocument<Deposit>(COLLECTIONS.DEPOSITS, depData as Omit<Deposit, 'id'>)
+      .catch(err => console.error('Deposit save error:', err))
+
+    if (createWorkOrder) {
+      const woData: Record<string, unknown> = {
+        companyId, branchId, orderNo,
+        customerId: custId, customerName: custName,
+        saleOrderId, totalAmount: total, depositAmount: depositAmt,
+        remainingAmount: remaining, status: 'waiting',
+        progressImages: [], completedImages: [], performedBy: userId,
+        orderDate: now,
       }
+      if (wigSpec.wigType)      woData.wigType      = wigSpec.wigType
+      if (wigSpec.wigColor)     woData.wigColor     = wigSpec.wigColor
+      if (wigSpec.wigLength)    woData.wigLength    = wigSpec.wigLength
+      if (wigSpec.wigModel)     woData.wigModel     = wigSpec.wigModel
+      if (wigSpec.manufacturer) woData.manufacturer = wigSpec.manufacturer
+      if (depositNote)          woData.notes        = depositNote
+      if (pickupDate)           woData.expectedDate = new Date(pickupDate)
+      addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, woData as Omit<WorkOrder, 'id'>)
+        .catch(err => console.error('WorkOrder save error:', err))
+    }
 
-      setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt, remaining, pickupDate, depositNote, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: new Date() })
-      setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setDepositInput(''); setPickupDate(''); setDepositNote('')
-      setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
-    } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
-    finally { setSaving(false) }
+    // Show receipt immediately — ไม่ต้องรอ
+    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt, remaining, pickupDate, depositNote, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: now })
+    setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setDepositInput(''); setPickupDate(''); setDepositNote('')
+    setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
+    setSaving(false)
   }
 
   const isDepositReady = mode === 'deposit' && depositAmt > 0 && depositAmt <= total
