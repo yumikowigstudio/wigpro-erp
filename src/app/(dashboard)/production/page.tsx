@@ -4,8 +4,9 @@ import { formatDate, formatCurrency } from '@/lib/utils'
 import {
   Plus, Search, Clock, AlertTriangle, Factory, Package,
   Loader2, X, ChevronRight, Edit2, Check, Building2,
+  ImagePlus, ZoomIn, Trash2, ChevronDown,
 } from 'lucide-react'
-import { collection, onSnapshot, query, where, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, doc, updateDoc, serverTimestamp, arrayUnion, arrayRemove } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, generateWigOrderNo, convertTimestamps } from '@/lib/firestore'
 import { WorkOrder } from '@/types'
@@ -26,6 +27,19 @@ const statusCfg: Record<ProdStatus, { label: string; color: string; next?: ProdS
 }
 
 const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
+
+const CLOUDINARY_CLOUD  = 'dqea32qab'
+const CLOUDINARY_PRESET = 'wigpro_products'
+
+async function uploadToCloudinary(file: File, folder = 'wigpro/progress'): Promise<string> {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('upload_preset', CLOUDINARY_PRESET)
+  fd.append('folder', folder)
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`, { method: 'POST', body: fd })
+  if (!res.ok) throw new Error('Upload failed')
+  return ((await res.json()) as { secure_url: string }).secure_url
+}
 
 /* ─── Inline field editor component ─── */
 function InlineEdit({
@@ -81,6 +95,10 @@ export default function ProductionPage() {
   const [showModal, setShowModal]       = useState(false)
   const [saving, setSaving]             = useState(false)
   const [selectedCustomerId, setSelectedCustomerId] = useState('')
+  /* Progress images */
+  const [expandedId, setExpandedId]   = useState<string | null>(null)
+  const [lightbox, setLightbox]       = useState<string | null>(null)
+  const [uploading, setUploading]     = useState<string | null>(null) // orderId being uploaded
   const [form, setForm] = useState({
     customerName: '', customerPhone: '', wigType: '', wigColor: '', wigLength: '',
     wigModel: '', manufacturer: '', bagNumber: '', totalAmount: '', depositAmount: '', expectedDate: '', notes: '',
@@ -116,6 +134,29 @@ export default function ProductionPage() {
 
   const saveField = async (id: string, field: string, value: string) => {
     await updateDoc(doc(db, COLLECTIONS.WORK_ORDERS, id), { [field]: value, updatedAt: serverTimestamp() })
+  }
+
+  /* Upload progress image */
+  const handleProgressUpload = async (orderId: string, file: File, imageType: 'progressImages' | 'completedImages') => {
+    if (file.size > 10 * 1024 * 1024) { alert('ไฟล์ใหญ่เกิน 10MB'); return }
+    setUploading(orderId)
+    try {
+      const url = await uploadToCloudinary(file, `wigpro/orders/${orderId}`)
+      await updateDoc(doc(db, COLLECTIONS.WORK_ORDERS, orderId), {
+        [imageType]: arrayUnion(url),
+        updatedAt: serverTimestamp(),
+      })
+    } catch (err) { console.error(err); alert('อัปโหลดไม่สำเร็จ') }
+    finally { setUploading(null) }
+  }
+
+  /* Delete progress image */
+  const handleProgressDelete = async (orderId: string, url: string, imageType: 'progressImages' | 'completedImages') => {
+    if (!confirm('ต้องการลบรูปนี้?')) return
+    await updateDoc(doc(db, COLLECTIONS.WORK_ORDERS, orderId), {
+      [imageType]: arrayRemove(url),
+      updatedAt: serverTimestamp(),
+    }).catch(console.error)
   }
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -209,84 +250,185 @@ export default function ProductionPage() {
       ) : (
         <div className="space-y-3">
           {filtered.map(order => {
-            const cfg = statusCfg[order.status as ProdStatus]
+            const cfg       = statusCfg[order.status as ProdStatus]
             const isOverdue = order.expectedDate && new Date(order.expectedDate) < new Date() && order.status !== 'delivered'
+            const isExpanded = expandedId === order.id
+            const progImgs   = (order as unknown as Record<string, string[]>).progressImages ?? []
+            const compImgs   = (order as unknown as Record<string, string[]>).completedImages ?? []
+            const totalImgs  = progImgs.length + compImgs.length
+
             return (
-              <div key={order.id} className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-4 hover:border-[var(--pink-200)] transition-all">
-                <div className="flex items-start gap-4">
-                  <div className="flex-1 min-w-0">
+              <div key={order.id} className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] hover:border-[var(--pink-200)] transition-all overflow-hidden">
+                <div className="p-4">
+                  <div className="flex items-start gap-4">
+                    <div className="flex-1 min-w-0">
 
-                    {/* Header row */}
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <p className="font-mono text-sm font-bold text-[var(--pink-500)]">{order.orderNo}</p>
-                      {cfg && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>{cfg.label}</span>}
-                      {isOverdue && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3" />เกินกำหนด
-                        </span>
+                      {/* Header row */}
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <p className="font-mono text-sm font-bold text-[var(--pink-500)]">{order.orderNo}</p>
+                        {cfg && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>{cfg.label}</span>}
+                        {isOverdue && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" />เกินกำหนด
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="font-semibold text-sm text-[var(--text-primary)]">{order.customerName}</p>
+
+                      {(order.wigType || order.wigColor || order.wigLength) && (
+                        <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                          {[order.wigType, order.wigColor, order.wigLength].filter(Boolean).join(' · ')}
+                        </p>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2">
+                        <div className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
+                          <Building2 className="w-3 h-3 shrink-0" />
+                          <InlineEdit label="โรงงาน" value={order.manufacturer} placeholder="ชื่อโรงงาน"
+                            onSave={v => saveField(order.id, 'manufacturer', v)} />
+                        </div>
+                        <div className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
+                          <Package className="w-3 h-3 shrink-0" />
+                          <span className="text-[var(--text-muted)] mr-0.5">ถุง:</span>
+                          <InlineEdit label="เลขถุง" value={order.bagNumber} placeholder="B-001"
+                            onSave={v => saveField(order.id, 'bagNumber', v)} />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 mt-1.5 text-xs text-[var(--text-muted)] flex-wrap">
+                        {order.expectedDate && (
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />กำหนด {formatDate(new Date(order.expectedDate))}
+                          </span>
+                        )}
+                        {order.totalAmount > 0 && (
+                          <span className="font-semibold text-[var(--pink-500)]">{formatCurrency(order.totalAmount)}</span>
+                        )}
+                        {(order.remainingAmount ?? 0) > 0 && (
+                          <span className="text-red-500">ค้าง {formatCurrency(order.remainingAmount ?? 0)}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-end gap-2 shrink-0">
+                      {/* Advance button */}
+                      {cfg?.next && (
+                        <button onClick={() => advance(order.id, cfg.next!)}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-[var(--pink-50)] text-[var(--pink-600)] border border-[var(--pink-200)] rounded-xl text-xs font-semibold hover:bg-[var(--pink-100)] transition-all whitespace-nowrap">
+                          {statusCfg[cfg.next].label} <ChevronRight className="w-3 h-3" />
+                        </button>
+                      )}
+                      {/* Toggle images */}
+                      <button onClick={() => setExpandedId(isExpanded ? null : order.id)}
+                        className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all
+                          ${isExpanded ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-[var(--bg-base)] border-[var(--border-light)] text-[var(--text-muted)] hover:border-purple-200 hover:text-purple-600'}`}>
+                        <ImagePlus className="w-3.5 h-3.5" />
+                        รูป{totalImgs > 0 ? ` (${totalImgs})` : ''}
+                        <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ─── Progress Images Section ─── */}
+                {isExpanded && (
+                  <div className="border-t border-[var(--border-light)] bg-[var(--bg-base)] p-4 space-y-4">
+
+                    {/* Progress images */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-semibold text-[var(--text-secondary)]">📸 รูปความคืบหน้า</p>
+                        <label className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium cursor-pointer transition-all
+                          ${uploading === order.id ? 'bg-gray-100 text-gray-400' : 'bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100'}`}>
+                          {uploading === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <ImagePlus className="w-3 h-3" />}
+                          อัปโหลด
+                          <input type="file" accept="image/*" multiple className="hidden"
+                            disabled={uploading === order.id}
+                            onChange={async e => {
+                              const files = Array.from(e.target.files ?? [])
+                              for (const f of files) await handleProgressUpload(order.id, f, 'progressImages')
+                              e.target.value = ''
+                            }} />
+                        </label>
+                      </div>
+                      {progImgs.length === 0 ? (
+                        <p className="text-xs text-[var(--text-muted)] text-center py-3">ยังไม่มีรูปความคืบหน้า</p>
+                      ) : (
+                        <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+                          {progImgs.map((url, i) => (
+                            <div key={i} className="relative group aspect-square rounded-xl overflow-hidden bg-white border border-[var(--border-light)]">
+                              <img src={url} alt={`progress-${i}`} className="w-full h-full object-cover" />
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
+                                <button onClick={() => setLightbox(url)} className="p-1.5 bg-white/90 rounded-lg">
+                                  <ZoomIn className="w-3 h-3 text-gray-700" />
+                                </button>
+                                <button onClick={() => handleProgressDelete(order.id, url, 'progressImages')} className="p-1.5 bg-white/90 rounded-lg">
+                                  <Trash2 className="w-3 h-3 text-red-500" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
 
-                    {/* Customer name */}
-                    <p className="font-semibold text-sm text-[var(--text-primary)]">{order.customerName}</p>
-
-                    {/* Wig spec */}
-                    {(order.wigType || order.wigColor || order.wigLength) && (
-                      <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-                        {[order.wigType, order.wigColor, order.wigLength].filter(Boolean).join(' · ')}
-                      </p>
-                    )}
-
-                    {/* Manufacturer + BagNumber (inline-editable) */}
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2">
-                      <div className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
-                        <Building2 className="w-3 h-3 shrink-0" />
-                        <InlineEdit
-                          label="โรงงาน"
-                          value={order.manufacturer}
-                          placeholder="ชื่อโรงงาน"
-                          onSave={v => saveField(order.id, 'manufacturer', v)}
-                        />
+                    {/* Completed images */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-semibold text-[var(--text-secondary)]">✅ รูปสำเร็จ / QC</p>
+                        <label className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium cursor-pointer transition-all
+                          ${uploading === order.id ? 'bg-gray-100 text-gray-400' : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'}`}>
+                          {uploading === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <ImagePlus className="w-3 h-3" />}
+                          อัปโหลด
+                          <input type="file" accept="image/*" multiple className="hidden"
+                            disabled={uploading === order.id}
+                            onChange={async e => {
+                              const files = Array.from(e.target.files ?? [])
+                              for (const f of files) await handleProgressUpload(order.id, f, 'completedImages')
+                              e.target.value = ''
+                            }} />
+                        </label>
                       </div>
-                      <div className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
-                        <Package className="w-3 h-3 shrink-0" />
-                        <span className="text-[var(--text-muted)] mr-0.5">ถุง:</span>
-                        <InlineEdit
-                          label="เลขถุง"
-                          value={order.bagNumber}
-                          placeholder="B-001"
-                          onSave={v => saveField(order.id, 'bagNumber', v)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Dates + amounts */}
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-[var(--text-muted)] flex-wrap">
-                      {order.expectedDate && (
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" />กำหนด {formatDate(new Date(order.expectedDate))}
-                        </span>
-                      )}
-                      {order.totalAmount > 0 && (
-                        <span className="font-semibold text-[var(--pink-500)]">{formatCurrency(order.totalAmount)}</span>
-                      )}
-                      {(order.remainingAmount ?? 0) > 0 && (
-                        <span className="text-red-500">ค้าง {formatCurrency(order.remainingAmount ?? 0)}</span>
+                      {compImgs.length === 0 ? (
+                        <p className="text-xs text-[var(--text-muted)] text-center py-3">ยังไม่มีรูปสำเร็จ</p>
+                      ) : (
+                        <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+                          {compImgs.map((url, i) => (
+                            <div key={i} className="relative group aspect-square rounded-xl overflow-hidden bg-white border border-[var(--border-light)] border-emerald-200">
+                              <img src={url} alt={`completed-${i}`} className="w-full h-full object-cover" />
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
+                                <button onClick={() => setLightbox(url)} className="p-1.5 bg-white/90 rounded-lg">
+                                  <ZoomIn className="w-3 h-3 text-gray-700" />
+                                </button>
+                                <button onClick={() => handleProgressDelete(order.id, url, 'completedImages')} className="p-1.5 bg-white/90 rounded-lg">
+                                  <Trash2 className="w-3 h-3 text-red-500" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
                   </div>
-
-                  {/* Advance button */}
-                  {cfg?.next && (
-                    <button onClick={() => advance(order.id, cfg.next!)}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-[var(--pink-50)] text-[var(--pink-600)] border border-[var(--pink-200)] rounded-xl text-xs font-semibold hover:bg-[var(--pink-100)] transition-all whitespace-nowrap shrink-0">
-                      {statusCfg[cfg.next].label} <ChevronRight className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          onClick={() => setLightbox(null)}>
+          <div className="relative max-w-3xl max-h-[90vh]">
+            <img src={lightbox} alt="zoom" className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl" />
+            <button onClick={() => setLightbox(null)}
+              className="absolute top-3 right-3 w-9 h-9 bg-white/20 backdrop-blur rounded-xl flex items-center justify-center text-white hover:bg-white/40 transition-all">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
       )}
 

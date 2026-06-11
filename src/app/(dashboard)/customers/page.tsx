@@ -4,9 +4,10 @@ import { Customer } from '@/types'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { Search, Plus, Download, Eye, Edit, Phone, MessageCircle, Star, Users, UserPlus, TrendingUp, Calendar, Loader2 } from 'lucide-react'
 import Link from 'next/link'
-import { collection, onSnapshot, query, where, orderBy, Timestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, Timestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
+import { useAuth } from '@/hooks/useAuth'
 
 const caseLabels: Record<string, { label: string; color: string }> = {
   chemo:       { label: 'คีโม',         color: 'bg-pink-50 text-pink-600 border border-pink-100'    },
@@ -25,6 +26,7 @@ const memberColors: Record<string, string> = {
 }
 
 export default function CustomersPage() {
+  const { companyId } = useAuth()
   const [customers, setCustomers]   = useState<Customer[]>([])
   const [loading, setLoading]       = useState(true)
   const [search, setSearch]         = useState('')
@@ -33,14 +35,46 @@ export default function CustomersPage() {
   const [newThisMonth, setNewThisMonth] = useState(0)
   const [todayApts, setTodayApts]   = useState(0)
 
+  /* Export CSV */
+  const exportCSV = () => {
+    const headers = ['รหัสลูกค้า','ชื่อ','นามสกุล','ชื่อเล่น','เบอร์โทร','LINE ID','ระดับสมาชิก','แต้มสะสม','ยอดซื้อสะสม','ประเภทเคส']
+    const rows = filtered.map(c => [
+      c.customerId ?? '',
+      c.firstName,
+      c.lastName,
+      c.nickname ?? '',
+      c.phone,
+      c.lineId ?? '',
+      c.memberLevel ?? 'silver',
+      c.points ?? 0,
+      c.totalPurchase ?? 0,
+      (c.caseTypes ?? []).join('|'),
+    ])
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n')
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `customers_${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   useEffect(() => {
-    // Simple query without composite index — filter deleted client-side
+    if (!companyId) return
+    // Filter by companyId — no orderBy to avoid composite index; sort client-side
     const q = query(
       collection(db, COLLECTIONS.CUSTOMERS),
-      orderBy('createdAt', 'desc')
+      where('companyId', '==', companyId),
     )
     const unsub = onSnapshot(q, snap => {
       const all = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Customer[]
+      // Sort newest first client-side
+      all.sort((a, b) => {
+        const da = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt as unknown as string)
+        const db_ = b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt as unknown as string)
+        return db_.getTime() - da.getTime()
+      })
       setCustomers(all.filter(c => c.status !== 'deleted'))
 
       // New customers this month
@@ -65,7 +99,7 @@ export default function CustomersPage() {
     const unsubApt = onSnapshot(aptQ, snap => setTodayApts(snap.size), () => {})
 
     return () => { unsub(); unsubApt() }
-  }, [])
+  }, [companyId])
 
   const filtered = customers.filter(c => {
     const q = search.toLowerCase()
@@ -126,8 +160,8 @@ export default function CustomersPage() {
           <option value="platinum">Platinum</option>
           <option value="vip">VIP</option>
         </select>
-        <button className="flex items-center gap-2 px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm text-[var(--text-secondary)] hover:bg-[var(--pink-50)] hover:border-[var(--pink-200)] transition-all">
-          <Download className="w-4 h-4" /> Export
+        <button onClick={exportCSV} className="flex items-center gap-2 px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm text-[var(--text-secondary)] hover:bg-[var(--pink-50)] hover:border-[var(--pink-200)] transition-all">
+          <Download className="w-4 h-4" /> Export CSV
         </button>
       </div>
 

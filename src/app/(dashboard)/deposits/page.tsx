@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { Plus, Search, CreditCard, CheckCircle, Clock, XCircle, Loader2, X } from 'lucide-react'
-import { collection, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
 import { Deposit } from '@/types'
@@ -169,12 +169,20 @@ export default function DepositsPage() {
   const [payMethod, setPayMethod] = useState('cash')
 
   useEffect(() => {
-    const q = query(collection(db, COLLECTIONS.DEPOSITS), orderBy('createdAt', 'desc'))
+    if (!companyId) return
+    // No orderBy to avoid composite index — sort client-side
+    const q = query(collection(db, COLLECTIONS.DEPOSITS), where('companyId', '==', companyId))
     return onSnapshot(q, snap => {
-      setDeposits(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Deposit[])
+      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Deposit[]
+      list.sort((a, b) => {
+        const da = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt as unknown as string)
+        const db_ = b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt as unknown as string)
+        return db_.getTime() - da.getTime()
+      })
+      setDeposits(list)
       setLoading(false)
     }, () => setLoading(false))
-  }, [])
+  }, [companyId])
 
   const filtered = deposits.filter(d => {
     const q = search.toLowerCase()
@@ -353,12 +361,26 @@ export default function DepositsPage() {
                         {cfg && <span className={`text-[11px] px-2.5 py-1 rounded-full font-medium ${cfg.color}`}>{cfg.label}</span>}
                       </td>
                       <td className="px-4 py-3.5">
-                        {dep.status === 'deposited' && dep.remainingAmount > 0 && (
-                          <button onClick={() => { setShowPayModal(dep); setPayAmount(String(dep.remainingAmount)) }}
-                            className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-medium hover:bg-emerald-100 transition-all whitespace-nowrap">
-                            รับชำระ
-                          </button>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {dep.status === 'deposited' && dep.remainingAmount > 0 && (
+                            <button onClick={() => { setShowPayModal(dep); setPayAmount(String(dep.remainingAmount)) }}
+                              className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-medium hover:bg-emerald-100 transition-all whitespace-nowrap">
+                              รับชำระ
+                            </button>
+                          )}
+                          {(dep.status === 'pending' || dep.status === 'deposited') && (
+                            <button
+                              onClick={() => {
+                                if (!confirm(`ยืนยันยกเลิกมัดจำ ${dep.depositNo}?`)) return
+                                updateDoc(doc(db, COLLECTIONS.DEPOSITS, dep.id), {
+                                  status: 'cancelled', updatedAt: serverTimestamp(),
+                                }).catch(console.error)
+                              }}
+                              className="px-2.5 py-1 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium hover:bg-red-100 transition-all whitespace-nowrap">
+                              ยกเลิก
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   )
