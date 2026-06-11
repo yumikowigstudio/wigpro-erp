@@ -23,10 +23,10 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
+  { href: '/pos',          label: 'POS ขาย',        icon: ShoppingCart,    group: 'หลัก' },
   { href: '/dashboard',    label: 'แดชบอร์ด',      icon: LayoutDashboard, group: 'หลัก' },
   { href: '/customers',    label: 'ลูกค้า',          icon: Users,           group: 'หลัก' },
   { href: '/appointments', label: 'นัดหมาย',         icon: CalendarDays,    group: 'หลัก' },
-  { href: '/pos',          label: 'POS ขาย',        icon: ShoppingCart,    group: 'หลัก' },
   { href: '/members',      label: 'สมาชิก',          icon: Star,            group: 'หลัก' },
   {
     label: 'สินค้าและสต๊อก', icon: Package, group: 'คลัง',
