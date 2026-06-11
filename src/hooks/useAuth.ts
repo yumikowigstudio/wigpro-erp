@@ -1,7 +1,7 @@
 'use client'
 import { useEffect } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
-import { doc, onSnapshot } from 'firebase/firestore'
+import { doc, onSnapshot, setDoc, serverTimestamp, getDocs, collection, query, where as fsWhere, limit, orderBy } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
 import { getCollection, COLLECTIONS, where } from '@/lib/firestore'
 import { useAuthStore } from '@/store/authStore'
@@ -60,7 +60,45 @@ export function useAuth() {
               }
             }
           } else {
-            setUser(null)
+            // ── Auto-bootstrap: user logged in via Firebase Auth แต่ยังไม่มี Firestore user doc ──
+            // หา company + branch แรกที่มีในระบบ แล้วสร้าง user doc อัตโนมัติ
+            try {
+              // หา company แรก
+              const companySnap = await getDocs(query(collection(db, COLLECTIONS.COMPANIES), limit(1)))
+              let autoCompanyId = 'company001'
+              if (!companySnap.empty) autoCompanyId = companySnap.docs[0].id
+
+              // หา branch แรกของ company นั้น
+              const branchSnap = await getDocs(query(
+                collection(db, COLLECTIONS.BRANCHES),
+                fsWhere('companyId', '==', autoCompanyId),
+                orderBy('createdAt'),
+                limit(1),
+              ))
+              let autoBranchId = ''
+              if (!branchSnap.empty) autoBranchId = branchSnap.docs[0].id
+
+              // สร้าง user document
+              const newUserData = {
+                email:       fbUser.email   ?? '',
+                displayName: fbUser.displayName ?? fbUser.email?.split('@')[0] ?? 'Admin',
+                role:        'owner' as const,
+                companyId:   autoCompanyId,
+                branchId:    autoBranchId,
+                isActive:    true,
+                permissions: [],
+                createdAt:   serverTimestamp(),
+                updatedAt:   serverTimestamp(),
+              }
+              await setDoc(doc(db, COLLECTIONS.USERS, fbUser.uid), newUserData)
+              console.log('✅ Auto-created user document for', fbUser.email, '→ companyId:', autoCompanyId)
+              // onSnapshot จะ trigger อีกครั้งหลัง setDoc สำเร็จ
+            } catch (err) {
+              console.error('Auto-bootstrap user error:', err)
+              setUser(null)
+              setLoading(false)
+            }
+            return // รอ onSnapshot trigger ใหม่
           }
           setLoading(false)
         }, (err) => {

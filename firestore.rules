@@ -50,7 +50,10 @@ service cloud.firestore {
     // Users
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isBranchManager());
-      allow create: if isOwner();
+      // Allow self-create: ผู้ใช้ที่ login แล้วสามารถสร้าง doc ตัวเองได้ (bootstrap แรก)
+      // Allow owner to create other users
+      allow create: if isAuthenticated() && request.auth.uid == userId
+                    || isOwner();
       allow update: if isAuthenticated() && (request.auth.uid == userId || isBranchManager());
       allow delete: if isOwner();
     }
