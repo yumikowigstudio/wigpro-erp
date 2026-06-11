@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import {
   collection, onSnapshot, query, where, doc,
-  updateDoc, addDoc, serverTimestamp, orderBy, limit,
+  updateDoc, addDoc, serverTimestamp, limit,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
@@ -274,25 +274,35 @@ export default function InventoryPage() {
 
   /* Load products */
   useEffect(() => {
-    const q = query(collection(db, COLLECTIONS.PRODUCTS), where('status', '!=', 'deleted'))
+    if (!companyId) return
+    // No orderBy — sort client-side to avoid composite index
+    const q = query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId))
     return onSnapshot(q, snap => {
-      setProducts(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as ProductWithStock[])
+      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as ProductWithStock[]
+      setProducts(list.filter(p => p.status !== 'deleted'))
       setLoading(false)
     }, () => setLoading(false))
-  }, [])
+  }, [companyId])
 
   /* Load movements */
   useEffect(() => {
+    if (!companyId) return
+    // No orderBy — sort client-side to avoid composite index
     const q = query(
       collection(db, COLLECTIONS.STOCK_MOVEMENTS),
       where('companyId', '==', companyId),
-      orderBy('createdAt', 'desc'),
       limit(100),
     )
     return onSnapshot(q, snap => {
-      setMovements(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as (StockMovement & { productName?: string; sku?: string; supplier?: string })[])
-    })
-  }, [])
+      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as (StockMovement & { productName?: string; sku?: string; supplier?: string })[]
+      list.sort((a, b) => {
+        const da = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt as unknown as string)
+        const db_ = b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt as unknown as string)
+        return db_.getTime() - da.getTime()
+      })
+      setMovements(list)
+    }, () => {})
+  }, [companyId])
 
   const categories = Array.from(new Set(products.map(p => p.category).filter(Boolean)))
 

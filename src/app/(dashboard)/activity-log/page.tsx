@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { formatDateTime } from '@/lib/utils'
 import { Search, BookOpen, User, ShoppingCart, Edit, Trash2, LogIn, LogOut, Loader2, Package } from 'lucide-react'
-import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, limit } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS } from '@/lib/firestore'
 import { useAuth } from '@/hooks/useAuth'
@@ -41,15 +41,17 @@ export default function ActivityLogPage() {
     const q = query(
       collection(db, COLLECTIONS.ACTIVITY_LOGS),
       where('companyId', '==', companyId),
-      orderBy('createdAt', 'desc'),
       limit(200)
     )
     const unsub = onSnapshot(q, snap => {
-      setLogs(snap.docs.map(d => {
+      const list = snap.docs.map(d => {
         const data = d.data()
         const createdAt = data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt ?? Date.now())
         return { id: d.id, ...data, createdAt } as ActivityLog
-      }))
+      })
+      // Sort newest-first client-side (avoids composite index)
+      list.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      setLogs(list)
       setLoading(false)
     }, () => setLoading(false))
     return unsub

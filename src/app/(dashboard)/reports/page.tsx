@@ -5,10 +5,11 @@ import { BarChart3, Download, TrendingUp, Users, Package, Factory, Star, Loader2
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts'
-import { collection, onSnapshot, query, where, orderBy, Timestamp, getCountFromServer } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, Timestamp, getCountFromServer } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Sale, Customer, WorkOrder } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 const monthNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
 
@@ -21,6 +22,7 @@ const reportTabs = [
 ]
 
 export default function ReportsPage() {
+  const { companyId } = useAuth()
   const [activeTab, setActiveTab] = useState('sales')
   const [period, setPeriod]       = useState('month')
   const [loading, setLoading]     = useState(true)
@@ -32,6 +34,8 @@ export default function ReportsPage() {
   const [newCustCount, setNewCustCount] = useState(0)
 
   useEffect(() => {
+    if (!companyId) return
+
     const now   = new Date()
     const start = period === 'day'
       ? new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -42,39 +46,61 @@ export default function ReportsPage() {
       : new Date(now.getFullYear(), 0, 1)
 
     const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1)
+    const tsStart      = Timestamp.fromDate(start)
+    const ts6m         = Timestamp.fromDate(sixMonthsAgo)
 
     setLoading(true)
     let done = 0
     const check = () => { done++; if (done >= 4) setLoading(false) }
 
+    // No orderBy — sort client-side to avoid composite indexes
     const u1 = onSnapshot(
-      query(collection(db, COLLECTIONS.SALES), where('createdAt', '>=', Timestamp.fromDate(start)), orderBy('createdAt','desc')),
-      snap => { setSales(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]); check() },
+      query(collection(db, COLLECTIONS.SALES), where('companyId', '==', companyId), where('createdAt', '>=', tsStart)),
+      snap => {
+        const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]
+        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        setSales(list); check()
+      },
       () => check()
     )
     const u2 = onSnapshot(
-      query(collection(db, COLLECTIONS.SALES), where('createdAt', '>=', Timestamp.fromDate(sixMonthsAgo)), orderBy('createdAt','desc')),
-      snap => { setAllSales6m(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]); check() },
+      query(collection(db, COLLECTIONS.SALES), where('companyId', '==', companyId), where('createdAt', '>=', ts6m)),
+      snap => {
+        const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]
+        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        setAllSales6m(list); check()
+      },
       () => check()
     )
     const u3 = onSnapshot(
-      query(collection(db, COLLECTIONS.CUSTOMERS), where('status', '!=', 'deleted'), orderBy('status'), orderBy('createdAt','desc')),
-      snap => { setCustomers(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Customer[]); check() },
+      query(collection(db, COLLECTIONS.CUSTOMERS), where('companyId', '==', companyId)),
+      snap => {
+        const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Customer[]
+        // Filter deleted + sort by createdAt desc client-side
+        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        setCustomers(list.filter(c => c.status !== 'deleted')); check()
+      },
       () => check()
     )
     const u4 = onSnapshot(
-      query(collection(db, COLLECTIONS.WORK_ORDERS), where('status', 'not-in', ['delivered','cancelled']), orderBy('status')),
-      snap => { setWorkOrders(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as WorkOrder[]); check() },
+      query(collection(db, COLLECTIONS.WORK_ORDERS), where('companyId', '==', companyId)),
+      snap => {
+        const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as WorkOrder[]
+        // Filter active orders client-side
+        setWorkOrders(list.filter(o => !['delivered','cancelled'].includes(o.status ?? ''))); check()
+      },
       () => check()
     )
 
     // New customers this period
-    getCountFromServer(query(collection(db, COLLECTIONS.CUSTOMERS), where('createdAt', '>=', Timestamp.fromDate(start))))
-      .then(r => setNewCustCount(r.data().count))
-      .catch(() => {})
+    getCountFromServer(query(
+      collection(db, COLLECTIONS.CUSTOMERS),
+      where('companyId', '==', companyId),
+      where('createdAt', '>=', tsStart),
+    )).then(r => setNewCustCount(r.data().count)).catch(() => {})
 
     return () => { u1(); u2(); u3(); u4() }
-  }, [period])
+  }, [period, companyId])
 
   const totalRevenue = sales.reduce((a, s) => a + s.totalAmount, 0)
 

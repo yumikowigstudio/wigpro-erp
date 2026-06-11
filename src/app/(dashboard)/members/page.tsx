@@ -3,10 +3,11 @@ import { useState, useEffect } from 'react'
 import { formatCurrency } from '@/lib/utils'
 import { Star, Search, Loader2 } from 'lucide-react'
 import Link from 'next/link'
-import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore'
+import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Customer } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 const levelConfig = {
   silver:   { label: 'Silver',   color: 'bg-gray-100 text-gray-700',    gradient: 'from-gray-300 to-gray-400'      },
@@ -18,23 +19,27 @@ const levelConfig = {
 type LevelKey = keyof typeof levelConfig
 
 export default function MembersPage() {
+  const { companyId } = useAuth()
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterLevel, setFilterLevel] = useState('')
 
   useEffect(() => {
+    if (!companyId) return
+    // No orderBy — sort client-side to avoid composite index
     const q = query(
       collection(db, COLLECTIONS.CUSTOMERS),
-      where('status', '!=', 'deleted'),
-      orderBy('status'),
-      orderBy('totalPurchase', 'desc')
+      where('companyId', '==', companyId),
     )
     return onSnapshot(q, snap => {
-      setCustomers(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Customer[])
+      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Customer[]
+      // Filter deleted + sort by totalPurchase desc client-side
+      list.sort((a, b) => (b.totalPurchase ?? 0) - (a.totalPurchase ?? 0))
+      setCustomers(list.filter(c => c.status !== 'deleted'))
       setLoading(false)
     }, () => setLoading(false))
-  }, [])
+  }, [companyId])
 
   const members = customers.filter(c => c.memberLevel)
 

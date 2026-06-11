@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { formatDateTime } from '@/lib/utils'
 import { Bell, Calendar, AlertTriangle, Package, CreditCard, Factory, CheckCheck, Trash2, Loader2 } from 'lucide-react'
-import { collection, onSnapshot, query, where, orderBy, doc, updateDoc, deleteDoc, writeBatch, serverTimestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, doc, updateDoc, deleteDoc, writeBatch, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS } from '@/lib/firestore'
 import { useAuth } from '@/hooks/useAuth'
@@ -39,14 +39,16 @@ export default function NotificationsPage() {
     const q = query(
       collection(db, COLLECTIONS.NOTIFICATIONS),
       where('companyId', '==', companyId),
-      orderBy('createdAt', 'desc')
     )
     const unsub = onSnapshot(q, snap => {
-      setNotifications(snap.docs.map(d => {
+      const list = snap.docs.map(d => {
         const data = d.data()
         const createdAt = data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt ?? Date.now())
         return { id: d.id, ...data, createdAt } as Notif
-      }))
+      })
+      // Sort newest-first client-side (avoids composite index)
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      setNotifications(list)
       setLoading(false)
     }, () => setLoading(false))
     return unsub
