@@ -1,14 +1,14 @@
 'use client'
 import { useState, useEffect } from 'react'
 import {
-  Search, Plus, Minus, X, ShoppingCart, User, Tag,
+  Search, Plus, Minus, X, ShoppingCart, Tag,
   Banknote, Smartphone, QrCode, CreditCard, Package,
   Scissors, Check, Loader2, AlertTriangle, Printer, Wallet,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { addDocument, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Sale, Product, Service, Deposit, WorkOrder } from '@/types'
-import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore'
+import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { useAuth } from '@/hooks/useAuth'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
@@ -74,14 +74,16 @@ export default function POSPage() {
   useEffect(() => {
     let p = false, s = false
     const check = () => { if (p && s) setDataLoading(false) }
+    const sortByName = <T extends { name: string }>(arr: T[]) =>
+      [...arr].sort((a, b) => a.name.localeCompare(b.name, 'th'))
     const u1 = onSnapshot(
-      query(collection(db, COLLECTIONS.PRODUCTS), where('isActive', '==', true), orderBy('name')),
-      snap => { setProducts(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as ProductWithStock[]); p = true; check() },
+      query(collection(db, COLLECTIONS.PRODUCTS), where('isActive', '==', true)),
+      snap => { setProducts(sortByName(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as ProductWithStock[])); p = true; check() },
       () => { p = true; check() }
     )
     const u2 = onSnapshot(
-      query(collection(db, COLLECTIONS.SERVICES), orderBy('name')),
-      snap => { setServices(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Service[]); s = true; check() },
+      query(collection(db, COLLECTIONS.SERVICES)),
+      snap => { setServices(sortByName(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Service[])); s = true; check() },
       () => { s = true; check() }
     )
     return () => { u1(); u2() }

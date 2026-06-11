@@ -70,7 +70,7 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (done) return
+    if (done || !form.firstName.trim() || !form.phone.trim()) return
     setDone(true)
     setSaving(true)
 

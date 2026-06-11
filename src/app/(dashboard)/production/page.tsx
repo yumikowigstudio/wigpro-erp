@@ -5,7 +5,7 @@ import {
   Plus, Search, Clock, AlertTriangle, Factory, Package,
   Loader2, X, ChevronRight, Edit2, Check, Building2,
 } from 'lucide-react'
-import { collection, onSnapshot, query, where, orderBy, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, generateWigOrderNo, convertTimestamps } from '@/lib/firestore'
 import { WorkOrder } from '@/types'
@@ -91,10 +91,11 @@ export default function ProductionPage() {
     const q = query(
       collection(db, COLLECTIONS.WORK_ORDERS),
       where('companyId', '==', companyId),
-      orderBy('createdAt', 'desc'),
     )
     return onSnapshot(q, snap => {
-      setOrders(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as WorkOrder[])
+      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as WorkOrder[]
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      setOrders(list)
       setLoading(false)
     }, () => setLoading(false))
   }, [companyId])
@@ -124,7 +125,6 @@ export default function ProductionPage() {
       const total   = parseFloat(form.totalAmount)   || 0
       const dep     = parseFloat(form.depositAmount) || 0
       await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, {
-        id: '',
         companyId, branchId,
         orderNo, customerId: selectedCustomerId || '', customerName: form.customerName,
         saleOrderId: '', notes: form.notes || undefined,

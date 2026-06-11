@@ -4,7 +4,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import {
   ArrowLeft, Phone, MessageCircle, Calendar, Star, Edit,
-  ShoppingCart, Factory, CreditCard, Gift, Loader2, ImageIcon,
+  ShoppingCart, Factory, CreditCard, Loader2, ImageIcon,
   Upload, Trash2, ChevronRight, Clock, Package, AlertTriangle,
   X, ZoomIn, FileText, FilePlus, Ruler, Phone as PhoneIcon,
   MessageSquare, MapPin, StickyNote, Plus, CheckCircle2,
@@ -12,7 +12,7 @@ import {
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { getDocument, COLLECTIONS } from '@/lib/firestore'
 import {
-  collection, query, where, orderBy, onSnapshot,
+  collection, query, where, onSnapshot,
   addDoc, deleteDoc, doc, serverTimestamp,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
@@ -96,7 +96,7 @@ interface ContactLog {
 
 export default function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id }                    = use(params)
-  const { userId, companyId }     = useAuth()
+  const { userId, companyId, branchId } = useAuth()
   const [customer, setCustomer]   = useState<Customer | null>(null)
   const [loading, setLoading]     = useState(true)
   const [activeTab, setActiveTab] = useState('overview')
@@ -122,34 +122,38 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       return new Date(v as string)
     }
 
+    // ไม่ใช้ orderBy เพื่อหลีกเลี่ยง composite index — sort client-side แทน
+    const byDateDesc = (a: {createdAt: Date}, b: {createdAt: Date}) =>
+      b.createdAt.getTime() - a.createdAt.getTime()
+
     const u1 = onSnapshot(
-      query(collection(db, COLLECTIONS.SALES), where('customerId', '==', id), orderBy('createdAt', 'desc')),
-      s => setSales(s.docs.map(d => { const data = d.data(); return { id: d.id, receiptNo: data.receiptNo, totalAmount: data.totalAmount, items: data.items, createdAt: toD(data.createdAt) } })),
+      query(collection(db, COLLECTIONS.SALES), where('customerId', '==', id)),
+      s => setSales(s.docs.map(d => { const data = d.data(); return { id: d.id, receiptNo: data.receiptNo, totalAmount: data.totalAmount, items: data.items, createdAt: toD(data.createdAt) } }).sort(byDateDesc)),
       () => {}
     )
     const u2 = onSnapshot(
-      query(collection(db, COLLECTIONS.WORK_ORDERS), where('customerId', '==', id), orderBy('createdAt', 'desc')),
-      s => setWorkOrders(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, orderDate: toD(data.orderDate), expectedDate: data.expectedDate ? toD(data.expectedDate) : undefined, deliveredDate: data.deliveredDate ? toD(data.deliveredDate) : undefined, createdAt: toD(data.createdAt), updatedAt: toD(data.updatedAt) } as WorkOrder })),
+      query(collection(db, COLLECTIONS.WORK_ORDERS), where('customerId', '==', id)),
+      s => setWorkOrders(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, orderDate: toD(data.orderDate), expectedDate: data.expectedDate ? toD(data.expectedDate) : undefined, deliveredDate: data.deliveredDate ? toD(data.deliveredDate) : undefined, createdAt: toD(data.createdAt), updatedAt: toD(data.updatedAt) } as WorkOrder }).sort(byDateDesc)),
       () => {}
     )
     const u3 = onSnapshot(
-      query(collection(db, COLLECTIONS.DEPOSITS), where('customerId', '==', id), orderBy('createdAt', 'desc')),
-      s => setDeposits(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt), updatedAt: toD(data.updatedAt) } as Deposit })),
+      query(collection(db, COLLECTIONS.DEPOSITS), where('customerId', '==', id)),
+      s => setDeposits(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt), updatedAt: toD(data.updatedAt) } as Deposit }).sort(byDateDesc)),
       () => {}
     )
     const u4 = onSnapshot(
-      query(collection(db, COLLECTIONS.CUSTOMER_IMAGES), where('customerId', '==', id), orderBy('createdAt', 'desc')),
-      s => setImages(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as CustomerImage })),
+      query(collection(db, COLLECTIONS.CUSTOMER_IMAGES), where('customerId', '==', id)),
+      s => setImages(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as CustomerImage }).sort(byDateDesc)),
       () => {}
     )
     const u5 = onSnapshot(
-      query(collection(db, COLLECTIONS.CUSTOMER_DOCUMENTS), where('customerId', '==', id), orderBy('createdAt', 'desc')),
-      s => setDocuments(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as CustomerDocument })),
+      query(collection(db, COLLECTIONS.CUSTOMER_DOCUMENTS), where('customerId', '==', id)),
+      s => setDocuments(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as CustomerDocument }).sort(byDateDesc)),
       () => {}
     )
     const u6 = onSnapshot(
-      query(collection(db, COLLECTIONS.CUSTOMER_TIMELINE), where('customerId', '==', id), orderBy('createdAt', 'desc')),
-      s => setContacts(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as ContactLog })),
+      query(collection(db, COLLECTIONS.CUSTOMER_TIMELINE), where('customerId', '==', id)),
+      s => setContacts(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as ContactLog }).sort(byDateDesc)),
       () => {}
     )
     return () => { u1(); u2(); u3(); u4(); u5(); u6() }
@@ -279,7 +283,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           {activeTab === 'documents'   && <DocumentsTab documents={documents} customerId={id} companyId={companyId} userId={userId} />}
           {activeTab === 'history'     && <ServiceHistoryTab sales={sales} workOrders={workOrders} />}
           {activeTab === 'payments'    && <PaymentsTab deposits={deposits} />}
-          {activeTab === 'contacts'    && <ContactLogTab contacts={contacts} customerId={id} userId={userId} companyId={companyId} />}
+          {activeTab === 'contacts'    && <ContactLogTab contacts={contacts} customerId={id} userId={userId} companyId={companyId} branchId={branchId} />}
           {activeTab === 'work_orders' && <WorkOrdersTab workOrders={workOrders} />}
         </div>
       </div>
@@ -693,8 +697,8 @@ function PaymentsTab({ deposits }: { deposits: Deposit[] }) {
 // ─── Tab 6: ประวัติการติดต่อ ──────────────────────────────────────────────────
 
 function ContactLogTab({
-  contacts, customerId, userId, companyId,
-}: { contacts: ContactLog[]; customerId: string; userId: string; companyId: string }) {
+  contacts, customerId, userId, companyId, branchId,
+}: { contacts: ContactLog[]; customerId: string; userId: string; companyId: string; branchId: string }) {
   const [showForm,  setShowForm]  = useState(false)
   const [type,      setType]      = useState('note')
   const [title,     setTitle]     = useState('')
@@ -708,7 +712,7 @@ function ContactLogTab({
       await addDoc(collection(db, COLLECTIONS.CUSTOMER_TIMELINE), {
         customerId, companyId, type, title: title.trim(),
         description: desc.trim() || null,
-        performedBy: userId, branchId: '',
+        performedBy: userId, branchId,
         createdAt: serverTimestamp(),
       })
       setTitle(''); setDesc(''); setShowForm(false)

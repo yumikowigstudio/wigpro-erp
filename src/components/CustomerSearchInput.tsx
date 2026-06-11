@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { Search, User, X } from 'lucide-react'
-import { collection, query, where, orderBy, getDocs } from 'firebase/firestore'
+import { collection, query, where, getDocs } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS } from '@/lib/firestore'
 import { Customer } from '@/types'
@@ -38,13 +38,15 @@ export function CustomerSearchInput({
     if (loaded || loading) return
     setLoading(true)
     try {
+      // ไม่ใช้ orderBy เพื่อหลีกเลี่ยง composite index — sort client-side แทน
       const snap = await getDocs(query(
         collection(db, COLLECTIONS.CUSTOMERS),
         where('companyId', '==', companyId),
         where('status', '==', 'active'),
-        orderBy('firstName'),
       ))
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Customer))
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() } as Customer))
+        .sort((a, b) => (a.firstName ?? '').localeCompare(b.firstName ?? '', 'th'))
       setCustomers(list)
       setLoaded(true)
     } catch {

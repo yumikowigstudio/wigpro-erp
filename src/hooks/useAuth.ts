@@ -1,7 +1,7 @@
 'use client'
 import { useEffect } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
-import { doc, onSnapshot, setDoc, serverTimestamp, getDocs, collection, query, where as fsWhere, limit, orderBy } from 'firebase/firestore'
+import { doc, onSnapshot, setDoc, serverTimestamp, getDocs, collection, query, where as fsWhere, limit } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
 import { getCollection, COLLECTIONS, where } from '@/lib/firestore'
 import { useAuthStore } from '@/store/authStore'
@@ -72,7 +72,6 @@ export function useAuth() {
               const branchSnap = await getDocs(query(
                 collection(db, COLLECTIONS.BRANCHES),
                 fsWhere('companyId', '==', autoCompanyId),
-                orderBy('createdAt'),
                 limit(1),
               ))
               let autoBranchId = ''
