@@ -2,17 +2,18 @@
 import { useState, useEffect } from 'react'
 import { formatDate } from '@/lib/utils'
 import {
-  Plus, ChevronLeft, ChevronRight, Calendar, Clock, User,
+  Plus, ChevronLeft, ChevronRight, Calendar, User,
   Scissors, Phone, Check, X, Loader2, MessageCircle, Copy, CheckCheck,
 } from 'lucide-react'
 import {
-  collection, onSnapshot, query, where, orderBy,
+  collection, onSnapshot, query, where,
   doc, updateDoc, addDoc, serverTimestamp,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
-import { Appointment } from '@/types'
+import type { Appointment } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
+import CustomerSearchInput from '@/components/CustomerSearchInput'
 
 type AptStatus = 'pending' | 'confirmed' | 'arrived' | 'completed' | 'cancelled'
 
@@ -34,9 +35,9 @@ const serviceOptions = [
 
 /* ─── LINE message templates ─── */
 function lineMessage(apt: Appointment, status: AptStatus): string | null {
-  const date = apt.date instanceof Date ? apt.date : new Date(apt.date)
+  const date    = apt.date instanceof Date ? apt.date : new Date(apt.date)
   const dateStr = date.toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-  const svc  = apt.services?.map(s => s.serviceName).join(', ') ?? ''
+  const svc     = apt.services?.map(s => s.serviceName).join(', ') ?? ''
 
   switch (status) {
     case 'confirmed':
@@ -54,19 +55,12 @@ function lineMessage(apt: Appointment, status: AptStatus): string | null {
 function LineModal({ apt, status, onClose }: { apt: Appointment; status: AptStatus; onClose: () => void }) {
   const msg = lineMessage(apt, status)
   const [copied, setCopied] = useState(false)
-
   if (!msg) return null
 
   const copy = () => {
-    navigator.clipboard.writeText(msg).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
+    navigator.clipboard.writeText(msg).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
   }
-
-  const openLine = () => {
-    window.open(`https://line.me/R/msg/text/?${encodeURIComponent(msg)}`, '_blank')
-  }
+  const openLine = () => window.open(`https://line.me/R/msg/text/?${encodeURIComponent(msg)}`, '_blank')
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--text-secondary)]/20 backdrop-blur-sm">
@@ -83,7 +77,6 @@ function LineModal({ apt, status, onClose }: { apt: Appointment; status: AptStat
           </button>
         </div>
         <div className="p-5 space-y-4">
-          {/* Chat bubble preview */}
           <div className="flex gap-2">
             <div className="w-8 h-8 rounded-full bg-[var(--pink-100)] flex items-center justify-center shrink-0 text-sm font-bold text-[var(--pink-500)]">ร</div>
             <div className="bg-[var(--bg-base)] rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-[var(--text-primary)] leading-relaxed whitespace-pre-line flex-1">
@@ -99,11 +92,9 @@ function LineModal({ apt, status, onClose }: { apt: Appointment; status: AptStat
             </button>
             <button onClick={openLine}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-[#06C755] text-white rounded-xl text-sm font-bold hover:bg-[#05b34a] transition-all">
-              <MessageCircle className="w-4 h-4" />
-              เปิด LINE
+              <MessageCircle className="w-4 h-4" /> เปิด LINE
             </button>
           </div>
-          <p className="text-[10px] text-[var(--text-muted)] text-center">* เปิด LINE แล้วส่งถึงลูกค้าโดยตรง<br/>เชื่อมต่อ LINE OA เพื่อส่งอัตโนมัติในอนาคต</p>
         </div>
       </div>
     </div>
@@ -111,7 +102,7 @@ function LineModal({ apt, status, onClose }: { apt: Appointment; status: AptStat
 }
 
 function getWeekDays(base: Date) {
-  const days = []
+  const days  = []
   const start = new Date(base)
   start.setDate(start.getDate() - start.getDay() + 1)
   for (let i = 0; i < 7; i++) {
@@ -136,6 +127,11 @@ export default function AppointmentsPage() {
   const [showModal, setShowModal]       = useState(false)
   const [saving, setSaving]             = useState(false)
   const [lineModal, setLineModal]       = useState<{ apt: Appointment; status: AptStatus } | null>(null)
+
+  /* Customer linking */
+  const [selectedCustomerId,   setSelectedCustomerId]   = useState('')
+  const [selectedCustomerName, setSelectedCustomerName] = useState('')
+
   const [form, setForm] = useState<NewAptForm>({
     customerName: '', customerPhone: '', service: 'ตัดผม',
     stylist: '', date: new Date().toISOString().split('T')[0],
@@ -145,24 +141,32 @@ export default function AppointmentsPage() {
   const weekDays = getWeekDays(selectedDate)
   const thaiDays = ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา']
 
+  /* Load appointments — NO orderBy to avoid composite index; sort client-side */
   useEffect(() => {
+    if (!companyId) return
     const q = query(
       collection(db, COLLECTIONS.APPOINTMENTS),
+      where('companyId', '==', companyId),
       where('status', 'in', ['pending', 'confirmed', 'arrived', 'completed']),
-      orderBy('date', 'asc'),
-      orderBy('startTime', 'asc'),
     )
     return onSnapshot(q, snap => {
-      setAppointments(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Appointment[])
+      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Appointment[]
+      // Sort by date asc, then startTime asc
+      list.sort((a, b) => {
+        const da = a.date instanceof Date ? a.date : new Date(a.date)
+        const db_ = b.date instanceof Date ? b.date : new Date(b.date)
+        if (da.getTime() !== db_.getTime()) return da.getTime() - db_.getTime()
+        return (a.startTime ?? '').localeCompare(b.startTime ?? '')
+      })
+      setAppointments(list)
       setLoading(false)
     }, () => setLoading(false))
-  }, [])
+  }, [companyId])
 
   const todayApts = appointments.filter(a => {
     const d = a.date instanceof Date ? a.date : new Date(a.date)
     return d.toDateString() === selectedDate.toDateString()
   })
-
   const weekApts = (day: Date) => appointments.filter(a => {
     const d = a.date instanceof Date ? a.date : new Date(a.date)
     return d.toDateString() === day.toDateString()
@@ -170,45 +174,39 @@ export default function AppointmentsPage() {
 
   /* Update status + write LINE notification record */
   const updateStatus = async (apt: Appointment, status: AptStatus) => {
-    await updateDoc(doc(db, COLLECTIONS.APPOINTMENTS, apt.id), {
+    updateDoc(doc(db, COLLECTIONS.APPOINTMENTS, apt.id), {
       status, updatedAt: serverTimestamp(),
-    })
+    }).catch(console.error)
 
-    // บันทึก notification ลง Firestore
     const msg = lineMessage(apt, status)
     if (msg) {
-      await addDoc(collection(db, COLLECTIONS.NOTIFICATIONS), {
-        companyId,
-        branchId,
-        userId,
-        type:         'line_notification',
-        title:        `LINE → ${apt.customerName}`,
-        message:      msg,
-        appointmentId: apt.id,
-        status:       'pending_send',
-        channel:      'line',
-        isRead:       false,
-        createdAt:    serverTimestamp(),
-      })
-
-      // เปิด modal แสดงข้อความ
+      addDoc(collection(db, COLLECTIONS.NOTIFICATIONS), {
+        companyId, branchId, userId,
+        type: 'line_notification', title: `LINE → ${apt.customerName}`,
+        message: msg, appointmentId: apt.id,
+        status: 'pending_send', channel: 'line', isRead: false,
+        createdAt: serverTimestamp(),
+      }).catch(console.error)
       setLineModal({ apt: { ...apt, status }, status })
     }
   }
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.customerName || !form.customerPhone) return
+    const name  = selectedCustomerName || form.customerName
+    const phone = form.customerPhone
+    if (!name) return
     setSaving(true)
     try {
-      const svc = serviceOptions.find(s => s.name === form.service) ?? { name: form.service, duration: 60 }
-      const [h, m] = form.startTime.split(':').map(Number)
+      const svc     = serviceOptions.find(s => s.name === form.service) ?? { name: form.service, duration: 60 }
+      const [h, m]  = form.startTime.split(':').map(Number)
       const endDate = new Date(0, 0, 0, h, m + svc.duration)
       const endTime = `${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}`
       await addDocument<Appointment>(COLLECTIONS.APPOINTMENTS, {
         companyId, branchId,
-        customerId: '',
-        customerName: form.customerName, customerPhone: form.customerPhone,
+        customerId:    selectedCustomerId || '',
+        customerName:  name,
+        customerPhone: phone,
         services: [{ serviceId: '', serviceName: svc.name, price: 0, duration: svc.duration }],
         date: new Date(form.date), startTime: form.startTime, endTime,
         duration: svc.duration, status: 'pending',
@@ -216,6 +214,8 @@ export default function AppointmentsPage() {
         createdAt: new Date(), updatedAt: new Date(),
       })
       setShowModal(false)
+      setSelectedCustomerId('')
+      setSelectedCustomerName('')
       setForm({ customerName: '', customerPhone: '', service: 'ตัดผม', stylist: '', date: new Date().toISOString().split('T')[0], startTime: '10:00', notes: '' })
     } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
     finally { setSaving(false) }
@@ -243,7 +243,7 @@ export default function AppointmentsPage() {
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>{cfg.label}</span>
             </div>
             <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-[var(--text-secondary)]">
-              <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{apt.customerPhone}</span>
+              {apt.customerPhone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{apt.customerPhone}</span>}
               <span className="flex items-center gap-1"><Scissors className="w-3 h-3" />{svcName}</span>
             </div>
             {apt.notes && <p className="text-xs text-[var(--text-muted)] mt-1 italic">{apt.notes}</p>}
@@ -251,7 +251,6 @@ export default function AppointmentsPage() {
 
           {/* Actions */}
           <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
-            {/* LINE button */}
             {hasLine && (
               <button onClick={() => setLineModal({ apt, status: apt.status as AptStatus })}
                 className="p-2 rounded-lg bg-[#06C755]/10 text-[#06C755] hover:bg-[#06C755]/20 transition-all" title="ดูข้อความ LINE">
@@ -354,7 +353,7 @@ export default function AppointmentsPage() {
             <div className="mt-4 pt-4 border-t border-[var(--border-light)] space-y-2">
               {(['pending', 'confirmed', 'arrived'] as AptStatus[]).map(s => {
                 const count = todayApts.filter(a => a.status === s).length
-                const cfg = statusConfig[s]
+                const cfg   = statusConfig[s]
                 return (
                   <div key={s} className="flex items-center justify-between text-xs">
                     <div className="flex items-center gap-2">
@@ -366,8 +365,6 @@ export default function AppointmentsPage() {
                 )
               })}
             </div>
-
-            {/* LINE hint */}
             <div className="mt-4 pt-4 border-t border-[var(--border-light)]">
               <div className="flex items-center gap-2 p-2.5 bg-[#06C755]/5 rounded-xl border border-[#06C755]/20">
                 <MessageCircle className="w-3.5 h-3.5 text-[#06C755] shrink-0" />
@@ -419,9 +416,9 @@ export default function AppointmentsPage() {
           </div>
           <div className="grid grid-cols-7 gap-2">
             {weekDays.map((day, i) => {
-              const apts     = weekApts(day)
-              const isToday  = day.toDateString() === new Date().toDateString()
-              const isSel    = day.toDateString() === selectedDate.toDateString()
+              const apts    = weekApts(day)
+              const isToday = day.toDateString() === new Date().toDateString()
+              const isSel   = day.toDateString() === selectedDate.toDateString()
               return (
                 <div key={i} className={`min-h-[120px] rounded-2xl border p-2 cursor-pointer transition-all ${
                   isSel    ? 'border-[var(--pink-300)] bg-[var(--pink-50)]' :
@@ -458,29 +455,48 @@ export default function AppointmentsPage() {
               </button>
             </div>
             <form onSubmit={handleAdd} className="p-5 space-y-4">
+
+              {/* Customer search */}
+              <div>
+                <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ลูกค้าในระบบ (ถ้ามี)</label>
+                <CustomerSearchInput
+                  value={selectedCustomerId}
+                  onChange={(cid, cname) => {
+                    setSelectedCustomerId(cid)
+                    setSelectedCustomerName(cname)
+                    if (cname) setForm(f => ({ ...f, customerName: cname }))
+                  }}
+                />
+              </div>
+
+              {/* Manual name/phone (fallback if not in DB) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ชื่อลูกค้า *</label>
-                  <input value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))}
-                    placeholder="ชื่อ-นามสกุล" required className={inputClass} />
+                  <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ชื่อ *</label>
+                  <input value={selectedCustomerName || form.customerName}
+                    onChange={e => { setSelectedCustomerName(''); setSelectedCustomerId(''); setForm(f => ({ ...f, customerName: e.target.value })) }}
+                    placeholder="ชื่อลูกค้า" required className={inputClass} />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">เบอร์โทร *</label>
+                  <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">เบอร์โทร</label>
                   <input value={form.customerPhone} onChange={e => setForm(f => ({ ...f, customerPhone: e.target.value }))}
-                    placeholder="08X-XXX-XXXX" type="tel" required className={inputClass} />
+                    placeholder="08X-XXX-XXXX" type="tel" className={inputClass} />
                 </div>
               </div>
+
               <div>
                 <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">บริการ</label>
                 <select value={form.service} onChange={e => setForm(f => ({ ...f, service: e.target.value }))} className={inputClass}>
                   {serviceOptions.map(s => <option key={s.name} value={s.name}>{s.name} ({s.duration} นาที)</option>)}
                 </select>
               </div>
+
               <div>
                 <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ช่างผม</label>
                 <input value={form.stylist} onChange={e => setForm(f => ({ ...f, stylist: e.target.value }))}
                   placeholder="ชื่อช่าง (ถ้ามี)" className={inputClass} />
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">วันที่</label>
@@ -491,11 +507,13 @@ export default function AppointmentsPage() {
                   <input type="time" value={form.startTime} onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))} required className={inputClass} />
                 </div>
               </div>
+
               <div>
                 <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">หมายเหตุ</label>
                 <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
                   placeholder="ข้อควรรู้พิเศษ..." rows={2} className={`${inputClass} resize-none`} />
               </div>
+
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowModal(false)}
                   className="flex-1 py-2.5 border border-[var(--border-light)] rounded-xl text-sm font-semibold text-[var(--text-secondary)]">
@@ -513,11 +531,7 @@ export default function AppointmentsPage() {
 
       {/* LINE Message Modal */}
       {lineModal && (
-        <LineModal
-          apt={lineModal.apt}
-          status={lineModal.status}
-          onClose={() => setLineModal(null)}
-        />
+        <LineModal apt={lineModal.apt} status={lineModal.status} onClose={() => setLineModal(null)} />
       )}
     </div>
   )
