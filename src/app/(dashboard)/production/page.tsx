@@ -253,8 +253,8 @@ export default function ProductionPage() {
             const cfg       = statusCfg[order.status as ProdStatus]
             const isOverdue = order.expectedDate && new Date(order.expectedDate) < new Date() && order.status !== 'delivered'
             const isExpanded = expandedId === order.id
-            const progImgs   = (order as unknown as Record<string, string[]>).progressImages ?? []
-            const compImgs   = (order as unknown as Record<string, string[]>).completedImages ?? []
+            const progImgs   = order.progressImages ?? []
+            const compImgs   = order.completedImages ?? []
             const totalImgs  = progImgs.length + compImgs.length
 
             return (

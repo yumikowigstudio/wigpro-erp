@@ -35,31 +35,6 @@ export default function CustomersPage() {
   const [newThisMonth, setNewThisMonth] = useState(0)
   const [todayApts, setTodayApts]   = useState(0)
 
-  /* Export CSV */
-  const exportCSV = () => {
-    const headers = ['รหัสลูกค้า','ชื่อ','นามสกุล','ชื่อเล่น','เบอร์โทร','LINE ID','ระดับสมาชิก','แต้มสะสม','ยอดซื้อสะสม','ประเภทเคส']
-    const rows = filtered.map(c => [
-      c.customerId ?? '',
-      c.firstName,
-      c.lastName,
-      c.nickname ?? '',
-      c.phone,
-      c.lineId ?? '',
-      c.memberLevel ?? 'silver',
-      c.points ?? 0,
-      c.totalPurchase ?? 0,
-      (c.caseTypes ?? []).join('|'),
-    ])
-    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n')
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href     = url
-    a.download = `customers_${new Date().toISOString().slice(0,10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   useEffect(() => {
     if (!companyId) return
     // Filter by companyId — no orderBy to avoid composite index; sort client-side
@@ -106,6 +81,31 @@ export default function CustomersPage() {
     const matchSearch = !q || [c.firstName, c.lastName, c.phone, c.lineId, c.customerId].some(v => v?.toLowerCase().includes(q))
     return matchSearch && (!filterCase || c.caseTypes.includes(filterCase)) && (!filterLevel || c.memberLevel === filterLevel)
   })
+
+  /* Export CSV — declared after filtered so it can reference it */
+  const exportCSV = () => {
+    const headers = ['รหัสลูกค้า','ชื่อ','นามสกุล','ชื่อเล่น','เบอร์โทร','LINE ID','ระดับสมาชิก','แต้มสะสม','ยอดซื้อสะสม','ประเภทเคส']
+    const rows = filtered.map(c => [
+      c.customerId ?? '',
+      c.firstName,
+      c.lastName,
+      c.nickname ?? '',
+      c.phone,
+      c.lineId ?? '',
+      c.memberLevel ?? 'silver',
+      c.points ?? 0,
+      c.totalPurchase ?? 0,
+      (c.caseTypes ?? []).join('|'),
+    ])
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n')
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `customers_${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div className="space-y-6">
