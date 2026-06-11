@@ -10,6 +10,7 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, generateWigOrderNo, convertTimestamps } from '@/lib/firestore'
 import { WorkOrder } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
+import { CustomerSearchInput } from '@/components/CustomerSearchInput'
 
 type ProdStatus = 'waiting' | 'in_production' | 'qc' | 'ready_to_ship' | 'shipped' | 'at_branch' | 'ready_to_pickup' | 'delivered'
 
@@ -79,6 +80,7 @@ export default function ProductionPage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [showModal, setShowModal]       = useState(false)
   const [saving, setSaving]             = useState(false)
+  const [selectedCustomerId, setSelectedCustomerId] = useState('')
   const [form, setForm] = useState({
     customerName: '', customerPhone: '', wigType: '', wigColor: '', wigLength: '',
     wigModel: '', manufacturer: '', bagNumber: '', totalAmount: '', depositAmount: '', expectedDate: '', notes: '',
@@ -124,7 +126,7 @@ export default function ProductionPage() {
       await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, {
         id: '',
         companyId, branchId,
-        orderNo, customerId: '', customerName: form.customerName,
+        orderNo, customerId: selectedCustomerId || '', customerName: form.customerName,
         saleOrderId: '', notes: form.notes || undefined,
         wigType:      form.wigType      || undefined,
         wigColor:     form.wigColor     || undefined,
@@ -139,6 +141,7 @@ export default function ProductionPage() {
         createdAt: new Date(), updatedAt: new Date(),
       } as WorkOrder)
       setShowModal(false)
+      setSelectedCustomerId('')
       setForm({ customerName:'', customerPhone:'', wigType:'', wigColor:'', wigLength:'', wigModel:'', manufacturer:'', bagNumber:'', totalAmount:'', depositAmount:'', expectedDate:'', notes:'' })
     } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
     finally { setSaving(false) }
@@ -298,15 +301,32 @@ export default function ProductionPage() {
             <form onSubmit={handleAdd} className="p-5 space-y-4">
 
               {/* Customer */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ชื่อลูกค้า *</label>
-                  <input value={form.customerName} onChange={e => setForm(f=>({...f,customerName:e.target.value}))} required className={inputClass} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">เบอร์โทร</label>
-                  <input value={form.customerPhone} onChange={e => setForm(f=>({...f,customerPhone:e.target.value}))} className={inputClass} type="tel" />
-                </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-[var(--text-secondary)] block">ลูกค้า</label>
+                <CustomerSearchInput
+                  companyId={companyId}
+                  selectedId={selectedCustomerId}
+                  selectedName={form.customerName}
+                  onSelect={(id, name, cust) => {
+                    setSelectedCustomerId(id)
+                    setForm(f => ({
+                      ...f,
+                      customerName: name,
+                      customerPhone: cust?.phone ?? f.customerPhone,
+                    }))
+                  }}
+                  onClear={() => { setSelectedCustomerId(''); setForm(f => ({ ...f, customerName: '', customerPhone: '' })) }}
+                  placeholder="ค้นหาลูกค้า..."
+                />
+                {!selectedCustomerId && (
+                  <input
+                    value={form.customerName}
+                    onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))}
+                    placeholder="หรือพิมพ์ชื่อลูกค้า *"
+                    required
+                    className={inputClass}
+                  />
+                )}
               </div>
 
               {/* Wig spec */}

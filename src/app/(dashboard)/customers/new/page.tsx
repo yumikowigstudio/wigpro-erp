@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag } from 'lucide-react'
+import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag, Ruler } from 'lucide-react'
 import { addDocument, COLLECTIONS } from '@/lib/firestore'
 import { Customer } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
@@ -39,6 +39,10 @@ export default function NewCustomerPage() {
     otherCaseNote: '',
     caseTypes: [] as string[],
     memberLevel: 'silver',
+    headCircumference: '',
+    headFrontBack: '',
+    headEarToEar: '',
+    headLeftRight: '',
   })
 
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }))
@@ -73,12 +77,16 @@ export default function NewCustomerPage() {
         totalPurchase: 0,
         status: 'active',
       }
-      if (form.nickname)      data.nickname      = form.nickname
-      if (form.lineId)        data.lineId        = form.lineId
-      if (form.birthDate)     data.birthDate     = new Date(form.birthDate)
-      if (form.address)       data.address       = form.address
-      if (form.notes)         data.notes         = form.notes
-      if (form.otherCaseNote) data.otherCaseNote = form.otherCaseNote
+      if (form.nickname)          data.nickname          = form.nickname
+      if (form.lineId)            data.lineId            = form.lineId
+      if (form.birthDate)         data.birthDate         = new Date(form.birthDate)
+      if (form.address)           data.address           = form.address
+      if (form.notes)             data.notes             = form.notes
+      if (form.otherCaseNote)     data.otherCaseNote     = form.otherCaseNote
+      if (form.headCircumference) data.headCircumference = parseFloat(form.headCircumference)
+      if (form.headFrontBack)     data.headFrontBack     = parseFloat(form.headFrontBack)
+      if (form.headEarToEar)      data.headEarToEar      = parseFloat(form.headEarToEar)
+      if (form.headLeftRight)     data.headLeftRight     = parseFloat(form.headLeftRight)
 
       await addDocument<Customer>(COLLECTIONS.CUSTOMERS, data as Omit<Customer, 'id'>)
       router.push('/customers')
@@ -184,6 +192,27 @@ export default function NewCustomerPage() {
                 rows={2} className={inputClass + ' resize-none'} />
             </div>
           )}
+        </div>
+
+        {/* ข้อมูลการวัดศีรษะ */}
+        <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-5 space-y-4">
+          <h2 className="font-semibold text-[var(--text-primary)] flex items-center gap-2 text-sm">
+            <Ruler className="w-4 h-4 text-[var(--pink-400)]" /> ข้อมูลการวัดศีรษะ (สำหรับสั่งวิก)
+          </h2>
+          <div className="grid grid-cols-2 gap-3">
+            {([
+              ['headCircumference', 'รอบศีรษะ (cm)', '56'],
+              ['headFrontBack',     'หน้า-หลัง (cm)', '30'],
+              ['headEarToEar',      'หู-หู (cm)',      '32'],
+              ['headLeftRight',     'ซ้าย-ขวา (cm)',   '31'],
+            ] as const).map(([k, lbl, ph]) => (
+              <div key={k}>
+                <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">{lbl}</label>
+                <input type="number" step="0.1" value={form[k]} onChange={e => set(k, e.target.value)}
+                  placeholder={ph} className={inputClass} />
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* ระดับสมาชิก */}

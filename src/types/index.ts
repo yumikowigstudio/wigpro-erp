@@ -104,6 +104,11 @@ export interface Customer {
   caseTypes: string[] // CustomerCaseType or custom
   otherCaseNote?: string // free-text when 'other' is selected
   notes?: string
+  // Head measurements for wig fitting (cm)
+  headCircumference?: number // รอบศีรษะ
+  headFrontBack?: number     // หน้า-หลัง
+  headEarToEar?: number      // หู-หู
+  headLeftRight?: number     // ซ้าย-ขวา
   memberId?: string
   memberLevel?: MemberLevel
   points?: number
@@ -115,6 +120,7 @@ export interface Customer {
 
 export interface CustomerImage {
   id: string
+  companyId: string
   customerId: string
   category: 'before' | 'after' | 'receipt' | 'wig_order' | 'document' | 'other'
   url: string
@@ -126,6 +132,7 @@ export interface CustomerImage {
 
 export interface CustomerDocument {
   id: string
+  companyId: string
   customerId: string
   type: 'id_card' | 'medical' | 'supporting' | 'other'
   name: string

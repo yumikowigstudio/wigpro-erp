@@ -11,6 +11,7 @@ import { Sale, Product, Service, Deposit, WorkOrder } from '@/types'
 import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { useAuth } from '@/hooks/useAuth'
+import { CustomerSearchInput } from '@/components/CustomerSearchInput'
 
 type ProductWithStock = Product & { stockQty?: number }
 type PosMode = 'sale' | 'deposit'
@@ -60,6 +61,7 @@ export default function POSPage() {
   const [payMethod, setPayMethod]     = useState('cash')
   const [cash, setCash]               = useState('')
   const [customerName, setCustomerName] = useState('')
+  const [customerId,   setCustomerId]   = useState('')
   const [mode, setMode]               = useState<PosMode>('sale')
   const [depositInput, setDepositInput] = useState('')
   const [pickupDate, setPickupDate]   = useState('')
@@ -149,7 +151,7 @@ export default function POSPage() {
         changeAmount: change, status: 'completed', createdBy: userId, createdAt: new Date(), updatedAt: new Date(),
       })
       setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt: total, remaining: 0, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total, change, date: new Date() })
-      setCart([]); setCash(''); setDiscount(0); setCustomerName('')
+      setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId('')
     } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
     finally { setSaving(false) }
   }
@@ -163,7 +165,7 @@ export default function POSPage() {
       const saleOrderId = depositNo
       await addDocument<Deposit>(COLLECTIONS.DEPOSITS, {
         companyId, branchId, depositNo,
-        customerId: '', customerName: customerName || 'ลูกค้าทั่วไป',
+        customerId: customerId || '', customerName: customerName || 'ลูกค้าทั่วไป',
         items: cart.map(c => ({ name: c.name, quantity: c.quantity, unitPrice: c.price, total: c.price * c.quantity })),
         totalAmount:    total,
         depositAmount:  depositAmt,
@@ -182,7 +184,7 @@ export default function POSPage() {
         await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, {
           id: '',
           companyId, branchId, orderNo,
-          customerId: '', customerName: customerName || 'ลูกค้าทั่วไป',
+          customerId: customerId || '', customerName: customerName || 'ลูกค้าทั่วไป',
           saleOrderId,
           wigType:      wigSpec.wigType      || undefined,
           wigColor:     wigSpec.wigColor     || undefined,
@@ -203,7 +205,7 @@ export default function POSPage() {
       }
 
       setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt, remaining, pickupDate, depositNote, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: new Date() })
-      setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setDepositInput(''); setPickupDate(''); setDepositNote('')
+      setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setDepositInput(''); setPickupDate(''); setDepositNote('')
       setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
     finally { setSaving(false) }
@@ -320,13 +322,15 @@ export default function POSPage() {
             </button>
           </div>
 
-          {/* Customer name */}
-          <div className="relative">
-            <User className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-muted)]" />
-            <input value={customerName} onChange={e => setCustomerName(e.target.value)}
-              placeholder={mode === 'deposit' ? 'ชื่อลูกค้า (แนะนำสำหรับมัดจำ)' : 'ชื่อลูกค้า (ไม่บังคับ)'}
-              className="w-full pl-8 pr-4 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all" />
-          </div>
+          {/* Customer search */}
+          <CustomerSearchInput
+            companyId={companyId}
+            selectedId={customerId}
+            selectedName={customerName}
+            onSelect={(id, name) => { setCustomerId(id); setCustomerName(name) }}
+            onClear={() => { setCustomerId(''); setCustomerName('') }}
+            placeholder={mode === 'deposit' ? 'ค้นหาลูกค้า (แนะนำสำหรับมัดจำ)' : 'ค้นหาลูกค้า (ไม่บังคับ)'}
+          />
         </div>
 
         {/* Items */}

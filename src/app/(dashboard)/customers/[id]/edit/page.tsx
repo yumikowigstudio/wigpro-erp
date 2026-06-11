@@ -2,7 +2,7 @@
 import { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag, Loader2, Trash2 } from 'lucide-react'
+import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag, Loader2, Trash2, Ruler } from 'lucide-react'
 import { getDocument, updateDocument, softDelete, COLLECTIONS } from '@/lib/firestore'
 import { Customer } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
@@ -33,6 +33,7 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
     firstName: '', lastName: '', nickname: '', phone: '', lineId: '',
     birthDate: '', address: '', notes: '', otherCaseNote: '',
     caseTypes: [] as string[], memberLevel: 'silver',
+    headCircumference: '', headFrontBack: '', headEarToEar: '', headLeftRight: '',
   })
 
   useEffect(() => {
@@ -47,9 +48,13 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
           birthDate:     c.birthDate ? new Date(c.birthDate).toISOString().split('T')[0] : '',
           address:       c.address       ?? '',
           notes:         c.notes         ?? '',
-          otherCaseNote: c.otherCaseNote ?? '',
-          caseTypes:     c.caseTypes,
-          memberLevel:   c.memberLevel   ?? 'silver',
+          otherCaseNote:    c.otherCaseNote    ?? '',
+          caseTypes:        c.caseTypes,
+          memberLevel:      c.memberLevel      ?? 'silver',
+          headCircumference: c.headCircumference ? String(c.headCircumference) : '',
+          headFrontBack:     c.headFrontBack     ? String(c.headFrontBack)     : '',
+          headEarToEar:      c.headEarToEar      ? String(c.headEarToEar)      : '',
+          headLeftRight:     c.headLeftRight      ? String(c.headLeftRight)     : '',
         })
       }
       setLoading(false)
@@ -73,9 +78,13 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
         birthDate:     form.birthDate ? new Date(form.birthDate) : null,
         address:       form.address       || null,
         notes:         form.notes         || null,
-        otherCaseNote: form.otherCaseNote || null,
-        caseTypes:     form.caseTypes,
-        memberLevel:   form.memberLevel,
+        otherCaseNote:     form.otherCaseNote     || null,
+        caseTypes:         form.caseTypes,
+        memberLevel:       form.memberLevel,
+        headCircumference: form.headCircumference ? parseFloat(form.headCircumference) : null,
+        headFrontBack:     form.headFrontBack      ? parseFloat(form.headFrontBack)     : null,
+        headEarToEar:      form.headEarToEar       ? parseFloat(form.headEarToEar)      : null,
+        headLeftRight:     form.headLeftRight       ? parseFloat(form.headLeftRight)     : null,
       })
       router.push(`/customers/${id}`)
     } catch (err) {
@@ -186,6 +195,27 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
                 rows={2} className={inputClass + ' resize-none'} />
             </div>
           )}
+        </div>
+
+        {/* ข้อมูลการวัดศีรษะ */}
+        <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-5 space-y-4">
+          <h2 className="font-semibold text-[var(--text-primary)] flex items-center gap-2 text-sm">
+            <Ruler className="w-4 h-4 text-[var(--pink-400)]" /> ข้อมูลการวัดศีรษะ (สำหรับสั่งวิก)
+          </h2>
+          <div className="grid grid-cols-2 gap-3">
+            {([
+              ['headCircumference', 'รอบศีรษะ (cm)', '56'],
+              ['headFrontBack',     'หน้า-หลัง (cm)', '30'],
+              ['headEarToEar',      'หู-หู (cm)',      '32'],
+              ['headLeftRight',     'ซ้าย-ขวา (cm)',   '31'],
+            ] as const).map(([k, lbl, ph]) => (
+              <div key={k}>
+                <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">{lbl}</label>
+                <input type="number" step="0.1" value={form[k]} onChange={e => set(k, e.target.value)}
+                  placeholder={ph} className={inputClass} />
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-5 space-y-4">
