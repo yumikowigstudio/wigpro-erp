@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { TrendingUp, TrendingDown, DollarSign, Download, Plus, X, Loader2, Trash2 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { collection, onSnapshot, query, orderBy, where, Timestamp, doc, deleteDoc } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, Timestamp, doc, deleteDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
 import { Expense, Sale, Deposit } from '@/types'
@@ -28,38 +28,46 @@ export default function AccountingPage() {
   const [form, setForm] = useState({ category: expenseCategories[0], description: '', amount: '', date: new Date().toISOString().split('T')[0] })
 
   useEffect(() => {
+    if (!companyId) return
     const now   = new Date()
     const start = period === 'day'
       ? new Date(now.getFullYear(), now.getMonth(), now.getDate())
       : period === 'month'
       ? new Date(now.getFullYear(), now.getMonth(), 1)
       : new Date(now.getFullYear(), 0, 1)
+    const ts = Timestamp.fromDate(start)
 
-    const expQ = query(collection(db, COLLECTIONS.EXPENSES), where('createdAt', '>=', Timestamp.fromDate(start)), orderBy('createdAt','desc'))
-    const saleQ = query(collection(db, COLLECTIONS.SALES), where('createdAt', '>=', Timestamp.fromDate(start)), orderBy('createdAt','desc'))
-
-    const depQ = query(collection(db, COLLECTIONS.DEPOSITS), where('createdAt', '>=', Timestamp.fromDate(start)), orderBy('createdAt','desc'))
+    // No orderBy — sort client-side to avoid composite index requirement
+    const expQ  = query(collection(db, COLLECTIONS.EXPENSES),  where('companyId', '==', companyId), where('createdAt', '>=', ts))
+    const saleQ = query(collection(db, COLLECTIONS.SALES),     where('companyId', '==', companyId), where('createdAt', '>=', ts))
+    const depQ  = query(collection(db, COLLECTIONS.DEPOSITS),  where('companyId', '==', companyId), where('createdAt', '>=', ts))
 
     let expDone = false, saleDone = false, depDone = false
     const check = () => { if (expDone && saleDone && depDone) setLoading(false) }
 
     const u1 = onSnapshot(expQ, snap => {
-      setExpenses(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Expense[])
+      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Expense[]
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      setExpenses(list)
       expDone = true; check()
     }, () => { expDone = true; check() })
 
     const u2 = onSnapshot(saleQ, snap => {
-      setSales(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[])
+      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      setSales(list)
       saleDone = true; check()
     }, () => { saleDone = true; check() })
 
     const u3 = onSnapshot(depQ, snap => {
-      setDeposits(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Deposit[])
+      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Deposit[]
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      setDeposits(list)
       depDone = true; check()
     }, () => { depDone = true; check() })
 
     return () => { u1(); u2(); u3() }
-  }, [period])
+  }, [period, companyId])
 
   const salesIncome   = sales.reduce((s, r) => s + r.totalAmount, 0)
   const depositIncome = deposits.reduce((s, d) => s + d.paidAmount, 0)

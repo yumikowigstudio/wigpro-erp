@@ -6,8 +6,10 @@ import { collection, onSnapshot, query, where, Timestamp, doc, updateDoc, server
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Employee, Sale } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 export default function CommissionsPage() {
+  const { companyId } = useAuth()
   const [view, setView] = useState<'summary' | 'detail'>('summary')
   const [employees, setEmployees] = useState<Employee[]>([])
   const [sales, setSales] = useState<Sale[]>([])
@@ -20,13 +22,19 @@ export default function CommissionsPage() {
   )
 
   useEffect(() => {
+    if (!companyId) return
     const [year, month] = selectedMonth.split('-').map(Number)
     const start = new Date(year, month - 1, 1)
     const end   = new Date(year, month, 1)
 
-    const empQ  = query(collection(db, COLLECTIONS.EMPLOYEES), where('status', '==', 'active'))
+    const empQ  = query(
+      collection(db, COLLECTIONS.EMPLOYEES),
+      where('companyId', '==', companyId),
+      where('status', '==', 'active')
+    )
     const saleQ = query(
       collection(db, COLLECTIONS.SALES),
+      where('companyId', '==', companyId),
       where('createdAt', '>=', Timestamp.fromDate(start)),
       where('createdAt', '<',  Timestamp.fromDate(end))
     )
@@ -45,7 +53,7 @@ export default function CommissionsPage() {
     }, () => { s = true; check() })
 
     return () => { u1(); u2() }
-  }, [selectedMonth])
+  }, [selectedMonth, companyId])
 
   const summaryData = employees.map(emp => {
     const empSales = sales.filter(s =>
