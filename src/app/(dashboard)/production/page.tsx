@@ -124,22 +124,24 @@ export default function ProductionPage() {
       const orderNo = await generateWigOrderNo(companyId, branchId)
       const total   = parseFloat(form.totalAmount)   || 0
       const dep     = parseFloat(form.depositAmount) || 0
-      await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, {
-        companyId, branchId,
-        orderNo, customerId: selectedCustomerId || '', customerName: form.customerName,
-        saleOrderId: '', notes: form.notes || undefined,
-        wigType:      form.wigType      || undefined,
-        wigColor:     form.wigColor     || undefined,
-        wigLength:    form.wigLength    || undefined,
-        wigModel:     form.wigModel     || undefined,
-        manufacturer: form.manufacturer || undefined,
-        bagNumber:    form.bagNumber    || undefined,
+      const woData: Record<string, unknown> = {
+        companyId, branchId, orderNo,
+        customerId: selectedCustomerId || '',
+        customerName: form.customerName,
+        saleOrderId: '',
         totalAmount: total, depositAmount: dep, remainingAmount: total - dep,
         status: 'waiting', progressImages: [], completedImages: [],
         performedBy: userId, orderDate: new Date(),
-        expectedDate: form.expectedDate ? new Date(form.expectedDate) : undefined,
-        createdAt: new Date(), updatedAt: new Date(),
-      } as WorkOrder)
+      }
+      if (form.notes)        woData.notes        = form.notes
+      if (form.wigType)      woData.wigType      = form.wigType
+      if (form.wigColor)     woData.wigColor     = form.wigColor
+      if (form.wigLength)    woData.wigLength    = form.wigLength
+      if (form.wigModel)     woData.wigModel     = form.wigModel
+      if (form.manufacturer) woData.manufacturer = form.manufacturer
+      if (form.bagNumber)    woData.bagNumber    = form.bagNumber
+      if (form.expectedDate) woData.expectedDate = new Date(form.expectedDate)
+      await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, woData as Omit<WorkOrder, 'id'>)
       setShowModal(false)
       setSelectedCustomerId('')
       setForm({ customerName:'', customerPhone:'', wigType:'', wigColor:'', wigLength:'', wigModel:'', manufacturer:'', bagNumber:'', totalAmount:'', depositAmount:'', expectedDate:'', notes:'' })
