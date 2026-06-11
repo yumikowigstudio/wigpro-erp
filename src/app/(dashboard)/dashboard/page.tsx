@@ -54,7 +54,7 @@ function getPeriodRange(period: Period): { start: Date; end: Date; label: string
 }
 
 export default function DashboardPage() {
-  const { currentBranch } = useAuth()
+  const { companyId, currentBranch } = useAuth()
   const [period, setPeriod]       = useState<Period>('month')
 
   /* Period-dependent data */
@@ -75,6 +75,7 @@ export default function DashboardPage() {
 
   /* ─── Period-dependent queries ─── */
   useEffect(() => {
+    if (!companyId) return
     const { start, end } = getPeriodRange(period)
     const tsStart = Timestamp.fromDate(start)
     const tsEnd   = Timestamp.fromDate(end)
@@ -82,6 +83,7 @@ export default function DashboardPage() {
     // Period sales — NO orderBy to avoid composite index (where+where already fine)
     const saleQ = query(
       collection(db, COLLECTIONS.SALES),
+      where('companyId', '==', companyId),
       where('createdAt', '>=', tsStart),
       where('createdAt', '<=', tsEnd),
     )
@@ -92,6 +94,7 @@ export default function DashboardPage() {
     // Period appointments
     const aptPeriodQ = query(
       collection(db, COLLECTIONS.APPOINTMENTS),
+      where('companyId', '==', companyId),
       where('date', '>=', tsStart),
       where('date', '<=', tsEnd),
     )
@@ -108,22 +111,25 @@ export default function DashboardPage() {
     // New customers in period
     const custQ = query(
       collection(db, COLLECTIONS.CUSTOMERS),
+      where('companyId', '==', companyId),
       where('createdAt', '>=', tsStart),
       where('createdAt', '<=', tsEnd),
     )
     const u3 = onSnapshot(custQ, snap => setPeriodNewCust(snap.size), () => {})
 
     return () => { u1(); u2(); u3() }
-  }, [period])
+  }, [period, companyId])
 
   /* ─── Static queries (run once) ─── */
   useEffect(() => {
+    if (!companyId) return
     const today    = new Date(); today.setHours(0,0,0,0)
     const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1)
 
     // Today's appointments for bottom card
     const aptTodayQ = query(
       collection(db, COLLECTIONS.APPOINTMENTS),
+      where('companyId', '==', companyId),
       where('date', '>=', Timestamp.fromDate(today)),
       where('date', '<', Timestamp.fromDate(tomorrow)),
     )
@@ -139,6 +145,7 @@ export default function DashboardPage() {
     sixMonthsAgo.setDate(1); sixMonthsAgo.setHours(0,0,0,0)
     const monthSaleQ = query(
       collection(db, COLLECTIONS.SALES),
+      where('companyId', '==', companyId),
       where('createdAt', '>=', Timestamp.fromDate(sixMonthsAgo)),
     )
     const u2 = onSnapshot(monthSaleQ, snap => {
@@ -158,14 +165,19 @@ export default function DashboardPage() {
       setSalesData(chart)
     }, () => {})
 
-    // Production orders
+    // Production orders — filter by companyId, then filter status client-side
     const prodQ = query(
       collection(db, COLLECTIONS.PRODUCTION_ORDERS),
-      where('status', 'in', ['pending','in_progress','qc','ready']),
+      where('companyId', '==', companyId),
     )
     const u3 = onSnapshot(prodQ, snap => {
       const counts: Record<string, number> = {}
-      snap.docs.forEach(d => { const s = d.data().status as string; counts[s] = (counts[s] ?? 0) + 1 })
+      snap.docs.forEach(d => {
+        const s = d.data().status as string
+        if (['pending','in_progress','qc','ready'].includes(s)) {
+          counts[s] = (counts[s] ?? 0) + 1
+        }
+      })
       setProductionData(
         Object.entries(counts).map(([status, value]) => ({
           name: PROD_LABELS[status] ?? status,
@@ -176,7 +188,7 @@ export default function DashboardPage() {
     }, () => {})
 
     // Low stock (no orderBy — sort client-side)
-    const u4 = onSnapshot(query(collection(db, COLLECTIONS.PRODUCTS)), snap => {
+    const u4 = onSnapshot(query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId)), snap => {
       const all = snap.docs.map(d => ({ id: d.id, ...d.data() })) as { id: string; name: string; sku: string; stockQty: number; minStockQty: number; costPrice?: number }[]
       const sorted = [...all].sort((a, b) => (a.stockQty ?? 0) - (b.stockQty ?? 0))
       const low = sorted.filter(p => (p.stockQty ?? 0) <= (p.minStockQty || 5)).slice(0, 5)
@@ -188,7 +200,7 @@ export default function DashboardPage() {
     }, () => {})
 
     return () => { u1(); u2(); u3(); u4() }
-  }, [])
+  }, [companyId])
 
   const periodSalesTotal  = periodSales.reduce((s, r) => s + (r.totalAmount ?? 0), 0)
   const totalProdPending  = productionData.reduce((s, p) => s + p.value, 0)

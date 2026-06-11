@@ -8,7 +8,7 @@ import {
 import { formatCurrency } from '@/lib/utils'
 import { addDocument, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Sale, Product, Service, Deposit, WorkOrder } from '@/types'
-import { collection, onSnapshot, query, where } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, getDoc, doc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { useAuth } from '@/hooks/useAuth'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
@@ -68,26 +68,38 @@ export default function POSPage() {
   const [depositNote, setDepositNote] = useState('')
   const [saving, setSaving]           = useState(false)
   const [receipt, setReceipt]         = useState<ReceiptData | null>(null)
+  const [shopName, setShopName]       = useState('WigPro')
   const [createWorkOrder, setCreateWorkOrder] = useState(true)
   const [wigSpec, setWigSpec]         = useState({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
 
   useEffect(() => {
+    if (!companyId) return
     let p = false, s = false
     const check = () => { if (p && s) setDataLoading(false) }
     const sortByName = <T extends { name: string }>(arr: T[]) =>
       [...arr].sort((a, b) => a.name.localeCompare(b.name, 'th'))
     const u1 = onSnapshot(
-      query(collection(db, COLLECTIONS.PRODUCTS), where('isActive', '==', true)),
+      query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId), where('isActive', '==', true)),
       snap => { setProducts(sortByName(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as ProductWithStock[])); p = true; check() },
       () => { p = true; check() }
     )
     const u2 = onSnapshot(
-      query(collection(db, COLLECTIONS.SERVICES)),
+      query(collection(db, COLLECTIONS.SERVICES), where('companyId', '==', companyId)),
       snap => { setServices(sortByName(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Service[])); s = true; check() },
       () => { s = true; check() }
     )
     return () => { u1(); u2() }
-  }, [])
+  }, [companyId])
+
+  useEffect(() => {
+    if (!companyId) return
+    getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId)).then(d => {
+      if (d.exists()) {
+        const data = d.data()
+        if (data.nameTh) setShopName(data.nameTh)
+      }
+    }).catch(console.error)
+  }, [companyId])
 
   const productCats = ['ทั้งหมด', ...Array.from(new Set(products.map(p => p.category).filter(Boolean)))]
   const serviceCats = ['ทั้งหมด', ...Array.from(new Set(services.map(s => s.category).filter(Boolean)))]
@@ -582,7 +594,7 @@ export default function POSPage() {
       </div>
     </div>
 
-    {receipt && <ReceiptModal receipt={receipt} onClose={() => setReceipt(null)} />}
+    {receipt && <ReceiptModal receipt={receipt} shopName={shopName} onClose={() => setReceipt(null)} />}
     </>
   )
 }
@@ -592,7 +604,7 @@ const PAY_LABELS: Record<string, string> = {
   cash: 'เงินสด', transfer: 'โอนเงิน', qr: 'QR Code', credit_card: 'บัตรเครดิต',
 }
 
-function ReceiptModal({ receipt, onClose }: { receipt: ReceiptData; onClose: () => void }) {
+function ReceiptModal({ receipt, shopName, onClose }: { receipt: ReceiptData; shopName: string; onClose: () => void }) {
   const isDeposit = receipt.mode === 'deposit'
 
   const handlePrint = () => {
@@ -645,7 +657,7 @@ function ReceiptModal({ receipt, onClose }: { receipt: ReceiptData; onClose: () 
         <div className="overflow-y-auto flex-1 px-5 py-4">
           <div id="receipt-content" className="font-['Sarabun'] text-[var(--text-primary)]">
             <div className="center text-center mb-4 pb-3 border-b border-dashed border-gray-300">
-              <p className="shop-name text-lg font-bold">WigPro</p>
+              <p className="shop-name text-lg font-bold">{shopName}</p>
               <p className="sub text-xs text-[var(--text-muted)]">ร้านวิกผมและร้านตัดผม</p>
               {isDeposit && (
                 <span className="doc-type inline-block mt-2 px-3 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700 border border-amber-200">

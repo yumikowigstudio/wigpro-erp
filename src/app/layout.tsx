@@ -14,12 +14,18 @@ export const metadata: Metadata = {
   title: 'WigPro ERP - ระบบบริหารร้านวิกผมและร้านตัดผม',
   description: 'ระบบบริหารจัดการร้านวิกผมและร้านตัดผมครบวงจร รองรับหลายสาขา',
   icons: { icon: '/favicon.ico' },
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+  },
 }
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
+  themeColor: '#f472b6',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
