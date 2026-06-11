@@ -7,6 +7,7 @@ import { formatCurrency } from '@/lib/utils'
 import { Plus, Search, Eye, Edit, Phone, User, Award, TrendingUp, X, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import type { Employee } from '@/types'
+import { useAuth } from '@/hooks/useAuth'
 
 const roleLabels: Record<string, { label: string; color: string }> = {
   owner: { label: 'Owner', color: 'bg-purple-100 text-purple-700' },
@@ -40,6 +41,7 @@ const defaultForm: StaffForm = {
 }
 
 export default function StaffPage() {
+  const { companyId, branchId } = useAuth()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -49,18 +51,19 @@ export default function StaffPage() {
   const [errors, setErrors] = useState<Partial<StaffForm>>({})
 
   useEffect(() => {
+    if (!companyId) return
+    // No orderBy + status filter client-side to avoid composite index
     const q = query(
       collection(db, COLLECTIONS.EMPLOYEES),
-      where('companyId', '==', 'demo_company'),
-      where('status', '!=', 'deleted')
+      where('companyId', '==', companyId),
     )
     const unsub = onSnapshot(q, (snap) => {
       const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Employee))
-      setEmployees(docs)
+      setEmployees(docs.filter(e => e.status !== 'deleted'))
       setLoading(false)
     }, () => setLoading(false))
     return unsub
-  }, [])
+  }, [companyId])
 
   const filtered = employees.filter((s) => {
     const q = search.toLowerCase()
@@ -81,8 +84,8 @@ export default function StaffPage() {
     try {
       const code = `EMP-${Date.now()}`
       await addDocument<Employee>(COLLECTIONS.EMPLOYEES, {
-        companyId: 'demo_company',
-        branchId: 'demo_branch',
+        companyId,
+        branchId: branchId ?? '',
         code,
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
