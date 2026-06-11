@@ -3,8 +3,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, User, Phone, MessageCircle, Heart, FileText, Tag } from 'lucide-react'
-import { addDocument, generateRunningNumber } from '@/lib/firestore'
-import { COLLECTIONS } from '@/lib/firestore'
+import { addDocument, COLLECTIONS } from '@/lib/firestore'
 import { Customer } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -55,8 +54,14 @@ export default function NewCustomerPage() {
     if (!form.firstName || !form.phone) return
     setSaving(true)
     try {
-      const customerId = await generateRunningNumber('CUS-', COLLECTIONS.CUSTOMERS, companyId, branchId)
-      // Build object without undefined (Firestore rejects undefined values)
+      // Generate customerId locally — no Firestore query needed (avoids hanging)
+      const now   = new Date()
+      const mm    = String(now.getMonth() + 1).padStart(2, '0')
+      const yy    = String(now.getFullYear()).slice(-2)
+      const rnd   = String(Date.now()).slice(-5)
+      const customerId = `CUS-${mm}${yy}${rnd}`
+
+      // Build object — only include fields that have values
       const data: Record<string, unknown> = {
         companyId, branchId, customerId,
         firstName:   form.firstName,
@@ -67,8 +72,6 @@ export default function NewCustomerPage() {
         points:      0,
         totalPurchase: 0,
         status: 'active',
-        createdAt: new Date(),
-        updatedAt: new Date(),
       }
       if (form.nickname)      data.nickname      = form.nickname
       if (form.lineId)        data.lineId        = form.lineId
@@ -76,12 +79,8 @@ export default function NewCustomerPage() {
       if (form.address)       data.address       = form.address
       if (form.notes)         data.notes         = form.notes
       if (form.otherCaseNote) data.otherCaseNote = form.otherCaseNote
-      // Extra guard: remove undefined/null before sending to Firestore
-      const cleanData: Record<string, unknown> = {}
-      for (const key of Object.keys(data)) {
-        if (data[key] !== undefined && data[key] !== null) cleanData[key] = data[key]
-      }
-      await addDocument<Customer>(COLLECTIONS.CUSTOMERS, cleanData as Omit<Customer, 'id'>)
+
+      await addDocument<Customer>(COLLECTIONS.CUSTOMERS, data as Omit<Customer, 'id'>)
       router.push('/customers')
     } catch (err: unknown) {
       console.error('Add customer error:', err)
