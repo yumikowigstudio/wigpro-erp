@@ -22,21 +22,17 @@ export async function GET(request: NextRequest) {
       throw new Error('No access token received')
     }
 
-    // ส่ง tokens กลับไปให้ client-side บันทึกเอง
-    // (เพราะ server-side ไม่มี Firebase Auth context)
-    const redirectUrl = new URL(`${appUrl}/settings`)
-    redirectUrl.searchParams.set('tab', 'google')
-    redirectUrl.searchParams.set('success', 'true')
-    redirectUrl.searchParams.set('uid', userId)
-    redirectUrl.searchParams.set('at', tokens.access_token)
-    if (tokens.refresh_token) {
-      redirectUrl.searchParams.set('rt', tokens.refresh_token)
-    }
-    if (tokens.expiry_date) {
-      redirectUrl.searchParams.set('exp', String(tokens.expiry_date))
-    }
+    // ส่ง tokens กลับไปให้ client-side บันทึกเอง (server ไม่มี Firebase Auth context)
+    // ⚠️ ใส่ token ไว้ใน URL fragment (#) ไม่ใช่ query string (?) เพราะ fragment
+    // ไม่ถูกส่งไปยัง server, ไม่ติด Referer header และไม่เข้า access log
+    // ฝั่ง settings จะอ่านจาก location.hash แล้วลบทิ้งทันทีหลังบันทึก
+    const params = new URLSearchParams()
+    params.set('uid', userId)
+    params.set('at', tokens.access_token)
+    if (tokens.refresh_token) params.set('rt', tokens.refresh_token)
+    if (tokens.expiry_date)   params.set('exp', String(tokens.expiry_date))
 
-    return NextResponse.redirect(redirectUrl.toString())
+    return NextResponse.redirect(`${appUrl}/settings?tab=google#${params.toString()}`)
   } catch (err) {
     console.error('Google OAuth callback error:', err)
     return NextResponse.redirect(`${appUrl}/settings?tab=google&error=token_exchange_failed`)

@@ -1,6 +1,9 @@
 'use client'
 import { useAuth } from './useAuth'
 import { toast } from 'sonner'
+import { doc, updateDoc } from 'firebase/firestore'
+import { db } from '@/lib/firebase'
+import { COLLECTIONS } from '@/lib/firestore'
 
 interface AppointmentData {
   customerName:  string
@@ -18,7 +21,17 @@ interface AppointmentData {
 export function useGoogleCalendar() {
   const { user } = useAuth()
 
-  const isConnected = !!(user as unknown as Record<string, unknown> & { googleConnected?: boolean })?.googleConnected
+  const u = user as unknown as (Record<string, unknown> & {
+    googleConnected?: boolean; googleAccessToken?: string; googleRefreshToken?: string
+  }) | null
+  const isConnected = !!u?.googleConnected
+
+  // ส่ง token ผ่าน header (ไม่ใส่ใน URL/body log) — client อ่าน token ของตัวเองได้จาก user doc
+  const authHeaders = (): Record<string, string> => ({
+    'Content-Type': 'application/json',
+    'x-g-at': u?.googleAccessToken ?? '',
+    'x-g-rt': u?.googleRefreshToken ?? '',
+  })
 
   // เริ่ม OAuth flow — เปิดหน้า Google Login
   const connectGoogle = () => {
@@ -36,11 +49,15 @@ export function useGoogleCalendar() {
     try {
       const res = await fetch('/api/calendar', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, appointmentId, appointment }),
+        headers: authHeaders(),
+        body: JSON.stringify({ appointment }),
       })
       const data = await res.json()
       if (data.success) {
+        // เขียน eventId กลับ Firestore ที่ฝั่ง client (auth แล้ว ผ่าน rules)
+        await updateDoc(doc(db, COLLECTIONS.APPOINTMENTS, appointmentId), {
+          googleEventId: data.eventId, googleCalSynced: true,
+        }).catch(() => {})
         toast.success('Sync Google Calendar แล้ว ✅')
         return data.eventId
       }
@@ -62,8 +79,8 @@ export function useGoogleCalendar() {
     try {
       const res = await fetch('/api/calendar', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, eventId, appointment }),
+        headers: authHeaders(),
+        body: JSON.stringify({ eventId, appointment }),
       })
       const data = await res.json()
       if (data.success) {
@@ -84,8 +101,8 @@ export function useGoogleCalendar() {
 
     try {
       const res = await fetch(
-        `/api/calendar?userId=${user.id}&eventId=${eventId}`,
-        { method: 'DELETE' },
+        `/api/calendar?eventId=${eventId}`,
+        { method: 'DELETE', headers: authHeaders() },
       )
       const data = await res.json()
       if (data.success) {

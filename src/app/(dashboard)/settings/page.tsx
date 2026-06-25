@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation'
 import {
   Store, Building2, Users, Receipt, Shield, Bell, Save,
   Loader2, Check, Plus, Edit, Trash2, X, Phone, Mail,
-  MapPin, Hash, UserCog, Eye, EyeOff,
+  MapPin, Hash, UserCog, Eye, EyeOff, Calendar as CalendarIcon,
 } from 'lucide-react'
 import { doc, getDoc, setDoc, serverTimestamp, collection, onSnapshot,
   query, where, addDoc, updateDoc, deleteDoc } from 'firebase/firestore'
@@ -658,6 +658,122 @@ function TaxSection({ companyId }: { companyId: string }) {
 }
 
 /* ═══════════════════════════════════════
+   Google Calendar
+═══════════════════════════════════════ */
+function GoogleSection({ userId }: { userId: string }) {
+  const searchParams = useSearchParams()
+  const [connected, setConnected] = useState(false)
+  const [email, setEmail]         = useState('')
+  const [loading, setLoading]     = useState(true)
+  const [saving, setSaving]       = useState(false)
+  const [msg, setMsg]             = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+
+  // โหลดสถานะการเชื่อมต่อปัจจุบัน
+  useEffect(() => {
+    if (!userId || userId === 'demo_user') { setLoading(false); return }
+    getDoc(doc(db, COLLECTIONS.USERS, userId)).then(d => {
+      const data = d.exists() ? d.data() : {}
+      setConnected(!!data.googleConnected)
+      setEmail(data.email ?? '')
+    }).finally(() => setLoading(false))
+  }, [userId])
+
+  // รับ token ที่ส่งกลับมาจาก OAuth callback (อยู่ใน URL fragment) แล้วบันทึกลง Firestore
+  useEffect(() => {
+    if (!userId || userId === 'demo_user') return
+    const err = searchParams?.get('error')
+    if (err) { setMsg({ type: 'err', text: 'เชื่อมต่อไม่สำเร็จ กรุณาลองใหม่' }); return }
+
+    const hash = typeof window !== 'undefined' ? window.location.hash.slice(1) : ''
+    if (!hash) return
+    const p = new URLSearchParams(hash)
+    const at = p.get('at'); const rt = p.get('rt'); const exp = p.get('exp'); const uid = p.get('uid')
+    if (!at || uid !== userId) return
+
+    // ลบ token ออกจาก URL ทันที (ไม่ให้ค้างใน address bar / history)
+    window.history.replaceState(null, '', window.location.pathname + '?tab=google')
+
+    setSaving(true)
+    updateDoc(doc(db, COLLECTIONS.USERS, userId), {
+      googleConnected:    true,
+      googleAccessToken:  at,
+      ...(rt ? { googleRefreshToken: rt } : {}),
+      ...(exp ? { googleTokenExpiry: Number(exp) } : {}),
+      updatedAt: serverTimestamp(),
+    }).then(() => {
+      setConnected(true)
+      setMsg({ type: 'ok', text: 'เชื่อมต่อ Google Calendar สำเร็จ!' })
+    }).catch(() => {
+      setMsg({ type: 'err', text: 'บันทึกการเชื่อมต่อไม่สำเร็จ' })
+    }).finally(() => setSaving(false))
+  }, [searchParams, userId])
+
+  const handleConnect = () => {
+    window.location.href = `/api/auth/google?userId=${encodeURIComponent(userId)}`
+  }
+
+  const handleDisconnect = async () => {
+    if (!confirm('ต้องการยกเลิกการเชื่อมต่อ Google Calendar?')) return
+    setSaving(true)
+    try {
+      await updateDoc(doc(db, COLLECTIONS.USERS, userId), {
+        googleConnected:    false,
+        googleAccessToken:  '',
+        googleRefreshToken: '',
+        updatedAt: serverTimestamp(),
+      })
+      setConnected(false)
+      setMsg({ type: 'ok', text: 'ยกเลิกการเชื่อมต่อแล้ว' })
+    } finally { setSaving(false) }
+  }
+
+  if (loading) return <div className="py-12 text-center"><Loader2 className="w-6 h-6 text-[var(--pink-300)] animate-spin mx-auto" /></div>
+
+  return (
+    <div className="space-y-5 max-w-lg">
+      <div>
+        <h2 className="text-lg font-bold text-[var(--text-primary)]">Google Calendar</h2>
+        <p className="text-xs text-[var(--text-muted)] mt-0.5">เชื่อมต่อเพื่อให้การนัดหมายซิงค์ขึ้นปฏิทิน Google อัตโนมัติ</p>
+      </div>
+
+      {msg && (
+        <div className={`px-4 py-2.5 rounded-xl text-sm font-medium ${msg.type === 'ok' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+          {msg.text}
+        </div>
+      )}
+
+      <div className="flex items-center gap-4 p-4 rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)]">
+        <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${connected ? 'bg-emerald-100' : 'bg-gray-100'}`}>
+          <CalendarIcon className={`w-5 h-5 ${connected ? 'text-emerald-600' : 'text-gray-400'}`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-[var(--text-primary)]">
+            {connected ? 'เชื่อมต่อแล้ว' : 'ยังไม่ได้เชื่อมต่อ'}
+          </p>
+          <p className="text-xs text-[var(--text-muted)] truncate">{connected && email ? email : 'นัดหมายจะไม่ซิงค์จนกว่าจะเชื่อมต่อ'}</p>
+        </div>
+        {connected ? (
+          <button onClick={handleDisconnect} disabled={saving}
+            className="px-4 py-2 rounded-xl text-sm font-semibold text-red-600 border border-red-200 hover:bg-red-50 transition-all disabled:opacity-50">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'ยกเลิก'}
+          </button>
+        ) : (
+          <button onClick={handleConnect} disabled={saving}
+            className="px-4 py-2 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-[#f472b6] to-[#e879a0] shadow-md shadow-pink-200 hover:opacity-95 transition-all disabled:opacity-50">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'เชื่อมต่อ'}
+          </button>
+        )}
+      </div>
+
+      <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+        เมื่อเชื่อมต่อแล้ว การสร้างนัดหมายใหม่จะถูกเพิ่มลงปฏิทิน Google ของบัญชีนี้โดยอัตโนมัติ
+        พร้อมแจ้งเตือนล่วงหน้า 1 วันและ 1 ชั่วโมง
+      </p>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════
    Main
 ═══════════════════════════════════════ */
 const SECTIONS = [
@@ -666,12 +782,13 @@ const SECTIONS = [
   { id: 'staff',       label: 'พนักงาน',          icon: Users        },
   { id: 'permissions', label: 'สิทธิ์การใช้งาน', icon: Shield       },
   { id: 'tax',         label: 'ภาษี & การเงิน',   icon: Receipt      },
+  { id: 'google',      label: 'Google Calendar',  icon: CalendarIcon },
   { id: 'notifications', label: 'การแจ้งเตือน',  icon: Bell         },
 ]
 
 function SettingsInner() {
   const searchParams = useSearchParams()
-  const { companyId } = useAuth()
+  const { companyId, userId } = useAuth()
   const [activeSection, setActiveSection] = useState('company')
   const [branches, setBranches] = useState<Branch[]>([])
 
@@ -718,6 +835,7 @@ function SettingsInner() {
           {activeSection === 'staff'       && <StaffSection companyId={companyId} branches={branches} />}
           {activeSection === 'permissions' && <PermissionsSection companyId={companyId} branches={branches} />}
           {activeSection === 'tax'         && <TaxSection companyId={companyId} />}
+          {activeSection === 'google'      && <GoogleSection userId={userId} />}
           {activeSection === 'notifications' && (
             <div className="py-20 text-center">
               <Bell className="w-12 h-12 text-[var(--pink-100)] mx-auto mb-3" />
