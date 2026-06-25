@@ -56,9 +56,16 @@ export default function NewCustomerPage() {
       : [...form.caseTypes, id])
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.firstName || !form.phone || saving || done) return
+
+    // กันบันทึกผิดบริษัท: ถ้า user ยังโหลดไม่เสร็จ companyId จะเป็นค่า fallback
+    // 'demo_company' ทำให้ลูกค้าถูกบันทึกคนละบริษัทกับที่หน้ารายการ query → หายตอนรีเฟรช
+    if (!companyId || companyId === 'demo_company') {
+      alert('ระบบกำลังโหลดข้อมูลผู้ใช้ กรุณารอสักครู่แล้วลองใหม่')
+      return
+    }
 
     // Generate customerId locally — no Firestore query, no waiting
     const now        = new Date()
@@ -90,19 +97,23 @@ export default function NewCustomerPage() {
     if (form.headEarToEar)      data.headEarToEar      = parseFloat(form.headEarToEar)
     if (form.headLeftRight)     data.headLeftRight     = parseFloat(form.headLeftRight)
 
-    // ── Optimistic: navigate immediately, write in background ──
     setSaving(true)
     setDone(true)
 
-    // Fire-and-forget — ไม่รอ Firestore ตอบกลับ
-    addDoc(collection(db, COLLECTIONS.CUSTOMERS), {
-      ...data,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    }).catch(err => console.error('Save customer error:', err))
-
-    // Navigate ทันที — ไม่ต้องรอ
-    router.push('/customers')
+    // รอผลบันทึกจริงก่อน navigate — ถ้าพลาดจะได้แจ้งผู้ใช้ ไม่ใช่หายเงียบๆ
+    try {
+      await addDoc(collection(db, COLLECTIONS.CUSTOMERS), {
+        ...data,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      router.push('/customers')
+    } catch (err) {
+      console.error('Save customer error:', err)
+      alert('บันทึกลูกค้าไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'ลองใหม่อีกครั้ง'))
+      setSaving(false)
+      setDone(false)
+    }
   }
 
   const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
