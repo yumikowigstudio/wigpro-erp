@@ -7,16 +7,25 @@ import { getCollection, COLLECTIONS, where } from '@/lib/firestore'
 import { useAuthStore } from '@/store/authStore'
 import { User, Branch } from '@/types'
 
-export function useAuth() {
+// ───────────────────────────────────────────────────────────────
+// Auth listener เป็น "singleton" — ตั้งครั้งเดียวทั้งแอป
+// ไม่ว่าจะมี component เรียก useAuth() กี่ตัว/เปลี่ยนหน้ากี่ครั้ง ก็ใช้ listener
+// ชุดเดียวกัน เขียนค่าลง zustand store แล้วทุก component อ่านจาก store
+// (เดิม: ทุก useAuth() สร้าง onAuthStateChanged + onSnapshot ใหม่ → ช้าทุกหน้า)
+// ───────────────────────────────────────────────────────────────
+let authListenerStarted = false
+
+function startAuthListener() {
+  if (authListenerStarted) return
+  authListenerStarted = true
+
   const {
-    user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated,
-    setFirebaseUser, setUser, setCurrentBranch, setBranches, setLoading, logout: storeLogout
-  } = useAuthStore()
+    setFirebaseUser, setUser, setCurrentBranch, setBranches, setLoading,
+  } = useAuthStore.getState()
 
-  useEffect(() => {
-    let unsubscribeUser: (() => void) | null = null
+  let unsubscribeUser: (() => void) | null = null
 
-    const unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
+  onAuthStateChanged(auth, async (fbUser) => {
       setFirebaseUser(fbUser)
 
       // ยกเลิก listener เก่าถ้ามี
@@ -42,7 +51,7 @@ export function useAuth() {
             setUser(userData)
 
             // โหลดสาขาถ้ายังไม่มี
-            if (branches.length === 0) {
+            if (useAuthStore.getState().branches.length === 0) {
               try {
                 const branchList = await getCollection<Branch>(COLLECTIONS.BRANCHES, [
                   where('companyId', '==', userData.companyId),
@@ -111,11 +120,17 @@ export function useAuth() {
         setLoading(false)
       }
     })
+}
 
-    return () => {
-      unsubscribeAuth()
-      if (unsubscribeUser) unsubscribeUser()
-    }
+export function useAuth() {
+  const {
+    user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated,
+    logout: storeLogout,
+  } = useAuthStore()
+
+  // เริ่ม listener ครั้งเดียวทั้งแอป (self-guard ภายใน)
+  useEffect(() => {
+    startAuthListener()
   }, [])
 
   const login = async (email: string, password: string) => {
