@@ -165,18 +165,17 @@ export default function DashboardPage() {
       setSalesData(chart)
     }, () => {})
 
-    // Production orders — filter by companyId, then filter status client-side
+    // Production orders — กรองเฉพาะสถานะที่ยัง active ที่ server (ไม่ดึงใบที่ปิดงานแล้วทั้งหมดมานับ)
     const prodQ = query(
       collection(db, COLLECTIONS.PRODUCTION_ORDERS),
       where('companyId', '==', companyId),
+      where('status', 'in', ['pending','in_progress','qc','ready']),
     )
     const u3 = onSnapshot(prodQ, snap => {
       const counts: Record<string, number> = {}
       snap.docs.forEach(d => {
         const s = d.data().status as string
-        if (['pending','in_progress','qc','ready'].includes(s)) {
-          counts[s] = (counts[s] ?? 0) + 1
-        }
+        counts[s] = (counts[s] ?? 0) + 1
       })
       setProductionData(
         Object.entries(counts).map(([status, value]) => ({

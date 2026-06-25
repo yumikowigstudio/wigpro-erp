@@ -8,7 +8,7 @@ import {
 import { formatCurrency } from '@/lib/utils'
 import { addDocument, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Sale, Product, Service, Deposit, WorkOrder } from '@/types'
-import { collection, onSnapshot, query, where, getDoc, doc } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, getDoc, doc, limit } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { useAuth } from '@/hooks/useAuth'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
@@ -87,13 +87,15 @@ export default function POSPage() {
     const check = () => { if (p && s) setDataLoading(false) }
     const sortByName = <T extends { name: string }>(arr: T[]) =>
       [...arr].sort((a, b) => a.name.localeCompare(b.name, 'th'))
+    // limit(1000) เป็น safety cap — POS แสดงรายการให้เลือกเท่านั้น ไม่ได้คำนวณยอดรวม
+    // ร้านจริงมีสินค้า/บริการที่ active ไม่ถึงพัน จึงไม่กระทบการใช้งาน แต่กันโหลดหนักถ้าข้อมูลโตผิดปกติ
     const u1 = onSnapshot(
-      query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId), where('isActive', '==', true)),
+      query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId), where('isActive', '==', true), limit(1000)),
       snap => { setProducts(sortByName(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as ProductWithStock[])); p = true; check() },
       () => { p = true; check() }
     )
     const u2 = onSnapshot(
-      query(collection(db, COLLECTIONS.SERVICES), where('companyId', '==', companyId)),
+      query(collection(db, COLLECTIONS.SERVICES), where('companyId', '==', companyId), limit(1000)),
       snap => { setServices(sortByName(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Service[])); s = true; check() },
       () => { s = true; check() }
     )
