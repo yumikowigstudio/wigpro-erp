@@ -40,6 +40,15 @@ interface ReceiptData {
   date:         Date
 }
 
+interface ShopInfo {
+  nameTh:         string
+  taxId?:         string
+  phone?:         string
+  address?:       string
+  logoUrl?:       string
+  receiptFooter?: string
+}
+
 const payMethods = [
   { id: 'cash',        label: 'เงินสด',     icon: Banknote,   color: 'from-emerald-400 to-emerald-500' },
   { id: 'transfer',    label: 'โอนเงิน',    icon: Smartphone, color: 'from-blue-400 to-blue-500'       },
@@ -68,7 +77,7 @@ export default function POSPage() {
   const [depositNote, setDepositNote] = useState('')
   const [saving, setSaving]           = useState(false)
   const [receipt, setReceipt]         = useState<ReceiptData | null>(null)
-  const [shopName, setShopName]       = useState('WigPro')
+  const [shopInfo, setShopInfo]       = useState<ShopInfo>({ nameTh: 'WigPro' })
   const [createWorkOrder, setCreateWorkOrder] = useState(true)
   const [wigSpec, setWigSpec]         = useState({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
 
@@ -93,11 +102,21 @@ export default function POSPage() {
 
   useEffect(() => {
     if (!companyId) return
-    getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId)).then(d => {
-      if (d.exists()) {
-        const data = d.data()
-        if (data.nameTh) setShopName(data.nameTh)
-      }
+    // โหลดข้อมูลร้าน + footer ใบเสร็จ (เก็บใน 2 doc แยกกัน)
+    Promise.all([
+      getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId)),
+      getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, `${companyId}_tax`)),
+    ]).then(([company, tax]) => {
+      const c = company.exists() ? company.data() : {}
+      const t = tax.exists() ? tax.data() : {}
+      setShopInfo({
+        nameTh:        c.nameTh || 'WigPro',
+        taxId:         c.taxId || '',
+        phone:         c.phone || '',
+        address:       c.address || '',
+        logoUrl:       c.logoUrl || '',
+        receiptFooter: t.receiptFooter || '',
+      })
     }).catch(console.error)
   }, [companyId])
 
@@ -594,7 +613,7 @@ export default function POSPage() {
       </div>
     </div>
 
-    {receipt && <ReceiptModal receipt={receipt} shopName={shopName} onClose={() => setReceipt(null)} />}
+    {receipt && <ReceiptModal receipt={receipt} shop={shopInfo} onClose={() => setReceipt(null)} />}
     </>
   )
 }
@@ -604,8 +623,9 @@ const PAY_LABELS: Record<string, string> = {
   cash: 'เงินสด', transfer: 'โอนเงิน', qr: 'QR Code', credit_card: 'บัตรเครดิต',
 }
 
-function ReceiptModal({ receipt, shopName, onClose }: { receipt: ReceiptData; shopName: string; onClose: () => void }) {
+function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: ShopInfo; onClose: () => void }) {
   const isDeposit = receipt.mode === 'deposit'
+  const footerText = shop.receiptFooter || (isDeposit ? '📌 กรุณาเก็บใบนี้ไว้เป็นหลักฐาน' : 'ขอบคุณที่ใช้บริการ 💗')
 
   const handlePrint = () => {
     const el = document.getElementById('receipt-content')
@@ -619,8 +639,9 @@ function ReceiptModal({ receipt, shopName, onClose }: { receipt: ReceiptData; sh
         *{box-sizing:border-box;margin:0;padding:0}
         body{font-family:'Sarabun','Noto Sans Thai',sans-serif;font-size:13px;color:#3a1a3a;padding:20px;max-width:300px;margin:0 auto}
         .center{text-align:center}
+        .logo{display:block;margin:0 auto 6px;height:48px;object-fit:contain}
         .shop-name{font-size:20px;font-weight:700}
-        .sub{font-size:11px;color:#888;margin-bottom:2px}
+        .sub{font-size:11px;color:#888;margin-bottom:2px;white-space:pre-line}
         .doc-type{display:inline-block;margin:6px 0;padding:3px 12px;border-radius:99px;font-size:11px;font-weight:700;${isDeposit ? 'background:#fff3cd;color:#856404;border:1px solid #ffc107' : 'background:#fce4ee;color:#cc2d65;border:1px solid #f9c8dd'}}
         .divider{border:none;border-top:1px dashed #ccc;margin:10px 0}
         .row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0}
@@ -657,8 +678,14 @@ function ReceiptModal({ receipt, shopName, onClose }: { receipt: ReceiptData; sh
         <div className="overflow-y-auto flex-1 px-5 py-4">
           <div id="receipt-content" className="font-['Sarabun'] text-[var(--text-primary)]">
             <div className="center text-center mb-4 pb-3 border-b border-dashed border-gray-300">
-              <p className="shop-name text-lg font-bold">{shopName}</p>
-              <p className="sub text-xs text-[var(--text-muted)]">ร้านวิกผมและร้านตัดผม</p>
+              {shop.logoUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={shop.logoUrl} alt="logo" className="logo mx-auto mb-2 h-12 object-contain" />
+              )}
+              <p className="shop-name text-lg font-bold">{shop.nameTh}</p>
+              {shop.address && <p className="sub text-xs text-[var(--text-muted)] whitespace-pre-line">{shop.address}</p>}
+              {shop.phone && <p className="sub text-xs text-[var(--text-muted)]">โทร. {shop.phone}</p>}
+              {shop.taxId && <p className="sub text-xs text-[var(--text-muted)]">เลขผู้เสียภาษี {shop.taxId}</p>}
               {isDeposit && (
                 <span className="doc-type inline-block mt-2 px-3 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700 border border-amber-200">
                   💰 ใบรับมัดจำ
@@ -746,7 +773,7 @@ function ReceiptModal({ receipt, shopName, onClose }: { receipt: ReceiptData; sh
             )}
 
             <div className="text-center pt-4 mt-3 border-t border-dashed border-gray-300">
-              <p className="text-xs text-[var(--text-muted)]">{isDeposit ? '📌 กรุณาเก็บใบนี้ไว้เป็นหลักฐาน' : 'ขอบคุณที่ใช้บริการ 💗'}</p>
+              <p className="text-xs text-[var(--text-muted)]">{footerText}</p>
               {isDeposit && receipt.remaining > 0 && (
                 <p className="text-[10px] text-amber-600 mt-1 font-medium">ยอดคงเหลือ {formatCurrency(receipt.remaining)} ชำระเมื่อรับวิก</p>
               )}
