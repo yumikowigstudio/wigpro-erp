@@ -47,7 +47,8 @@ export default function NotificationsPage() {
         return { id: d.id, ...data, createdAt } as Notif
       })
       // Sort newest-first client-side (avoids composite index)
-      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      const ms = (v: Date | { toDate: () => Date }) => (v instanceof Date ? v : v.toDate()).getTime()
+      list.sort((a, b) => ms(b.createdAt) - ms(a.createdAt))
       setNotifications(list)
       setLoading(false)
     }, () => setLoading(false))

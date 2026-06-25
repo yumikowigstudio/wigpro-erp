@@ -277,6 +277,7 @@ export interface Product {
   barcode?: string
   name: string
   category: string
+  description?: string
   images: string[]
   sellingPrice: number
   costPrice: number

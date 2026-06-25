@@ -112,9 +112,8 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
         <h2 className="font-semibold text-[var(--text-primary)] text-sm mb-4">ข้อมูลสินค้า</h2>
         {[
           ['หมวดหมู่', product.category || '—'],
-          ['สต๊อกคงเหลือ', `${product.stockQty ?? 0} ชิ้น`],
           ['สต๊อกขั้นต่ำ', `${product.minStockAlert ?? 0} ชิ้น`],
-          ['สถานะ', product.isActive !== false ? 'ใช้งาน' : 'ปิดใช้งาน'],
+          ['สถานะ', product.status === 'active' ? 'ใช้งาน' : 'ปิดใช้งาน'],
         ].map(([label, value]) => (
           <div key={label} className="flex justify-between text-sm border-b border-[var(--border-light)] pb-2 last:border-0 last:pb-0">
             <span className="text-[var(--text-muted)]">{label}</span>

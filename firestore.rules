@@ -54,7 +54,14 @@ service cloud.firestore {
       // Allow owner to create other users
       allow create: if isAuthenticated() && request.auth.uid == userId
                     || isOwner();
-      allow update: if isAuthenticated() && (request.auth.uid == userId || isBranchManager());
+      // Self-update allowed, but a user must NOT change their own role or companyId
+      // (prevents privilege escalation). Owners/managers may change those fields.
+      allow update: if isOwner()
+                    || (isAuthenticated() && isBranchManager()
+                        && request.resource.data.companyId == resource.data.companyId)
+                    || (isAuthenticated() && request.auth.uid == userId
+                        && request.resource.data.role == resource.data.role
+                        && request.resource.data.companyId == resource.data.companyId);
       allow delete: if isOwner();
     }
 
