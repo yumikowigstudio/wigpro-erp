@@ -1,6 +1,11 @@
 import { initializeApp, getApps, getApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
-import { getFirestore } from 'firebase/firestore'
+import {
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
 
 const firebaseConfig = {
@@ -15,7 +20,19 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp()
 
 export const auth = getAuth(app)
-export const db = getFirestore(app)
+
+// ฝั่ง browser: เปิด offline cache (IndexedDB) — ข้อมูลที่เคยโหลดจะขึ้นทันที
+// แล้วค่อย sync ของใหม่เบื้องหลัง ทำให้ "หมุนรอ" หายไปเกือบหมด
+// ฝั่ง server (API routes/SSR): ใช้ getFirestore ปกติ เพราะไม่มี IndexedDB
+export const db =
+  typeof window === 'undefined'
+    ? getFirestore(app)
+    : initializeFirestore(app, {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
+      })
+
 export const storage = getStorage(app)
 
 export default app

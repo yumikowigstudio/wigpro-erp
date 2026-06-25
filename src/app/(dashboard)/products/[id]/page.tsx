@@ -27,7 +27,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   const handleDelete = () => {
     if (!confirm('ต้องการลบสินค้านี้ใช่หรือไม่?')) return
     updateDoc(doc(db, COLLECTIONS.PRODUCTS, id), {
-      status: 'deleted', updatedAt: serverTimestamp(),
+      status: 'deleted', isActive: false, updatedAt: serverTimestamp(),
     }).catch(console.error)
     router.push('/products')
   }
