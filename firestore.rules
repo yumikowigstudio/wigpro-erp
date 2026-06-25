@@ -176,12 +176,13 @@ service cloud.firestore {
       allow write: if isStaff();
     }
 
-    // Notifications
+    // Notifications — เป็นแบบทั้งร้าน (query ใช้ companyId) ไม่ใช่รายบุคคล
+    // staff ในบริษัทเดียวกันอ่าน/อัพเดท/ลบได้ ตรงกับการใช้งานจริงในแอป
     match /notifications/{notificationId} {
-      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow read:   if isStaff() && belongsToCompany(resource.data.companyId);
       allow create: if isStaff();
-      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow delete: if isStaff() && belongsToCompany(resource.data.companyId);
     }
 
     // Logs - append only
