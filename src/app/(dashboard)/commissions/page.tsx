@@ -5,7 +5,7 @@ import { Download, Check, Loader2 } from 'lucide-react'
 import { collection, onSnapshot, query, where, Timestamp, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
-import { Employee, Sale } from '@/types'
+import { Employee, Sale, CommissionRecord } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
 export default function CommissionsPage() {
@@ -13,6 +13,7 @@ export default function CommissionsPage() {
   const [view, setView] = useState<'summary' | 'detail'>('summary')
   const [employees, setEmployees] = useState<Employee[]>([])
   const [sales, setSales] = useState<Sale[]>([])
+  const [records, setRecords] = useState<CommissionRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [payingId, setPayingId] = useState<string | null>(null)
 
@@ -52,18 +53,23 @@ export default function CommissionsPage() {
       s = true; check()
     }, () => { s = true; check() })
 
-    return () => { u1(); u2() }
+    // commission_records ของบริษัท (กรองเดือนฝั่ง client เลี่ยง composite index)
+    const recQ = query(collection(db, COLLECTIONS.COMMISSION_RECORDS), where('companyId', '==', companyId))
+    const u3 = onSnapshot(recQ, snap => {
+      setRecords(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as CommissionRecord[])
+    }, () => {})
+
+    return () => { u1(); u2(); u3() }
   }, [selectedMonth, companyId])
 
+  // รวมคอมจาก commission_records จริง (ต่อรายการ/ต่อพนักงาน) ในเดือนที่เลือก
+  const monthRecords = records.filter(r => r.month === selectedMonth)
   const summaryData = employees.map(emp => {
-    const empSales = sales.filter(s =>
-      s.createdBy === emp.userId || s.createdBy === emp.id ||
-      s.createdBy === `${emp.firstName} ${emp.lastName}`
-    )
-    const totalSales = empSales.reduce((a, s) => a + s.totalAmount, 0)
-    const rate = emp.commissionRate ?? 5
-    const commission = Math.round(totalSales * rate / 100)
-    return { emp, totalSales, rate, commission }
+    const empRecs = monthRecords.filter(r => r.employeeId === emp.id)
+    const totalSales = empRecs.reduce((a, r) => a + (r.saleAmount ?? 0), 0)
+    const commission = empRecs.reduce((a, r) => a + (r.commissionAmount ?? 0), 0)
+    const rate = emp.commissionRate ?? 0
+    return { emp, totalSales, rate, commission, itemCount: empRecs.length }
   })
 
   const totalCommission = summaryData.reduce((a, r) => a + r.commission, 0)

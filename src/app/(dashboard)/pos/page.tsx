@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { addDocument, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
-import { Sale, Product, Service, Deposit, WorkOrder } from '@/types'
+import { Sale, Product, Service, Deposit, WorkOrder, Employee } from '@/types'
 import { collection, onSnapshot, query, where, getDoc, doc, limit } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { useAuth } from '@/hooks/useAuth'
@@ -19,6 +19,8 @@ type PosMode = 'sale' | 'deposit'
 interface CartItem {
   id: string; type: 'product' | 'service'; name: string; sku?: string
   price: number; quantity: number; taxType: 'vat' | 'non_vat'; stockQty?: number
+  staffId?: string; staffName?: string          // พนักงานที่ขายรายการนี้ (สำหรับคิดคอม)
+  commissionRate?: number; commissionAmount?: number  // config คอมจากตัวสินค้า/บริการ
 }
 
 interface ReceiptData {
@@ -78,6 +80,8 @@ export default function POSPage() {
   const [saving, setSaving]           = useState(false)
   const [receipt, setReceipt]         = useState<ReceiptData | null>(null)
   const [shopInfo, setShopInfo]       = useState<ShopInfo>({ nameTh: 'WigPro' })
+  const [employees, setEmployees]     = useState<Employee[]>([])
+  const [defaultStaffId, setDefaultStaffId] = useState('')   // พนักงานขายเริ่มต้น (ใส่ให้ทุกรายการที่หยิบใหม่)
   const [createWorkOrder, setCreateWorkOrder] = useState(true)
   const [wigSpec, setWigSpec]         = useState({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
 
@@ -99,7 +103,14 @@ export default function POSPage() {
       snap => { setServices(sortByName(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Service[])); s = true; check() },
       () => { s = true; check() }
     )
-    return () => { u1(); u2() }
+    // พนักงาน (active) สำหรับเลือกผู้ขาย/คิดคอม
+    const u3 = onSnapshot(
+      query(collection(db, COLLECTIONS.EMPLOYEES), where('companyId', '==', companyId), where('status', '==', 'active'), limit(500)),
+      snap => setEmployees(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Employee[]),
+      () => {}
+    )
+
+    return () => { u1(); u2(); u3() }
   }, [companyId])
 
   useEffect(() => {
@@ -147,7 +158,14 @@ export default function POSPage() {
       if (existing.quantity >= stock) return
       setCart(cart.map(c => c.id === item.id && c.type === type ? { ...c, quantity: c.quantity + 1 } : c))
     } else {
-      setCart([...cart, { id: item.id, type, name: item.name, sku: 'sku' in item ? item.sku : undefined, price, quantity: 1, taxType: item.taxType ?? 'vat', stockQty: type === 'product' ? (item as ProductWithStock).stockQty : undefined }])
+      setCart([...cart, {
+        id: item.id, type, name: item.name, sku: 'sku' in item ? item.sku : undefined,
+        price, quantity: 1, taxType: item.taxType ?? 'vat',
+        stockQty: type === 'product' ? (item as ProductWithStock).stockQty : undefined,
+        commissionRate: item.commissionRate, commissionAmount: item.commissionAmount,
+        staffId: defaultStaffId || undefined,
+        staffName: defaultStaffId ? employees.find(e => e.id === defaultStaffId)?.nickname || `${employees.find(e => e.id === defaultStaffId)?.firstName ?? ''}`.trim() : undefined,
+      }])
     }
   }
   const remove    = (id: string, type: string) => setCart(cart.filter(c => !(c.id === id && c.type === type)))
@@ -157,6 +175,26 @@ export default function POSPage() {
     if (item?.stockQty !== undefined && qty > item.stockQty) return
     setCart(cart.map(c => c.id === id && c.type === type ? { ...c, quantity: qty } : c))
   }
+
+  /* ─── พนักงานขาย / คอมมิชชั่น ─── */
+  const empLabel = (e: Employee) => e.nickname || `${e.firstName} ${e.lastName ?? ''}`.trim()
+  const setStaff = (id: string, type: string, staffId: string) => {
+    const emp = employees.find(e => e.id === staffId)
+    setCart(cart.map(c => c.id === id && c.type === type
+      ? { ...c, staffId: staffId || undefined, staffName: emp ? empLabel(emp) : undefined }
+      : c))
+  }
+  // คอมต่อรายการ: ใช้จำนวนเงินคงที่ของสินค้า > %ของสินค้า > %ของพนักงาน
+  const itemCommission = (c: CartItem): number => {
+    if (!c.staffId) return 0
+    const lineTotal = c.price * c.quantity
+    if (c.commissionAmount) return c.commissionAmount * c.quantity
+    if (c.commissionRate)   return lineTotal * c.commissionRate / 100
+    const emp = employees.find(e => e.id === c.staffId)
+    if (emp?.commissionRate) return lineTotal * emp.commissionRate / 100
+    return 0
+  }
+  const totalCommission = cart.reduce((s, c) => s + itemCommission(c), 0)
 
   /* ─── Totals ─── */
   const subtotal    = cart.reduce((s, c) => s + c.price * c.quantity, 0)
@@ -187,7 +225,7 @@ export default function POSPage() {
 
     const saleData: Record<string, unknown> = {
       companyId, branchId, receiptNo,
-      items: cart.map(c => ({ type: c.type, name: c.name, sku: c.sku ?? null, quantity: c.quantity, unitPrice: c.price, discountAmount: 0, taxType: c.taxType, taxAmount: c.price * c.quantity * 0.07, total: c.price * c.quantity })),
+      items: cart.map(c => ({ type: c.type, name: c.name, sku: c.sku ?? null, quantity: c.quantity, unitPrice: c.price, discountAmount: 0, taxType: c.taxType, taxAmount: c.price * c.quantity * 0.07, total: c.price * c.quantity, staffId: c.staffId ?? null, staffName: c.staffName ?? null, commissionAmount: itemCommission(c) })),
       subtotal, discountAmount: discountAmt, discountPercent: discountType === 'percent' ? discount : 0,
       taxAmount: vatAmt, totalAmount: total,
       payments: [{ method: payMethod, amount: total }],
@@ -198,14 +236,27 @@ export default function POSPage() {
     if (customerName) saleData.customerName = customerName
 
     // รอผลบันทึกจริงก่อนออกใบเสร็จ — ถ้าพลาดจะได้แจ้ง ไม่ใช่ยอดขายหายเงียบ
+    let saleId: string
     try {
-      await addDocument<Sale>(COLLECTIONS.SALES, saleData as Omit<Sale, 'id'>)
+      saleId = await addDocument<Sale>(COLLECTIONS.SALES, saleData as Omit<Sale, 'id'>)
     } catch (err) {
       console.error('Sale save error:', err)
       alert('บันทึกการขายไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'ลองใหม่อีกครั้ง'))
       setSaving(false)
       return
     }
+
+    // เขียน commission_records ต่อรายการที่ระบุพนักงานขาย (best-effort — ขายบันทึกแล้ว)
+    const monthKey = `${now.getFullYear()}-${mm}`
+    cart.filter(c => c.staffId && itemCommission(c) > 0).forEach(c => {
+      addDocument(COLLECTIONS.COMMISSION_RECORDS, {
+        companyId, branchId, employeeId: c.staffId!, saleId,
+        type: c.type, itemName: c.name, saleAmount: c.price * c.quantity,
+        commissionRate: c.commissionRate ?? null,
+        commissionAmount: itemCommission(c),
+        status: 'pending', month: monthKey,
+      } as never).catch(err => console.error('Commission record error:', err))
+    })
 
     // Show receipt after confirmed save
     setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt: total, remaining: 0, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total, change, date: new Date() })
@@ -436,12 +487,35 @@ export default function POSPage() {
                 </div>
                 <p className="font-bold text-sm text-[var(--pink-500)]">{formatCurrency(item.price * item.quantity)}</p>
               </div>
+              {/* พนักงานขาย (สำหรับคิดคอม) */}
+              {employees.length > 0 && (
+                <div className="mt-2 flex items-center gap-1.5">
+                  <span className="text-[10px] text-[var(--text-muted)] shrink-0">ผู้ขาย</span>
+                  <select value={item.staffId ?? ''} onChange={e => setStaff(item.id, item.type, e.target.value)}
+                    className="flex-1 px-2 py-1 bg-white border border-[var(--border-light)] rounded-lg text-[11px] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
+                    <option value="">— ไม่ระบุ —</option>
+                    {employees.map(e => <option key={e.id} value={e.id}>{empLabel(e)}</option>)}
+                  </select>
+                  {itemCommission(item) > 0 && (
+                    <span className="text-[10px] font-semibold text-emerald-600 shrink-0">คอม {formatCurrency(itemCommission(item))}</span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
 
         {/* Summary + Pay */}
         <div className="p-4 border-t border-[var(--border-light)] space-y-3 bg-[var(--bg-base)]/50">
+
+          {/* พนักงานขายเริ่มต้น — ใส่ให้ทุกรายการที่หยิบใหม่ */}
+          {employees.length > 0 && (
+            <select value={defaultStaffId} onChange={e => setDefaultStaffId(e.target.value)}
+              className="w-full px-3 py-1.5 bg-white border border-[var(--border-light)] rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
+              <option value="">เลือกพนักงานขายเริ่มต้น (ไม่บังคับ)</option>
+              {employees.map(e => <option key={e.id} value={e.id}>{empLabel(e)}</option>)}
+            </select>
+          )}
 
           {/* Discount */}
           <div className="flex items-center gap-2">
@@ -472,6 +546,11 @@ export default function POSPage() {
               <span className="text-[var(--text-primary)]">ยอดรวม</span>
               <span className="text-[var(--pink-500)]">{formatCurrency(total)}</span>
             </div>
+            {totalCommission > 0 && (
+              <div className="flex justify-between text-[11px] text-emerald-600 pt-1">
+                <span>คอมมิชชั่นพนักงาน (รวม)</span><span>{formatCurrency(totalCommission)}</span>
+              </div>
+            )}
 
             {/* ─── Deposit mode panel ─── */}
             {mode === 'deposit' && (
