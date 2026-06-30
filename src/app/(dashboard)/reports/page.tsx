@@ -10,6 +10,7 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Sale, Customer, WorkOrder } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
+import { downloadCsv } from '@/lib/export'
 
 const monthNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
 
@@ -126,9 +127,48 @@ export default function ReportsPage() {
       revenue: existing.revenue + item.total,
     })
   }))
-  const topProducts = Array.from(productMap.values())
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 5)
+  const allProductsSold = Array.from(productMap.values()).sort((a, b) => b.revenue - a.revenue)
+  const topProducts = allProductsSold.slice(0, 5)
+
+  // รายได้แยกสินค้า / บริการ
+  let productRevenue = 0, serviceRevenue = 0
+  sales.forEach(s => s.items?.forEach(item => {
+    if (item.type === 'service') serviceRevenue += item.total
+    else productRevenue += item.total
+  }))
+
+  // คอมมิชชั่นต่อพนักงาน (จากรายการขายที่ระบุผู้ขาย)
+  const commMap = new Map<string, { name: string; commission: number; items: number; sales: number }>()
+  sales.forEach(s => s.items?.forEach(item => {
+    if (!item.staffName || !item.commissionAmount) return
+    const ex = commMap.get(item.staffName) ?? { name: item.staffName, commission: 0, items: 0, sales: 0 }
+    commMap.set(item.staffName, {
+      name: item.staffName,
+      commission: ex.commission + (item.commissionAmount ?? 0),
+      items: ex.items + 1,
+      sales: ex.sales + (item.total ?? 0),
+    })
+  }))
+  const commissionByStaff = Array.from(commMap.values()).sort((a, b) => b.commission - a.commission)
+
+  // Export ตามแท็บที่เปิดอยู่
+  const stamp = new Date().toISOString().slice(0, 10)
+  const handleExport = () => {
+    if (activeTab === 'customers') {
+      downloadCsv(`customers-${stamp}`, ['ชื่อ','เบอร์โทร','ระดับสมาชิก','แต้ม'],
+        customers.map(c => [`${c.firstName} ${c.lastName ?? ''}`.trim(), c.phone ?? '', c.memberLevel ?? '', c.points ?? 0]))
+    } else if (activeTab === 'commission') {
+      downloadCsv(`commission-${stamp}`, ['พนักงาน','จำนวนรายการ','ยอดขาย','คอมมิชชั่น'],
+        commissionByStaff.map(r => [r.name, r.items, r.sales.toFixed(2), r.commission.toFixed(2)]))
+    } else if (activeTab === 'production') {
+      downloadCsv(`production-${stamp}`, ['ออเดอร์','ลูกค้า','สถานะ','ยอด'],
+        workOrders.map(w => [w.orderNo, w.customerName, w.status, w.totalAmount]))
+    } else {
+      // sales / products → รายการสินค้าที่ขาย
+      downloadCsv(`products-sold-${stamp}`, ['สินค้า/บริการ','จำนวน','ยอดขาย'],
+        allProductsSold.map(p => [p.name, p.qty, p.revenue.toFixed(2)]))
+    }
+  }
 
   // Customer level counts
   const levelCounts = { silver: 0, gold: 0, platinum: 0, vip: 0 }
@@ -152,8 +192,8 @@ export default function ReportsPage() {
             <option value="month">เดือนนี้</option>
             <option value="year">ปีนี้</option>
           </select>
-          <button className="flex items-center gap-2 px-4 py-2 bg-white border border-[var(--border-light)] rounded-xl text-sm hover:bg-[var(--bg-base)] transition-all">
-            <Download className="w-4 h-4" /> Export
+          <button onClick={handleExport} className="flex items-center gap-2 px-4 py-2 bg-white border border-[var(--border-light)] rounded-xl text-sm hover:bg-[var(--bg-base)] transition-all">
+            <Download className="w-4 h-4" /> Export CSV
           </button>
         </div>
       </div>
@@ -283,6 +323,70 @@ export default function ReportsPage() {
                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">{wo.status}</span>
                           </td>
                           <td className="py-2.5 text-right font-semibold text-[var(--pink-500)]">{formatCurrency(wo.totalAmount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : activeTab === 'products' ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-[var(--pink-50)] p-4 text-center">
+                  <p className="text-xl font-bold text-[var(--pink-600)]">{formatCurrency(productRevenue)}</p>
+                  <p className="text-xs text-[var(--text-muted)]">รายได้จากสินค้า</p>
+                </div>
+                <div className="rounded-xl bg-blue-50 p-4 text-center">
+                  <p className="text-xl font-bold text-blue-600">{formatCurrency(serviceRevenue)}</p>
+                  <p className="text-xs text-[var(--text-muted)]">รายได้จากบริการ</p>
+                </div>
+              </div>
+              <h3 className="font-semibold text-[var(--text-primary)]">รายการที่ขายได้ ({allProductsSold.length})</h3>
+              {allProductsSold.length === 0 ? (
+                <p className="text-center text-sm text-[var(--text-muted)] py-8">ยังไม่มีข้อมูล</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b border-[var(--border-light)]">
+                      <th className="text-left text-xs font-semibold text-[var(--text-muted)] pb-2">สินค้า/บริการ</th>
+                      <th className="text-right text-xs font-semibold text-[var(--text-muted)] pb-2">จำนวน</th>
+                      <th className="text-right text-xs font-semibold text-[var(--text-muted)] pb-2">ยอดขาย</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-[var(--border-light)]">
+                      {allProductsSold.map(p => (
+                        <tr key={p.name} className="hover:bg-[var(--pink-50)]/30">
+                          <td className="py-2.5 font-medium truncate max-w-[200px]">{p.name}</td>
+                          <td className="py-2.5 text-right text-[var(--text-secondary)]">{p.qty}</td>
+                          <td className="py-2.5 text-right font-semibold text-[var(--pink-500)]">{formatCurrency(p.revenue)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : activeTab === 'commission' ? (
+            <div className="space-y-3">
+              <h3 className="font-semibold text-[var(--text-primary)]">คอมมิชชั่นพนักงาน (ช่วงที่เลือก)</h3>
+              {commissionByStaff.length === 0 ? (
+                <p className="text-center text-sm text-[var(--text-muted)] py-8">ยังไม่มีคอมมิชชั่น — ระบุพนักงานขายตอนคีย์ขายใน POS</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b border-[var(--border-light)]">
+                      <th className="text-left text-xs font-semibold text-[var(--text-muted)] pb-2">พนักงาน</th>
+                      <th className="text-right text-xs font-semibold text-[var(--text-muted)] pb-2">รายการ</th>
+                      <th className="text-right text-xs font-semibold text-[var(--text-muted)] pb-2">ยอดขาย</th>
+                      <th className="text-right text-xs font-semibold text-[var(--text-muted)] pb-2">คอมมิชชั่น</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-[var(--border-light)]">
+                      {commissionByStaff.map(r => (
+                        <tr key={r.name} className="hover:bg-[var(--pink-50)]/30">
+                          <td className="py-2.5 font-medium">{r.name}</td>
+                          <td className="py-2.5 text-right text-[var(--text-secondary)]">{r.items}</td>
+                          <td className="py-2.5 text-right text-[var(--text-secondary)]">{formatCurrency(r.sales)}</td>
+                          <td className="py-2.5 text-right font-semibold text-emerald-600">{formatCurrency(r.commission)}</td>
                         </tr>
                       ))}
                     </tbody>
