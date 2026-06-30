@@ -43,6 +43,7 @@ export const COLLECTIONS = {
   EXPENSES: 'expenses',
   COMMISSION_RECORDS: 'commission_records',
   DOCUMENTS: 'documents',
+  QUOTATIONS: 'quotations',
   NOTIFICATIONS: 'notifications',
   ACTIVITY_LOGS: 'activity_logs',
   AUDIT_LOGS: 'audit_logs',

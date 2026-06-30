@@ -37,6 +37,7 @@ const navItems: NavItem[] = [
   },
   { href: '/production',  label: 'งานผลิตวิก',   icon: Factory,   group: 'คลัง' },
   { href: '/deposits',    label: 'มัดจำ',         icon: CreditCard, group: 'การเงิน' },
+  { href: '/quotations',  label: 'ใบเสนอราคา',    icon: FileText,   group: 'การเงิน' },
   { href: '/accounting',  label: 'บัญชี',         icon: Receipt,    group: 'การเงิน' },
   { href: '/commissions', label: 'คอมมิชชั่น',    icon: TrendingUp, group: 'การเงิน' },
   { href: '/reports',     label: 'รายงาน',        icon: BarChart3,  group: 'การเงิน' },

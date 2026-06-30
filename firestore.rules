@@ -176,6 +176,14 @@ service cloud.firestore {
       allow write: if isStaff();
     }
 
+    // Quotations (ใบเสนอราคา)
+    match /quotations/{quotationId} {
+      allow read:   if isStaff() && belongsToCompany(resource.data.companyId);
+      allow create: if isStaff();
+      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow delete: if isBranchManager();
+    }
+
     // Notifications — เป็นแบบทั้งร้าน (query ใช้ companyId) ไม่ใช่รายบุคคล
     // staff ในบริษัทเดียวกันอ่าน/อัพเดท/ลบได้ ตรงกับการใช้งานจริงในแอป
     match /notifications/{notificationId} {
