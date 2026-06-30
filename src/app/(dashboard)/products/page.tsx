@@ -213,6 +213,10 @@ export default function ProductsPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!validate()) return
+    if (!companyId || companyId === 'demo_company') {
+      alert('ระบบกำลังโหลดข้อมูลผู้ใช้ กรุณารอสักครู่แล้วลองใหม่')
+      return
+    }
     setSubmitting(true)
     try {
       let imageUrl = ''

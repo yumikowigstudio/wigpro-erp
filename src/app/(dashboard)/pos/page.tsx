@@ -170,8 +170,13 @@ export default function POSPage() {
   const payNow      = mode === 'sale' ? total : depositAmt
 
   /* ─── Checkout (ขายปกติ) ─── */
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (cart.length === 0 || saving) return
+    // กันบันทึกยอดขายผิดบริษัท: ถ้า user ยังโหลดไม่เสร็จ companyId จะเป็น fallback
+    if (!companyId || companyId === 'demo_company' || !branchId || branchId === 'demo_branch') {
+      alert('ระบบกำลังโหลดข้อมูลผู้ใช้ กรุณารอสักครู่แล้วลองใหม่')
+      return
+    }
     setSaving(true)
 
     // Generate receipt number locally (no Firestore query)
@@ -192,11 +197,17 @@ export default function POSPage() {
     if (customerId)   saleData.customerId   = customerId
     if (customerName) saleData.customerName = customerName
 
-    // Fire-and-forget
-    addDocument<Sale>(COLLECTIONS.SALES, saleData as Omit<Sale, 'id'>)
-      .catch(err => console.error('Sale save error:', err))
+    // รอผลบันทึกจริงก่อนออกใบเสร็จ — ถ้าพลาดจะได้แจ้ง ไม่ใช่ยอดขายหายเงียบ
+    try {
+      await addDocument<Sale>(COLLECTIONS.SALES, saleData as Omit<Sale, 'id'>)
+    } catch (err) {
+      console.error('Sale save error:', err)
+      alert('บันทึกการขายไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'ลองใหม่อีกครั้ง'))
+      setSaving(false)
+      return
+    }
 
-    // Show receipt immediately
+    // Show receipt after confirmed save
     setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt: total, remaining: 0, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total, change, date: new Date() })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId('')
     setSaving(false)
@@ -205,6 +216,10 @@ export default function POSPage() {
   /* ─── รับมัดจำ ─── */
   const handleDeposit = async () => {
     if (cart.length === 0 || depositAmt <= 0 || saving) return
+    if (!companyId || companyId === 'demo_company' || !branchId || branchId === 'demo_branch') {
+      alert('ระบบกำลังโหลดข้อมูลผู้ใช้ กรุณารอสักครู่แล้วลองใหม่')
+      return
+    }
     setSaving(true)
 
     // Generate IDs locally — no Firestore round-trip
@@ -233,8 +248,15 @@ export default function POSPage() {
       createdBy: userId,
     }
     if (notesStr) depData.notes = notesStr
-    addDocument<Deposit>(COLLECTIONS.DEPOSITS, depData as Omit<Deposit, 'id'>)
-      .catch(err => console.error('Deposit save error:', err))
+    // รอผลบันทึกมัดจำจริง (ยอดเงิน) ก่อนออกใบ
+    try {
+      await addDocument<Deposit>(COLLECTIONS.DEPOSITS, depData as Omit<Deposit, 'id'>)
+    } catch (err) {
+      console.error('Deposit save error:', err)
+      alert('บันทึกมัดจำไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'ลองใหม่อีกครั้ง'))
+      setSaving(false)
+      return
+    }
 
     if (createWorkOrder) {
       const woData: Record<string, unknown> = {
