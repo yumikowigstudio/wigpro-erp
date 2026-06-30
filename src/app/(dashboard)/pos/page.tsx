@@ -8,8 +8,9 @@ import {
 import { formatCurrency } from '@/lib/utils'
 import { addDocument, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Sale, Product, Service, Deposit, WorkOrder, Employee } from '@/types'
-import { collection, onSnapshot, query, where, getDoc, doc, limit } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, getDoc, doc, limit, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
+import { uploadToCloudinary } from '@/lib/cloudinary'
 import { useAuth } from '@/hooks/useAuth'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
 
@@ -82,6 +83,10 @@ export default function POSPage() {
   const [shopInfo, setShopInfo]       = useState<ShopInfo>({ nameTh: 'WigPro' })
   const [employees, setEmployees]     = useState<Employee[]>([])
   const [defaultStaffId, setDefaultStaffId] = useState('')   // พนักงานขายเริ่มต้น (ใส่ให้ทุกรายการที่หยิบใหม่)
+  const [slipUrl, setSlipUrl]         = useState('')         // หลักฐานการชำระ (สลิป) สำหรับโอน/QR/บัตร
+  const [slipUploading, setSlipUploading] = useState(false)
+  const [openDeposits, setOpenDeposits] = useState<Deposit[]>([])  // มัดจำค้างของลูกค้าที่เลือก
+  const [appliedDepositId, setAppliedDepositId] = useState('')     // มัดจำที่เลือกหักในบิลนี้
   const [createWorkOrder, setCreateWorkOrder] = useState(true)
   const [wigSpec, setWigSpec]         = useState({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
 
@@ -176,6 +181,22 @@ export default function POSPage() {
     setCart(cart.map(c => c.id === id && c.type === type ? { ...c, quantity: qty } : c))
   }
 
+  /* ─── โหลดมัดจำค้างของลูกค้าที่เลือก (สำหรับหักมัดจำในโหมดขาย) ─── */
+  useEffect(() => {
+    setAppliedDepositId('')
+    if (!customerId) { setOpenDeposits([]); return }
+    const q = query(collection(db, COLLECTIONS.DEPOSITS), where('customerId', '==', customerId))
+    const unsub = onSnapshot(q, snap => {
+      setOpenDeposits(
+        snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) }) as Deposit)
+          .filter(d => d.status === 'deposited' && (d.remainingAmount ?? 0) > 0)
+      )
+    }, () => setOpenDeposits([]))
+    return unsub
+  }, [customerId])
+
+  const appliedDeposit  = openDeposits.find(d => d.id === appliedDepositId) || null
+
   /* ─── พนักงานขาย / คอมมิชชั่น ─── */
   const empLabel = (e: Employee) => e.nickname || `${e.firstName} ${e.lastName ?? ''}`.trim()
   const setStaff = (id: string, type: string, staffId: string) => {
@@ -204,8 +225,11 @@ export default function POSPage() {
   const total       = afterDisc + vatAmt
   const depositAmt  = Math.min(parseFloat(depositInput) || 0, total)
   const remaining   = total - depositAmt
-  const change      = mode === 'sale' ? Math.max((parseFloat(cash) || 0) - total, 0) : Math.max((parseFloat(cash) || 0) - depositAmt, 0)
-  const payNow      = mode === 'sale' ? total : depositAmt
+  // หักมัดจำเดิม (เฉพาะโหมดขาย) — หักได้ไม่เกินยอดบิล
+  const depositDeduct = mode === 'sale' && appliedDeposit ? Math.min(appliedDeposit.depositAmount ?? 0, total) : 0
+  const netDue      = total - depositDeduct   // ยอดที่ต้องชำระจริงหลังหักมัดจำ
+  const change      = mode === 'sale' ? Math.max((parseFloat(cash) || 0) - netDue, 0) : Math.max((parseFloat(cash) || 0) - depositAmt, 0)
+  const payNow      = mode === 'sale' ? netDue : depositAmt
 
   /* ─── Checkout (ขายปกติ) ─── */
   const handleCheckout = async () => {
@@ -228,12 +252,13 @@ export default function POSPage() {
       items: cart.map(c => ({ type: c.type, name: c.name, sku: c.sku ?? null, quantity: c.quantity, unitPrice: c.price, discountAmount: 0, taxType: c.taxType, taxAmount: c.price * c.quantity * 0.07, total: c.price * c.quantity, staffId: c.staffId ?? null, staffName: c.staffName ?? null, commissionAmount: itemCommission(c) })),
       subtotal, discountAmount: discountAmt, discountPercent: discountType === 'percent' ? discount : 0,
       taxAmount: vatAmt, totalAmount: total,
-      payments: [{ method: payMethod, amount: total }],
-      paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total,
+      payments: [{ method: payMethod, amount: netDue, ...(slipUrl ? { slipUrl } : {}) }],
+      paidAmount: payMethod === 'cash' ? (parseFloat(cash) || netDue) : netDue,
       changeAmount: change, status: 'completed', createdBy: userId,
     }
-    if (customerId)   saleData.customerId   = customerId
-    if (customerName) saleData.customerName = customerName
+    if (customerId)     saleData.customerId     = customerId
+    if (customerName)   saleData.customerName   = customerName
+    if (depositDeduct > 0) saleData.depositDeducted = depositDeduct
 
     // รอผลบันทึกจริงก่อนออกใบเสร็จ — ถ้าพลาดจะได้แจ้ง ไม่ใช่ยอดขายหายเงียบ
     let saleId: string
@@ -258,9 +283,19 @@ export default function POSPage() {
       } as never).catch(err => console.error('Commission record error:', err))
     })
 
+    // ปิดมัดจำที่ถูกหัก (best-effort — ขายบันทึกแล้ว)
+    if (appliedDeposit && depositDeduct > 0) {
+      updateDoc(doc(db, COLLECTIONS.DEPOSITS, appliedDeposit.id), {
+        status: 'paid_full', remainingAmount: 0,
+        paidAmount: (appliedDeposit.totalAmount ?? appliedDeposit.depositAmount ?? 0),
+        closedBySaleId: saleId, updatedAt: serverTimestamp(),
+      }).catch(err => console.error('Close deposit error:', err))
+    }
+
     // Show receipt after confirmed save
-    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt: total, remaining: 0, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || total) : total, change, date: new Date() })
+    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || netDue) : netDue, change, date: new Date() })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId('')
+    setSlipUrl(''); setAppliedDepositId('')
     setSaving(false)
   }
 
@@ -299,6 +334,7 @@ export default function POSPage() {
       createdBy: userId,
     }
     if (notesStr) depData.notes = notesStr
+    if (slipUrl)  depData.slipUrl = slipUrl
     // รอผลบันทึกมัดจำจริง (ยอดเงิน) ก่อนออกใบ
     try {
       await addDocument<Deposit>(COLLECTIONS.DEPOSITS, depData as Omit<Deposit, 'id'>)
@@ -333,7 +369,21 @@ export default function POSPage() {
     setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt, remaining, pickupDate, depositNote, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: now })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setDepositInput(''); setPickupDate(''); setDepositNote('')
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
+    setSlipUrl('')
     setSaving(false)
+  }
+
+  /* ─── อัปโหลดสลิป ─── */
+  const handleSlipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 5 * 1024 * 1024) { alert('ไฟล์ใหญ่เกิน 5MB'); return }
+    setSlipUploading(true)
+    try {
+      setSlipUrl(await uploadToCloudinary(file, 'wigpro/slips'))
+    } catch {
+      alert('อัปโหลดสลิปไม่สำเร็จ')
+    } finally { setSlipUploading(false) }
   }
 
   const isDepositReady = mode === 'deposit' && depositAmt > 0 && depositAmt <= total
@@ -546,6 +596,12 @@ export default function POSPage() {
               <span className="text-[var(--text-primary)]">ยอดรวม</span>
               <span className="text-[var(--pink-500)]">{formatCurrency(total)}</span>
             </div>
+            {depositDeduct > 0 && (
+              <>
+                <div className="flex justify-between text-amber-600 text-xs"><span>หักมัดจำเดิม</span><span>-{formatCurrency(depositDeduct)}</span></div>
+                <div className="flex justify-between font-bold text-sm text-[var(--pink-600)] pt-0.5"><span>ยอดชำระสุทธิ</span><span>{formatCurrency(netDue)}</span></div>
+              </>
+            )}
             {totalCommission > 0 && (
               <div className="flex justify-between text-[11px] text-emerald-600 pt-1">
                 <span>คอมมิชชั่นพนักงาน (รวม)</span><span>{formatCurrency(totalCommission)}</span>
@@ -669,6 +725,21 @@ export default function POSPage() {
             )}
           </div>
 
+          {/* หักมัดจำเดิม (เฉพาะโหมดขาย เมื่อลูกค้ามีมัดจำค้าง) */}
+          {mode === 'sale' && openDeposits.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 space-y-1">
+              <p className="text-[11px] font-semibold text-amber-700">💰 หักมัดจำเดิมของลูกค้า</p>
+              {openDeposits.map(d => (
+                <label key={d.id} className="flex items-center gap-2 text-[11px] cursor-pointer text-amber-800">
+                  <input type="checkbox" checked={appliedDepositId === d.id}
+                    onChange={() => setAppliedDepositId(appliedDepositId === d.id ? '' : d.id)}
+                    className="accent-amber-500" />
+                  <span className="flex-1 truncate">{d.depositNo} · มัดจำ {formatCurrency(d.depositAmount)}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
           {/* Payment method */}
           <div className="grid grid-cols-4 gap-1.5">
             {payMethods.map(pm => (
@@ -678,6 +749,17 @@ export default function POSPage() {
               </button>
             ))}
           </div>
+
+          {/* แนบสลิป (สำหรับโอน/QR/บัตร) */}
+          {payMethod !== 'cash' && (
+            <div className="flex items-center gap-2">
+              <label className="flex-1 cursor-pointer px-3 py-2 bg-white border border-dashed border-[var(--border-light)] rounded-xl text-xs text-center text-[var(--text-secondary)] hover:bg-[var(--pink-50)] transition-all">
+                {slipUploading ? 'กำลังอัปโหลด...' : slipUrl ? '✓ แนบสลิปแล้ว (กดเปลี่ยน)' : '📎 แนบสลิปการชำระ'}
+                <input type="file" accept="image/*" className="hidden" onChange={handleSlipUpload} />
+              </label>
+              {slipUrl && <button type="button" onClick={() => setSlipUrl('')} className="text-xs text-red-500 shrink-0">ลบ</button>}
+            </div>
+          )}
 
           {/* Cash input */}
           {payMethod === 'cash' && (
@@ -701,7 +783,7 @@ export default function POSPage() {
           {mode === 'sale' ? (
             <button onClick={handleCheckout} disabled={cart.length === 0 || saving}
               className="w-full py-3.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white font-bold rounded-2xl shadow-lg shadow-pink-200 active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2">
-              {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</> : `ชำระเงิน · ${formatCurrency(total)}`}
+              {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</> : `ชำระเงิน · ${formatCurrency(payNow)}`}
             </button>
           ) : (
             <button onClick={handleDeposit} disabled={cart.length === 0 || !isDepositReady || saving}
