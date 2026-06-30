@@ -51,9 +51,9 @@
 
 | # | บั๊ก | ความเสี่ยง |
 |---|------|-----------|
-| B1 | POS ขาย/มัดจำ ไม่ guard companyId (fire-and-forget) → ถ้า user โหลดไม่ทันจะบันทึกเข้า demo_company / ยอดขายหาย | สูง (เกี่ยวกับเงิน) |
-| B2 | ลบสินค้าตั้ง `status:'deleted'` แต่ POS กรอง `isActive` — เคยไม่ตรงกัน (แก้หน้า detail แล้ว ควร audit ทุกจุด) | กลาง |
-| B3 | สร้างสินค้า/นัดหมาย ใช้ fire-and-forget เหมือนลูกค้า (เสี่ยงหายเงียบ) | กลาง |
+| B1 | ✅**แก้แล้ว** — POS ขาย/มัดจำ guard companyId + await + แจ้ง error | สูง (เกี่ยวกับเงิน) |
+| B2 | ✅**แก้แล้ว** — ลบสินค้าตั้งทั้ง status:deleted + isActive:false สอดคล้องทุกจุด (ข้อมูลเก่าที่ลบก่อนแก้อาจยังโผล่ใน POS — ลบซ้ำได้) | กลาง |
+| B3 | ✅**แก้แล้ว** — สร้างสินค้า guard companyId · สร้างนัดมี guard อยู่แล้ว · ลูกค้าแก้ไปก่อนหน้า | กลาง |
 | B4 | หน้า customers/reports โหลดข้อมูลทั้งหมด ไม่มี pagination | ต่ำ (โตช้าๆ) |
 
 > ✅ แก้ไปแล้วเซสชันนี้: type errors, security rules (role escalation + notifications), ความเร็ว (offline cache + auth singleton), ใบเสร็จข้อมูลร้านครบ, Google Calendar end-to-end, ลูกค้าหายตอนรีเฟรช
