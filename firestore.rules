@@ -95,6 +95,14 @@ service cloud.firestore {
       allow update, delete: if isBranchManager();
     }
 
+    // Service records (บันทึกผลบริการ + คำแนะนำ)
+    match /service_records/{recordId} {
+      allow read:   if isStaff();
+      allow create: if isStaff();
+      allow update: if isStaff();
+      allow delete: if isStaff();
+    }
+
     // Appointments
     match /appointments/{appointmentId} {
       allow read: if isStaff() && belongsToCompany(resource.data.companyId);

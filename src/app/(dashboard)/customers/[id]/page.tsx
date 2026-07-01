@@ -16,7 +16,7 @@ import {
   addDoc, deleteDoc, doc, serverTimestamp,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { Customer, CustomerImage, CustomerDocument, WorkOrder, Deposit } from '@/types'
+import { Customer, CustomerImage, CustomerDocument, WorkOrder, Deposit, ServiceRecord } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -107,6 +107,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const [images,     setImages]     = useState<CustomerImage[]>([])
   const [documents,  setDocuments]  = useState<CustomerDocument[]>([])
   const [contacts,   setContacts]   = useState<ContactLog[]>([])
+  const [serviceRecords, setServiceRecords] = useState<ServiceRecord[]>([])
 
   useEffect(() => {
     getDocument<Customer>(COLLECTIONS.CUSTOMERS, id)
@@ -156,7 +157,12 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       s => setContacts(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as ContactLog }).sort(byDateDesc)),
       () => {}
     )
-    return () => { u1(); u2(); u3(); u4(); u5(); u6() }
+    const u7 = onSnapshot(
+      query(collection(db, COLLECTIONS.SERVICE_RECORDS), where('customerId', '==', id)),
+      s => setServiceRecords(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as ServiceRecord }).sort(byDateDesc)),
+      () => {}
+    )
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7() }
   }, [id])
 
   if (loading) return (
@@ -178,6 +184,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
     { id: 'photos',    label: `รูปภาพ${images.length ? ` (${images.length})` : ''}` },
     { id: 'documents', label: `เอกสาร${documents.length ? ` (${documents.length})` : ''}` },
     { id: 'history',   label: `ประวัติบริการ${sales.length ? ` (${sales.length})` : ''}` },
+    { id: 'services',  label: `ผลบริการ${serviceRecords.length ? ` (${serviceRecords.length})` : ''}` },
     { id: 'payments',  label: `การชำระเงิน${deposits.length ? ` (${deposits.length})` : ''}` },
     { id: 'contacts',  label: `ติดต่อ${contacts.length ? ` (${contacts.length})` : ''}` },
     { id: 'work_orders',label: `สั่งผลิตวิก${workOrders.length ? ` (${workOrders.length})` : ''}` },
@@ -282,6 +289,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           {activeTab === 'photos'      && <PhotosTab images={images} customerId={id} companyId={companyId} userId={userId} />}
           {activeTab === 'documents'   && <DocumentsTab documents={documents} customerId={id} companyId={companyId} userId={userId} />}
           {activeTab === 'history'     && <ServiceHistoryTab sales={sales} workOrders={workOrders} />}
+          {activeTab === 'services'    && <ServiceRecordsTab records={serviceRecords} customerId={id} companyId={companyId} branchId={branchId} userId={userId} />}
           {activeTab === 'payments'    && <PaymentsTab deposits={deposits} />}
           {activeTab === 'contacts'    && <ContactLogTab contacts={contacts} customerId={id} userId={userId} companyId={companyId} branchId={branchId} />}
           {activeTab === 'work_orders' && <WorkOrdersTab workOrders={workOrders} />}
@@ -621,6 +629,131 @@ function ServiceHistoryTab({ sales, workOrders }: { sales: SaleRecord[]; workOrd
             <p className="text-sm font-bold text-[var(--pink-500)]">{formatCurrency(item.kind === 'sale' ? (item.data as SaleRecord).totalAmount : (item.data as WorkOrder).totalAmount)}</p>
             <p className="text-xs text-[var(--text-muted)] mt-0.5">{formatDate(item.date)}</p>
           </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Tab: บันทึกผลบริการ ──────────────────────────────────────────────────────
+async function uploadServiceImage(file: File): Promise<string> {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('upload_preset', CLOUDINARY_PRESET)
+  fd.append('folder', 'wigpro/service')
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`, { method: 'POST', body: fd })
+  if (!res.ok) throw new Error('upload failed')
+  return ((await res.json()) as { secure_url: string }).secure_url
+}
+
+function ServiceRecordsTab({ records, customerId, companyId, branchId, userId }:
+  { records: ServiceRecord[]; customerId: string; companyId: string; branchId: string; userId: string }) {
+  const [showForm, setShowForm] = useState(false)
+  const [saving, setSaving]     = useState(false)
+  const [form, setForm] = useState({ serviceName: '', result: '', recommendations: '' })
+  const [beforeImg, setBeforeImg] = useState('')
+  const [afterImg, setAfterImg]   = useState('')
+  const [uploading, setUploading] = useState<'before' | 'after' | null>(null)
+
+  const pickImage = (which: 'before' | 'after') => async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return
+    if (file.size > 5 * 1024 * 1024) { alert('ไฟล์ใหญ่เกิน 5MB'); return }
+    setUploading(which)
+    try {
+      const url = await uploadServiceImage(file)
+      which === 'before' ? setBeforeImg(url) : setAfterImg(url)
+    } catch { alert('อัปโหลดรูปไม่สำเร็จ') } finally { setUploading(null) }
+  }
+
+  const handleSave = async () => {
+    if (!form.serviceName.trim()) { alert('กรุณากรอกชื่อบริการ'); return }
+    if (!companyId || companyId === 'demo_company') { alert('ระบบกำลังโหลดข้อมูล กรุณารอสักครู่'); return }
+    setSaving(true)
+    try {
+      await addDoc(collection(db, COLLECTIONS.SERVICE_RECORDS), {
+        customerId, companyId, branchId, staffId: userId,
+        serviceId: '', serviceName: form.serviceName.trim(),
+        result: form.result.trim() || null,
+        recommendations: form.recommendations.trim() || null,
+        beforeImages: beforeImg ? [beforeImg] : [],
+        afterImages: afterImg ? [afterImg] : [],
+        createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      })
+      setForm({ serviceName: '', result: '', recommendations: '' }); setBeforeImg(''); setAfterImg(''); setShowForm(false)
+    } catch (err) { alert('บันทึกไม่สำเร็จ: ' + (err instanceof Error ? err.message : '')) }
+    finally { setSaving(false) }
+  }
+
+  const handleDelete = async (rid: string) => {
+    if (!confirm('ลบบันทึกนี้?')) return
+    await deleteDoc(doc(db, COLLECTIONS.SERVICE_RECORDS, rid)).catch(() => {})
+  }
+
+  const inp = 'w-full px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]'
+
+  return (
+    <div className="space-y-3">
+      {!showForm && (
+        <button onClick={() => setShowForm(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-semibold shadow-md shadow-pink-200 hover:opacity-95 transition-all">
+          <Plus className="w-4 h-4" /> บันทึกผลบริการ
+        </button>
+      )}
+
+      {showForm && (
+        <div className="bg-[var(--bg-base)] rounded-2xl border border-[var(--border-light)] p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="font-semibold text-sm text-[var(--text-primary)]">บันทึกผลบริการใหม่</h4>
+            <button onClick={() => setShowForm(false)}><X className="w-4 h-4 text-[var(--text-muted)]" /></button>
+          </div>
+          <input value={form.serviceName} onChange={e => setForm(f => ({ ...f, serviceName: e.target.value }))} placeholder="ชื่อบริการ เช่น ปรับแต่งวิก, ทำสี *" className={inp} />
+          <textarea value={form.result} onChange={e => setForm(f => ({ ...f, result: e.target.value }))} rows={2} placeholder="ผลการให้บริการ / สิ่งที่ทำ" className={inp + ' resize-none'} />
+          <textarea value={form.recommendations} onChange={e => setForm(f => ({ ...f, recommendations: e.target.value }))} rows={2} placeholder="คำแนะนำสำหรับลูกค้า / ข้อควรระวัง" className={inp + ' resize-none'} />
+          <div className="grid grid-cols-2 gap-3">
+            {(['before','after'] as const).map(which => {
+              const url = which === 'before' ? beforeImg : afterImg
+              return (
+                <label key={which} className="cursor-pointer">
+                  <span className="text-xs text-[var(--text-muted)] block mb-1">{which === 'before' ? 'รูปก่อนทำ' : 'รูปหลังทำ'}</span>
+                  <div className="h-28 rounded-xl border-2 border-dashed border-[var(--border-light)] bg-white flex items-center justify-center overflow-hidden hover:border-[var(--pink-300)] transition-all">
+                    {uploading === which ? <Loader2 className="w-5 h-5 animate-spin text-[var(--pink-300)]" />
+                      : url ? <img src={url} alt={which} className="w-full h-full object-cover" />
+                      : <Upload className="w-5 h-5 text-[var(--text-muted)]" />}
+                  </div>
+                  <input type="file" accept="image/*" className="hidden" onChange={pickImage(which)} />
+                </label>
+              )
+            })}
+          </div>
+          <button onClick={handleSave} disabled={saving}
+            className="w-full py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} บันทึก
+          </button>
+        </div>
+      )}
+
+      {records.length === 0 && !showForm ? (
+        <div className="py-12 text-center space-y-2">
+          <StickyNote className="w-10 h-10 text-[var(--pink-100)] mx-auto" />
+          <p className="text-sm text-[var(--text-muted)]">ยังไม่มีบันทึกผลบริการ</p>
+        </div>
+      ) : records.map(r => (
+        <div key={r.id} className="p-4 bg-white rounded-xl border border-[var(--border-light)] space-y-2">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-semibold text-[var(--text-primary)]">{r.serviceName}</p>
+              <p className="text-xs text-[var(--text-muted)]">{formatDate(r.createdAt)}</p>
+            </div>
+            <button onClick={() => handleDelete(r.id)} className="text-[var(--text-muted)] hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
+          </div>
+          {r.result && <p className="text-sm text-[var(--text-secondary)]">📋 {r.result}</p>}
+          {r.recommendations && <p className="text-sm text-amber-700 bg-amber-50 rounded-lg px-2 py-1.5">💡 {r.recommendations}</p>}
+          {(r.beforeImages?.[0] || r.afterImages?.[0]) && (
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              {r.beforeImages?.[0] && <div><p className="text-[10px] text-[var(--text-muted)] mb-0.5">ก่อน</p><img src={r.beforeImages[0]} alt="ก่อน" className="w-full h-28 object-cover rounded-lg" /></div>}
+              {r.afterImages?.[0] && <div><p className="text-[10px] text-[var(--text-muted)] mb-0.5">หลัง</p><img src={r.afterImages[0]} alt="หลัง" className="w-full h-28 object-cover rounded-lg" /></div>}
+            </div>
+          )}
         </div>
       ))}
     </div>
