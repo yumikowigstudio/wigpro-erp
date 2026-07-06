@@ -162,6 +162,14 @@ service cloud.firestore {
       allow write: if isStaff();
     }
 
+    // Returns / exchanges (คืน-เปลี่ยนสินค้า)
+    match /returns/{returnId} {
+      allow read:   if isStaff() && belongsToCompany(resource.data.companyId);
+      allow create: if isStaff();
+      allow update: if isBranchManager();
+      allow delete: if isOwner();
+    }
+
     // Accounting
     match /expenses/{expenseId} {
       allow read: if hasRole(['super_admin', 'owner', 'branch_manager', 'accountant']);

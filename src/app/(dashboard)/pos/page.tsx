@@ -249,7 +249,7 @@ export default function POSPage() {
 
     const saleData: Record<string, unknown> = {
       companyId, branchId, receiptNo,
-      items: cart.map(c => ({ type: c.type, name: c.name, sku: c.sku ?? null, quantity: c.quantity, unitPrice: c.price, discountAmount: 0, taxType: c.taxType, taxAmount: c.price * c.quantity * 0.07, total: c.price * c.quantity, staffId: c.staffId ?? null, staffName: c.staffName ?? null, commissionAmount: itemCommission(c) })),
+      items: cart.map(c => ({ type: c.type, productId: c.type === 'product' ? c.id : null, name: c.name, sku: c.sku ?? null, quantity: c.quantity, unitPrice: c.price, discountAmount: 0, taxType: c.taxType, taxAmount: c.price * c.quantity * 0.07, total: c.price * c.quantity, staffId: c.staffId ?? null, staffName: c.staffName ?? null, commissionAmount: itemCommission(c) })),
       subtotal, discountAmount: discountAmt, discountPercent: discountType === 'percent' ? discount : 0,
       taxAmount: vatAmt, totalAmount: total,
       payments: [{ method: payMethod, amount: netDue, ...(slipUrl ? { slipUrl } : {}) }],

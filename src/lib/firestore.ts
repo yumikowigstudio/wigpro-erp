@@ -40,6 +40,7 @@ export const COLLECTIONS = {
   WORK_ORDERS: 'work_orders',
   DEPOSITS: 'deposits',
   SALES: 'sales',
+  RETURNS: 'returns',
   EXPENSES: 'expenses',
   COMMISSION_RECORDS: 'commission_records',
   DOCUMENTS: 'documents',
