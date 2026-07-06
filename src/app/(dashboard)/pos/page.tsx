@@ -3,12 +3,12 @@ import { useState, useEffect } from 'react'
 import {
   Search, Plus, Minus, X, ShoppingCart, Tag,
   Banknote, Smartphone, QrCode, CreditCard, Package,
-  Scissors, Check, Loader2, AlertTriangle, Printer, Wallet,
+  Scissors, Check, Loader2, AlertTriangle, Printer, Wallet, Ticket,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { addDocument, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Sale, Product, Service, Deposit, WorkOrder, Employee } from '@/types'
-import { collection, onSnapshot, query, where, getDoc, doc, limit, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { uploadToCloudinary } from '@/lib/cloudinary'
 import { useAuth } from '@/hooks/useAuth'
@@ -83,6 +83,8 @@ export default function POSPage() {
   const [shopInfo, setShopInfo]       = useState<ShopInfo>({ nameTh: 'WigPro' })
   const [employees, setEmployees]     = useState<Employee[]>([])
   const [defaultStaffId, setDefaultStaffId] = useState('')   // พนักงานขายเริ่มต้น (ใส่ให้ทุกรายการที่หยิบใหม่)
+  const [couponCode, setCouponCode]   = useState('')         // รหัสคูปอง
+  const [appliedCoupon, setAppliedCoupon] = useState('')     // ชื่อคูปองที่ใช้แล้ว
   const [slipUrl, setSlipUrl]         = useState('')         // หลักฐานการชำระ (สลิป) สำหรับโอน/QR/บัตร
   const [slipUploading, setSlipUploading] = useState(false)
   const [openDeposits, setOpenDeposits] = useState<Deposit[]>([])  // มัดจำค้างของลูกค้าที่เลือก
@@ -217,6 +219,23 @@ export default function POSPage() {
   }
   const totalCommission = cart.reduce((s, c) => s + itemCommission(c), 0)
 
+  /* ─── คูปอง ─── */
+  const applyCoupon = async () => {
+    if (!couponCode.trim() || !companyId) return
+    try {
+      const snap = await getDocs(query(collection(db, COLLECTIONS.COUPONS),
+        where('companyId', '==', companyId), where('code', '==', couponCode.trim().toUpperCase())))
+      if (snap.empty) { alert('ไม่พบคูปองนี้'); return }
+      const c = snap.docs[0].data()
+      if (c.active === false) { alert('คูปองถูกปิดใช้งาน'); return }
+      if (c.expiryDate && new Date(c.expiryDate) < new Date(new Date().toDateString())) { alert('คูปองหมดอายุแล้ว'); return }
+      setDiscountType(c.discountType === 'amount' ? 'amount' : 'percent')
+      setDiscount(Number(c.discountValue) || 0)
+      setAppliedCoupon(c.code)
+    } catch { alert('ตรวจสอบคูปองไม่สำเร็จ') }
+  }
+  const clearCoupon = () => { setAppliedCoupon(''); setCouponCode(''); setDiscount(0) }
+
   /* ─── Totals ─── */
   const subtotal    = cart.reduce((s, c) => s + c.price * c.quantity, 0)
   const discountAmt = discountType === 'percent' ? subtotal * (discount / 100) : discount
@@ -295,7 +314,7 @@ export default function POSPage() {
     // Show receipt after confirmed save
     setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || netDue) : netDue, change, date: new Date() })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId('')
-    setSlipUrl(''); setAppliedDepositId('')
+    setSlipUrl(''); setAppliedDepositId(''); setCouponCode(''); setAppliedCoupon('')
     setSaving(false)
   }
 
@@ -369,7 +388,7 @@ export default function POSPage() {
     setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, items: [...cart], subtotal, discountAmt, vatAmt, total, depositAmt, remaining, pickupDate, depositNote, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: now })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setDepositInput(''); setPickupDate(''); setDepositNote('')
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
-    setSlipUrl('')
+    setSlipUrl(''); setCouponCode(''); setAppliedCoupon('')
     setSaving(false)
   }
 
@@ -566,6 +585,23 @@ export default function POSPage() {
               {employees.map(e => <option key={e.id} value={e.id}>{empLabel(e)}</option>)}
             </select>
           )}
+
+          {/* คูปอง */}
+          <div className="flex items-center gap-2">
+            <Ticket className="w-4 h-4 text-[var(--text-muted)] shrink-0" />
+            {appliedCoupon ? (
+              <div className="flex-1 flex items-center justify-between px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg">
+                <span className="text-xs font-semibold text-emerald-700">✓ ใช้คูปอง {appliedCoupon}</span>
+                <button onClick={clearCoupon} className="text-xs text-red-500">ยกเลิก</button>
+              </div>
+            ) : (
+              <>
+                <input value={couponCode} onChange={e => setCouponCode(e.target.value)} placeholder="รหัสคูปอง"
+                  className="flex-1 px-3 py-1.5 bg-white border border-[var(--border-light)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]" />
+                <button onClick={applyCoupon} className="px-3 py-1.5 bg-[var(--pink-100)] text-[var(--pink-600)] rounded-lg text-xs font-semibold shrink-0">ใช้</button>
+              </>
+            )}
+          </div>
 
           {/* Discount */}
           <div className="flex items-center gap-2">

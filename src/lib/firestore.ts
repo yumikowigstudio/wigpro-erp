@@ -41,6 +41,7 @@ export const COLLECTIONS = {
   DEPOSITS: 'deposits',
   SALES: 'sales',
   RETURNS: 'returns',
+  COUPONS: 'coupons',
   EXPENSES: 'expenses',
   COMMISSION_RECORDS: 'commission_records',
   DOCUMENTS: 'documents',

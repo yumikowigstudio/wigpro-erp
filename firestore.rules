@@ -170,6 +170,12 @@ service cloud.firestore {
       allow delete: if isOwner();
     }
 
+    // Coupons (คูปองส่วนลด)
+    match /coupons/{couponId} {
+      allow read:   if isStaff();
+      allow write:  if isBranchManager();
+    }
+
     // Accounting
     match /expenses/{expenseId} {
       allow read: if hasRole(['super_admin', 'owner', 'branch_manager', 'accountant']);

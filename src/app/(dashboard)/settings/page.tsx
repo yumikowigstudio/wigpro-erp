@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation'
 import {
   Store, Building2, Users, Receipt, Shield, Bell, Save,
   Loader2, Check, Plus, Edit, Trash2, X, Phone, Mail,
-  MapPin, Hash, UserCog, Eye, EyeOff, Calendar as CalendarIcon,
+  MapPin, Hash, UserCog, Eye, EyeOff, Calendar as CalendarIcon, Ticket,
 } from 'lucide-react'
 import { doc, getDoc, setDoc, serverTimestamp, collection, onSnapshot,
   query, where, addDoc, updateDoc, deleteDoc } from 'firebase/firestore'
@@ -658,6 +658,94 @@ function TaxSection({ companyId }: { companyId: string }) {
 }
 
 /* ═══════════════════════════════════════
+   คูปองส่วนลด
+═══════════════════════════════════════ */
+interface Coupon { id: string; code: string; discountType: 'percent' | 'amount'; discountValue: number; expiryDate?: string; active: boolean; companyId: string }
+
+function CouponSection({ companyId }: { companyId: string }) {
+  const [coupons, setCoupons] = useState<Coupon[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [form, setForm] = useState({ code: '', discountType: 'percent' as 'percent' | 'amount', discountValue: '', expiryDate: '' })
+
+  useEffect(() => {
+    if (!companyId || companyId === 'demo_company') { setLoading(false); return }
+    const q = query(collection(db, COLLECTIONS.COUPONS), where('companyId', '==', companyId))
+    return onSnapshot(q, snap => {
+      setCoupons(snap.docs.map(d => ({ id: d.id, ...d.data() } as Coupon)))
+      setLoading(false)
+    }, () => setLoading(false))
+  }, [companyId])
+
+  const handleAdd = async () => {
+    if (!form.code.trim() || !form.discountValue) { alert('กรอกรหัสคูปองและมูลค่าส่วนลด'); return }
+    if (!companyId || companyId === 'demo_company') { alert('ระบบกำลังโหลดข้อมูล กรุณารอสักครู่'); return }
+    setSaving(true)
+    try {
+      await addDoc(collection(db, COLLECTIONS.COUPONS), {
+        companyId, code: form.code.trim().toUpperCase(),
+        discountType: form.discountType, discountValue: Number(form.discountValue),
+        expiryDate: form.expiryDate || null, active: true,
+        createdAt: serverTimestamp(),
+      })
+      setForm({ code: '', discountType: 'percent', discountValue: '', expiryDate: '' })
+    } catch (e: unknown) { alert('บันทึกไม่สำเร็จ: ' + (e instanceof Error ? e.message : '')) }
+    finally { setSaving(false) }
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('ลบคูปองนี้?')) return
+    await deleteDoc(doc(db, COLLECTIONS.COUPONS, id)).catch(() => {})
+  }
+
+  if (loading) return <div className="py-12 text-center"><Loader2 className="w-6 h-6 text-[var(--pink-300)] animate-spin mx-auto" /></div>
+
+  return (
+    <div className="space-y-5 max-w-lg">
+      <div>
+        <h2 className="text-lg font-bold text-[var(--text-primary)]">คูปองส่วนลด</h2>
+        <p className="text-xs text-[var(--text-muted)] mt-0.5">สร้างรหัสคูปองเพื่อใช้ที่หน้า POS</p>
+      </div>
+
+      <div className="bg-[var(--bg-base)] rounded-2xl border border-[var(--border-light)] p-4 space-y-3">
+        <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} placeholder="รหัสคูปอง เช่น NEWYEAR" className={inputCls} />
+        <div className="grid grid-cols-2 gap-3">
+          <select value={form.discountType} onChange={e => setForm(f => ({ ...f, discountType: e.target.value as 'percent' | 'amount' }))} className={inputCls}>
+            <option value="percent">ส่วนลด %</option>
+            <option value="amount">ส่วนลดบาท</option>
+          </select>
+          <input type="number" value={form.discountValue} onChange={e => setForm(f => ({ ...f, discountValue: e.target.value }))} placeholder={form.discountType === 'percent' ? '%' : 'บาท'} className={inputCls} />
+        </div>
+        <div>
+          <label className="text-xs text-[var(--text-muted)] mb-1 block">วันหมดอายุ (ไม่บังคับ)</label>
+          <input type="date" value={form.expiryDate} onChange={e => setForm(f => ({ ...f, expiryDate: e.target.value }))} className={inputCls} />
+        </div>
+        <button onClick={handleAdd} disabled={saving} className="w-full py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} เพิ่มคูปอง
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        {coupons.length === 0 ? (
+          <p className="text-center text-sm text-[var(--text-muted)] py-6">ยังไม่มีคูปอง</p>
+        ) : coupons.map(c => (
+          <div key={c.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-[var(--border-light)]">
+            <Ticket className="w-4 h-4 text-[var(--pink-400)] shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-[var(--text-primary)]">{c.code}</p>
+              <p className="text-xs text-[var(--text-muted)]">
+                ลด {c.discountType === 'percent' ? `${c.discountValue}%` : `${c.discountValue} บาท`}{c.expiryDate ? ` · ถึง ${c.expiryDate}` : ''}
+              </p>
+            </div>
+            <button onClick={() => handleDelete(c.id)} className="text-[var(--text-muted)] hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════
    Google Calendar
 ═══════════════════════════════════════ */
 function GoogleSection({ userId }: { userId: string }) {
@@ -782,6 +870,7 @@ const SECTIONS = [
   { id: 'staff',       label: 'พนักงาน',          icon: Users        },
   { id: 'permissions', label: 'สิทธิ์การใช้งาน', icon: Shield       },
   { id: 'tax',         label: 'ภาษี & การเงิน',   icon: Receipt      },
+  { id: 'coupons',     label: 'คูปองส่วนลด',      icon: Ticket       },
   { id: 'google',      label: 'Google Calendar',  icon: CalendarIcon },
   { id: 'notifications', label: 'การแจ้งเตือน',  icon: Bell         },
 ]
@@ -835,6 +924,7 @@ function SettingsInner() {
           {activeSection === 'staff'       && <StaffSection companyId={companyId} branches={branches} />}
           {activeSection === 'permissions' && <PermissionsSection companyId={companyId} branches={branches} />}
           {activeSection === 'tax'         && <TaxSection companyId={companyId} />}
+          {activeSection === 'coupons'     && <CouponSection companyId={companyId} />}
           {activeSection === 'google'      && <GoogleSection userId={userId} />}
           {activeSection === 'notifications' && (
             <div className="py-20 text-center">
