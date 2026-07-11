@@ -8,7 +8,7 @@ import {
 import { formatCurrency } from '@/lib/utils'
 import { addDocument, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { Sale, Product, Service, Deposit, WorkOrder, Employee } from '@/types'
-import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, updateDoc, serverTimestamp, increment } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { uploadToCloudinary } from '@/lib/cloudinary'
 import { useAuth } from '@/hooks/useAuth'
@@ -289,6 +289,18 @@ export default function POSPage() {
       setSaving(false)
       return
     }
+
+    // ตัดสต๊อกสินค้า (เฉพาะ product) + บันทึกการเคลื่อนไหว 'out' (best-effort — ขายบันทึกแล้ว)
+    cart.filter(c => c.type === 'product').forEach(c => {
+      updateDoc(doc(db, COLLECTIONS.PRODUCTS, c.id), {
+        stockQty: increment(-c.quantity), updatedAt: serverTimestamp(),
+      }).catch(err => console.error('Stock decrement error:', err))
+      addDocument(COLLECTIONS.STOCK_MOVEMENTS, {
+        companyId, branchId, productId: c.id, productName: c.name,
+        type: 'out', quantity: c.quantity, referenceType: 'sale', referenceNo: receiptNo,
+        notes: `ขายบิล ${receiptNo}`,
+      } as never).catch(err => console.error('Stock movement error:', err))
+    })
 
     // เขียน commission_records ต่อรายการที่ระบุพนักงานขาย (best-effort — ขายบันทึกแล้ว)
     const monthKey = `${now.getFullYear()}-${mm}`
