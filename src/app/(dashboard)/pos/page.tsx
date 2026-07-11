@@ -6,7 +6,7 @@ import {
   Scissors, Check, Loader2, AlertTriangle, Printer, Wallet, Ticket,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import { addDocument, COLLECTIONS, convertTimestamps } from '@/lib/firestore'
+import { addDocument, COLLECTIONS, convertTimestamps, generateWigOrderNo } from '@/lib/firestore'
 import { Sale, Product, Service, Deposit, WorkOrder, Employee } from '@/types'
 import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, updateDoc, serverTimestamp, increment } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
@@ -347,10 +347,6 @@ export default function POSPage() {
     const depositNo   = `DEP-${mm}${yy}${ts}`
     const saleOrderId = depositNo
 
-    // Work order number: branch+month+BE year+seq (local fallback)
-    const beYear  = String(now.getFullYear() + 543).slice(-2)
-    const orderNo = `01${mm}${beYear}${ts}`
-
     const notesStr = [depositNote, pickupDate ? `นัดรับ: ${pickupDate}` : ''].filter(Boolean).join(' | ')
     const custName = customerName || 'ลูกค้าทั่วไป'
     const custId   = customerId   || ''
@@ -377,6 +373,8 @@ export default function POSPage() {
     }
 
     if (createWorkOrder) {
+      // เลขออเดอร์วิกรันตามสาขา: [สาขา2หลัก][เดือน][ปีพ.ศ.][ลำดับ4หลัก] เช่น 0105690001
+      const orderNo = await generateWigOrderNo(companyId, branchId)
       const woData: Record<string, unknown> = {
         companyId, branchId, orderNo,
         customerId: custId, customerName: custName,

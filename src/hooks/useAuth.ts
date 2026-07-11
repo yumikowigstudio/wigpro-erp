@@ -6,6 +6,7 @@ import { auth, db } from '@/lib/firebase'
 import { getCollection, COLLECTIONS, where } from '@/lib/firestore'
 import { useAuthStore } from '@/store/authStore'
 import { User, Branch } from '@/types'
+import { toast } from 'sonner'
 
 // ───────────────────────────────────────────────────────────────
 // Auth listener เป็น "singleton" — ตั้งครั้งเดียวทั้งแอป
@@ -69,44 +70,18 @@ function startAuthListener() {
               }
             }
           } else {
-            // ── Auto-bootstrap: user logged in via Firebase Auth แต่ยังไม่มี Firestore user doc ──
-            // หา company + branch แรกที่มีในระบบ แล้วสร้าง user doc อัตโนมัติ
-            try {
-              // หา company แรก
-              const companySnap = await getDocs(query(collection(db, COLLECTIONS.COMPANIES), limit(1)))
-              let autoCompanyId = 'company001'
-              if (!companySnap.empty) autoCompanyId = companySnap.docs[0].id
-
-              // หา branch แรกของ company นั้น
-              const branchSnap = await getDocs(query(
-                collection(db, COLLECTIONS.BRANCHES),
-                fsWhere('companyId', '==', autoCompanyId),
-                limit(1),
-              ))
-              let autoBranchId = ''
-              if (!branchSnap.empty) autoBranchId = branchSnap.docs[0].id
-
-              // สร้าง user document
-              const newUserData = {
-                email:       fbUser.email   ?? '',
-                displayName: fbUser.displayName ?? fbUser.email?.split('@')[0] ?? 'Admin',
-                role:        'owner' as const,
-                companyId:   autoCompanyId,
-                branchId:    autoBranchId,
-                isActive:    true,
-                permissions: [],
-                createdAt:   serverTimestamp(),
-                updatedAt:   serverTimestamp(),
-              }
-              await setDoc(doc(db, COLLECTIONS.USERS, fbUser.uid), newUserData)
-              console.log('✅ Auto-created user document for', fbUser.email, '→ companyId:', autoCompanyId)
-              // onSnapshot จะ trigger อีกครั้งหลัง setDoc สำเร็จ
-            } catch (err) {
-              console.error('Auto-bootstrap user error:', err)
-              setUser(null)
-              setLoading(false)
-            }
-            return // รอ onSnapshot trigger ใหม่
+            // ── ไม่มีโปรไฟล์ผู้ใช้ = ยังไม่ได้รับสิทธิ์เข้าใช้งาน ──
+            // ⚠️ SECURITY: ห้ามสร้าง user เป็น 'owner' อัตโนมัติ (เดิมทำแบบนั้น = ใครสมัคร
+            // Firebase Auth ได้ก็กลายเป็นเจ้าของร้านทันที) ผู้ดูแลต้องเป็นคนสร้างผู้ใช้ให้ก่อน
+            // ที่ ตั้งค่า → สิทธิ์การใช้งาน (เจ้าของร้านคนแรกตั้งค่า doc ผ่าน Firebase Console ครั้งเดียว)
+            console.warn('No user profile for', fbUser.email, '— access denied, signing out')
+            toast.error('บัญชีนี้ยังไม่ได้รับสิทธิ์เข้าใช้งาน กรุณาติดต่อผู้ดูแลระบบ')
+            setUser(null)
+            setBranches([])
+            setCurrentBranch(null)
+            setLoading(false)
+            await signOut(auth)
+            return
           }
           setLoading(false)
         }, (err) => {
