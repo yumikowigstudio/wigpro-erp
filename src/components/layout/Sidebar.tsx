@@ -9,7 +9,7 @@ import {
   Warehouse, Scissors, CreditCard, BarChart3, Settings,
   ChevronLeft, ChevronRight, UserCog, BookOpen,
   Bell, FileText, Star, LogOut, Building2,
-  ChevronDown, ChevronUp, Factory, Receipt, TrendingUp, Undo2,
+  ChevronDown, ChevronUp, Factory, Receipt, TrendingUp, Undo2, ShieldCheck,
 } from 'lucide-react'
 
 interface NavItem {
@@ -44,6 +44,7 @@ const navItems: NavItem[] = [
   { href: '/reports',     label: 'รายงาน',        icon: BarChart3,  group: 'การเงิน' },
   { href: '/staff',       label: 'พนักงาน',       icon: UserCog,    group: 'จัดการ', roles: ['super_admin','owner','branch_manager'] },
   { href: '/settings',    label: 'ตั้งค่า',       icon: Settings,   group: 'จัดการ', roles: ['super_admin','owner','branch_manager'] },
+  { href: '/admin',       label: 'หลังบ้าน (Admin)', icon: ShieldCheck, group: 'จัดการ', roles: ['super_admin'] },
 ]
 
 function NavGroup({ label, collapsed }: { label: string; collapsed: boolean }) {

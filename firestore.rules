@@ -35,34 +35,38 @@ service cloud.firestore {
       return isAuthenticated() && getUserData().companyId == companyId;
     }
 
-    // Companies
+    // Companies — super_admin (เจ้าของระบบ) เห็น/จัดการทุกร้านได้
     match /companies/{companyId} {
-      allow read: if belongsToCompany(companyId);
+      allow read: if isSuperAdmin() || belongsToCompany(companyId);
       allow write: if isSuperAdmin();
     }
 
-    // Branches
+    // Branches — super_admin ข้ามร้านได้
     match /branches/{branchId} {
-      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow read: if isSuperAdmin() || (isStaff() && belongsToCompany(resource.data.companyId));
       allow write: if isOwner();
     }
 
     // Users
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isBranchManager());
-      // Allow self-create: ผู้ใช้ที่ login แล้วสามารถสร้าง doc ตัวเองได้ (bootstrap แรก)
-      // Allow owner to create other users
-      allow create: if isAuthenticated() && request.auth.uid == userId
-                    || isOwner();
-      // Self-update allowed, but a user must NOT change their own role or companyId
-      // (prevents privilege escalation). Owners/managers may change those fields.
-      allow update: if isOwner()
-                    || (isAuthenticated() && isBranchManager()
-                        && request.resource.data.companyId == resource.data.companyId)
+      // สร้างผู้ใช้: super_admin ทำได้ทุกอย่าง · owner สร้างได้แต่ห้ามตั้งเป็น super_admin
+      allow create: if isSuperAdmin()
+                    || (isOwner() && request.resource.data.role != 'super_admin')
+                    || (isAuthenticated() && request.auth.uid == userId
+                        && request.resource.data.role != 'super_admin');
+      // แก้ไข: super_admin ทำได้ทุกอย่าง · owner/manager จัดการผู้ใช้ในบริษัทเดียวกันได้
+      // แต่ห้ามแตะ role super_admin (ทั้งตั้งขึ้นและแก้ของที่เป็นอยู่) — กันยกระดับเป็นเจ้าของระบบ
+      // · ตัวเองแก้ได้แต่ห้ามเปลี่ยน role/companyId
+      allow update: if isSuperAdmin()
+                    || (isBranchManager()
+                        && request.resource.data.companyId == resource.data.companyId
+                        && request.resource.data.role != 'super_admin'
+                        && resource.data.role != 'super_admin')
                     || (isAuthenticated() && request.auth.uid == userId
                         && request.resource.data.role == resource.data.role
                         && request.resource.data.companyId == resource.data.companyId);
-      allow delete: if isOwner();
+      allow delete: if isSuperAdmin() || (isOwner() && resource.data.role != 'super_admin');
     }
 
     // Employees
