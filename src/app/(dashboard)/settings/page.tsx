@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation'
 import {
   Store, Building2, Users, Receipt, Shield, Bell, Save,
   Loader2, Check, Plus, Edit, Trash2, X, Phone, Mail,
-  MapPin, Hash, UserCog, Eye, EyeOff, Calendar as CalendarIcon, Ticket,
+  MapPin, Hash, UserCog, Eye, EyeOff, Calendar as CalendarIcon, Ticket, MessageCircle,
 } from 'lucide-react'
 import { doc, getDoc, setDoc, serverTimestamp, collection, onSnapshot,
   query, where, addDoc, updateDoc, deleteDoc } from 'firebase/firestore'
@@ -658,6 +658,58 @@ function TaxSection({ companyId }: { companyId: string }) {
 }
 
 /* ═══════════════════════════════════════
+   LINE OA
+═══════════════════════════════════════ */
+function LineSection() {
+  const [origin, setOrigin] = useState('')
+  const [copied, setCopied] = useState(false)
+  useEffect(() => { setOrigin(window.location.origin) }, [])
+  const webhookUrl = `${origin}/api/line/webhook`
+  const copy = () => { navigator.clipboard.writeText(webhookUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) }) }
+
+  return (
+    <div className="space-y-5 max-w-lg">
+      <div>
+        <h2 className="text-lg font-bold text-[var(--text-primary)]">เชื่อมต่อ LINE Official Account</h2>
+        <p className="text-xs text-[var(--text-muted)] mt-0.5">รับข้อความลูกค้า/สลิป + ตอบกลับอัตโนมัติ</p>
+      </div>
+
+      <div className="bg-[var(--bg-base)] rounded-2xl border border-[var(--border-light)] p-4 space-y-3">
+        <div>
+          <label className="text-xs font-semibold text-[var(--text-secondary)] mb-1 block">1. Webhook URL (คัดลอกไปใส่ใน LINE Developers)</label>
+          <div className="flex gap-2">
+            <input readOnly value={webhookUrl} className={`${inputCls} font-mono text-xs`} />
+            <button onClick={copy} className="px-3 py-2 bg-[var(--pink-100)] text-[var(--pink-600)] rounded-xl text-xs font-semibold shrink-0">
+              {copied ? '✓ คัดลอกแล้ว' : 'คัดลอก'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="text-sm text-[var(--text-secondary)] space-y-2.5">
+        <p className="font-semibold text-[var(--text-primary)]">ขั้นตอนตั้งค่า:</p>
+        <ol className="list-decimal list-inside space-y-1.5 text-xs leading-relaxed">
+          <li>สร้าง <b>LINE Official Account</b> ที่ <span className="font-mono">manager.line.biz</span></li>
+          <li>ไปที่ <span className="font-mono">developers.line.biz</span> → สร้าง <b>Messaging API channel</b></li>
+          <li>คัดลอก <b>Channel access token</b> และ <b>Channel secret</b></li>
+          <li>ใส่ลงใน Vercel → Settings → Environment Variables:
+            <div className="mt-1 bg-[var(--bg-base)] rounded-lg p-2 font-mono text-[11px]">
+              LINE_CHANNEL_ACCESS_TOKEN=...<br/>LINE_CHANNEL_SECRET=...
+            </div>
+          </li>
+          <li>ใน LINE Developers → ช่อง <b>Webhook URL</b> → วาง URL ด้านบน → เปิด <b>Use webhook</b></li>
+          <li>Redeploy Vercel → ทดสอบส่งข้อความหา OA ดูว่าบอทตอบกลับ</li>
+        </ol>
+      </div>
+
+      <div className="text-[11px] text-[var(--text-muted)] bg-amber-50 border border-amber-200 rounded-xl p-3">
+        📌 ตอนนี้บอทตอบข้อความพื้นฐาน (ทักทาย/จองคิว/รับสลิป) ได้แล้ว · การยืนยันสลิปอัตโนมัติ (OCR) และส่งใบเสร็จผ่าน LINE จะทำในเฟสถัดไป
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════
    คูปองส่วนลด
 ═══════════════════════════════════════ */
 interface Coupon { id: string; code: string; discountType: 'percent' | 'amount'; discountValue: number; expiryDate?: string; active: boolean; companyId: string }
@@ -871,6 +923,7 @@ const SECTIONS = [
   { id: 'permissions', label: 'สิทธิ์การใช้งาน', icon: Shield       },
   { id: 'tax',         label: 'ภาษี & การเงิน',   icon: Receipt      },
   { id: 'coupons',     label: 'คูปองส่วนลด',      icon: Ticket       },
+  { id: 'line',        label: 'LINE OA',          icon: MessageCircle },
   { id: 'google',      label: 'Google Calendar',  icon: CalendarIcon },
   { id: 'notifications', label: 'การแจ้งเตือน',  icon: Bell         },
 ]
@@ -925,6 +978,7 @@ function SettingsInner() {
           {activeSection === 'permissions' && <PermissionsSection companyId={companyId} branches={branches} />}
           {activeSection === 'tax'         && <TaxSection companyId={companyId} />}
           {activeSection === 'coupons'     && <CouponSection companyId={companyId} />}
+          {activeSection === 'line'        && <LineSection />}
           {activeSection === 'google'      && <GoogleSection userId={userId} />}
           {activeSection === 'notifications' && (
             <div className="py-20 text-center">
