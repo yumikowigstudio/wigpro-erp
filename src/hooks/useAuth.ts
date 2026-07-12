@@ -1,7 +1,7 @@
 'use client'
 import { useEffect } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
-import { doc, onSnapshot, setDoc, serverTimestamp, getDocs, collection, query, where as fsWhere, limit } from 'firebase/firestore'
+import { doc, onSnapshot, setDoc, serverTimestamp, collection, addDoc } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
 import { getCollection, COLLECTIONS, where } from '@/lib/firestore'
 import { useAuthStore } from '@/store/authStore'
@@ -70,10 +70,34 @@ function startAuthListener() {
               }
             }
           } else {
-            // ── ไม่มีโปรไฟล์ผู้ใช้ = ยังไม่ได้รับสิทธิ์เข้าใช้งาน ──
-            // ⚠️ SECURITY: ห้ามสร้าง user เป็น 'owner' อัตโนมัติ (เดิมทำแบบนั้น = ใครสมัคร
-            // Firebase Auth ได้ก็กลายเป็นเจ้าของร้านทันที) ผู้ดูแลต้องเป็นคนสร้างผู้ใช้ให้ก่อน
-            // ที่ ตั้งค่า → สิทธิ์การใช้งาน (เจ้าของร้านคนแรกตั้งค่า doc ผ่าน Firebase Console ครั้งเดียว)
+            // ── ไม่มีโปรไฟล์ผู้ใช้ ──
+            const founderEmail = (process.env.NEXT_PUBLIC_SUPER_ADMIN_EMAIL || 'yumikosystem@gmail.com').toLowerCase()
+            if (fbUser.email && fbUser.email.toLowerCase() === founderEmail) {
+              // ── ตั้งเจ้าของระบบคนแรก (founder) อัตโนมัติ — เฉพาะอีเมลนี้เท่านั้น ──
+              // (คนอื่นที่ไม่มีโปรไฟล์จะถูกเซ็นเอาต์ ไม่กลายเป็น admin)
+              try {
+                await setDoc(doc(db, COLLECTIONS.USERS, fbUser.uid), {
+                  email: fbUser.email, displayName: fbUser.displayName ?? 'Super Admin',
+                  role: 'super_admin', companyId: '', branchId: '', isActive: true, permissions: [],
+                  createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+                })
+                const companyRef = await addDoc(collection(db, COLLECTIONS.COMPANIES), {
+                  name: 'ร้านของฉัน', status: 'active', ownerEmail: fbUser.email, createdAt: serverTimestamp(),
+                })
+                const branchRef = await addDoc(collection(db, COLLECTIONS.BRANCHES), {
+                  companyId: companyRef.id, name: 'สาขาหลัก', code: '01', isMainBranch: true, status: 'active', createdAt: serverTimestamp(),
+                })
+                await setDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyRef.id), { nameTh: 'ร้านของฉัน', createdAt: serverTimestamp() }, { merge: true })
+                await setDoc(doc(db, COLLECTIONS.USERS, fbUser.uid), { companyId: companyRef.id, branchId: branchRef.id, updatedAt: serverTimestamp() }, { merge: true })
+                console.log('✅ Founder super_admin bootstrapped:', fbUser.email)
+                return // onSnapshot จะ trigger ใหม่พร้อมโปรไฟล์
+              } catch (e) {
+                console.error('Founder bootstrap error:', e)
+                toast.error('ตั้งค่าเจ้าของระบบไม่สำเร็จ: ' + (e instanceof Error ? e.message : ''))
+                setUser(null); setLoading(false); await signOut(auth); return
+              }
+            }
+            // ไม่ใช่ founder → ปฏิเสธ (กันบัญชีสมัครใหม่ยกระดับเป็นเจ้าของ)
             console.warn('No user profile for', fbUser.email, '— access denied, signing out')
             toast.error('บัญชีนี้ยังไม่ได้รับสิทธิ์เข้าใช้งาน กรุณาติดต่อผู้ดูแลระบบ')
             setUser(null)

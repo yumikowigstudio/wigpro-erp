@@ -51,8 +51,11 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isBranchManager());
       // สร้างผู้ใช้: super_admin ทำได้ทุกอย่าง · owner สร้างได้แต่ห้ามตั้งเป็น super_admin
+      // · founder (อีเมลเจ้าของระบบ) สร้างโปรไฟล์ super_admin ตัวเองได้ครั้งแรก (bootstrap)
       allow create: if isSuperAdmin()
                     || (isOwner() && request.resource.data.role != 'super_admin')
+                    || (isAuthenticated() && request.auth.uid == userId
+                        && request.auth.token.email == 'yumikosystem@gmail.com')
                     || (isAuthenticated() && request.auth.uid == userId
                         && request.resource.data.role != 'super_admin');
       // แก้ไข: super_admin ทำได้ทุกอย่าง · owner/manager จัดการผู้ใช้ในบริษัทเดียวกันได้
