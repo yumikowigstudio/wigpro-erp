@@ -62,7 +62,8 @@ function NavItemComponent({ item, collapsed, depth = 0 }: { item: NavItem; colla
   const { user } = useAuth()
   const [open, setOpen] = useState(false)
 
-  if (item.roles && user && !item.roles.includes(user.role)) return null
+  // ซ่อนเมนูที่จำกัด role ถ้ายังไม่มี user หรือ role ไม่อยู่ในรายการ (กันเมนูโผล่ตอนโหลด)
+  if (item.roles && (!user || !item.roles.includes(user.role))) return null
 
   const isActive = item.href
     ? pathname === item.href || pathname.startsWith(item.href + '/')
