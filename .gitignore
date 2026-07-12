@@ -13,6 +13,11 @@
 # testing
 /coverage
 
+# backups & service account key (ห้าม commit — เป็นความลับ/ข้อมูลลูกค้า)
+/backups
+serviceAccountKey.json
+*serviceAccount*.json
+
 # next.js
 /.next/
 /out/

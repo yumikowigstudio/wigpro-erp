@@ -6,7 +6,8 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "backup": "node scripts/backup.mjs"
   },
   "dependencies": {
     "@firebase/auth": "^1.13.2",
@@ -40,6 +41,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.7",
+    "firebase-admin": "^14.1.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
