@@ -9,7 +9,7 @@ import {
   Warehouse, Scissors, CreditCard, BarChart3, Settings,
   ChevronLeft, ChevronRight, UserCog, BookOpen,
   Bell, FileText, Star, LogOut, Building2,
-  ChevronDown, ChevronUp, Factory, Receipt, TrendingUp, Undo2, ShieldCheck,
+  ChevronDown, ChevronUp, Factory, Receipt, TrendingUp, Undo2, ShieldCheck, ArrowLeftRight,
 } from 'lucide-react'
 
 interface NavItem {
@@ -37,6 +37,7 @@ const navItems: NavItem[] = [
   },
   { href: '/production',  label: 'งานผลิตวิก',   icon: Factory,   group: 'คลัง' },
   { href: '/returns',     label: 'คืน/เปลี่ยนสินค้า', icon: Undo2,  group: 'คลัง' },
+  { href: '/transfers',   label: 'โอนสินค้า',     icon: ArrowLeftRight, group: 'คลัง' },
   { href: '/deposits',    label: 'มัดจำ',         icon: CreditCard, group: 'การเงิน' },
   { href: '/quotations',  label: 'ใบเสนอราคา',    icon: FileText,   group: 'การเงิน' },
   { href: '/accounting',  label: 'บัญชี',         icon: Receipt,    group: 'การเงิน' },
