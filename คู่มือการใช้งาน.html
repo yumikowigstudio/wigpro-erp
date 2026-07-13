@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>คู่มือการใช้งาน WigPro ERP</title>
+<style>
+  :root { --pink:#e879a0; --pink2:#f472b6; --pinkd:#c2477a; --bg:#fdf6fa; --card:#fff; --line:#f0e0ea; --ink:#3a2a34; --muted:#8a7a84; }
+  * { box-sizing:border-box; }
+  body { font-family:'Sarabun','Segoe UI',sans-serif; background:var(--bg); color:var(--ink); margin:0; line-height:1.65; }
+  a { color:var(--pinkd); }
+  .layout { display:flex; max-width:1150px; margin:0 auto; }
+  /* Sidebar TOC */
+  nav { position:sticky; top:0; align-self:flex-start; width:260px; height:100vh; overflow-y:auto; padding:22px 14px; border-right:1px solid var(--line); background:#fff; flex-shrink:0; }
+  nav .brand { display:flex; align-items:center; gap:10px; margin-bottom:18px; padding-left:6px; }
+  nav .logo { width:40px; height:40px; border-radius:12px; background:linear-gradient(135deg,var(--pink2),var(--pinkd)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:20px; }
+  nav .brand b { font-size:16px; } nav .brand span { font-size:11px; color:var(--muted); display:block; }
+  nav a { display:block; padding:7px 12px; border-radius:9px; color:var(--ink); text-decoration:none; font-size:13.5px; }
+  nav a:hover { background:var(--bg); }
+  nav .grp { font-size:11px; color:var(--muted); margin:14px 0 4px 12px; text-transform:uppercase; letter-spacing:.5px; }
+  main { flex:1; min-width:0; padding:32px 40px 80px; }
+  h1 { font-size:30px; margin:0 0 4px; color:var(--pinkd); }
+  .sub { color:var(--muted); margin-bottom:28px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:24px 28px; margin-bottom:20px; scroll-margin-top:16px; }
+  section h2 { font-size:20px; margin:0 0 4px; color:var(--pinkd); display:flex; align-items:center; gap:10px; }
+  section h2 .n { width:30px; height:30px; border-radius:9px; background:var(--bg); color:var(--pink); display:inline-flex; align-items:center; justify-content:center; font-size:15px; font-weight:800; flex-shrink:0; }
+  section .what { color:var(--muted); font-size:14px; margin:6px 0 14px; }
+  h3 { font-size:15px; margin:16px 0 6px; }
+  ol, ul { margin:6px 0 6px; padding-left:22px; }
+  li { margin:3px 0; }
+  .tip { background:#fff8e0; border:1px solid #f0d890; border-radius:12px; padding:10px 14px; font-size:13px; margin:12px 0; }
+  .warn { background:#fdeaea; border:1px solid #eebfbf; border-radius:12px; padding:10px 14px; font-size:13px; margin:12px 0; color:#a03030; }
+  code { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:13px; }
+  .path { color:var(--pinkd); font-weight:600; }
+  @media (max-width:820px){ nav{display:none;} main{padding:22px;} }
+  @media print { nav{display:none;} main{padding:0;} section{break-inside:avoid; box-shadow:none;} body{background:#fff;} }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div class="brand"><div class="logo">W</div><div><b>WigPro ERP</b><span>คู่มือการใช้งาน</span></div></div>
+  <div class="grp">เริ่มต้น</div>
+  <a href="#start">เข้าสู่ระบบ</a>
+  <a href="#setup">ตั้งค่าร้านครั้งแรก</a>
+  <a href="#dashboard">แดชบอร์ด</a>
+  <div class="grp">งานขาย</div>
+  <a href="#pos">ขายหน้าร้าน (POS)</a>
+  <a href="#deposit">รับมัดจำ + สั่งทำวิก</a>
+  <a href="#return">คืน/เปลี่ยนสินค้า</a>
+  <div class="grp">ลูกค้า & นัดหมาย</div>
+  <a href="#customer">ลูกค้า (CRM)</a>
+  <a href="#appointment">นัดหมาย</a>
+  <a href="#member">สมาชิก</a>
+  <div class="grp">คลังสินค้า</div>
+  <a href="#product">สินค้า</a>
+  <a href="#stock">สต๊อก</a>
+  <a href="#transfer">โอนสินค้าข้ามสาขา</a>
+  <a href="#production">งานผลิตวิก</a>
+  <div class="grp">การเงิน</div>
+  <a href="#depositpage">มัดจำ (ติดตามยอด)</a>
+  <a href="#quotation">ใบเสนอราคา</a>
+  <a href="#accounting">บัญชี</a>
+  <a href="#commission">คอมมิชชั่น</a>
+  <a href="#report">รายงาน</a>
+  <div class="grp">ตั้งค่า</div>
+  <a href="#settings">ตั้งค่าระบบ</a>
+  <a href="#faq">ปัญหาที่พบบ่อย</a>
+</nav>
+<main>
+  <h1>คู่มือการใช้งาน WigPro ERP</h1>
+  <p class="sub">ระบบบริหารร้านวิกผมและร้านตัดผม — ครบทุกฟังก์ชัน ใช้ง่าย</p>
+
+  <section id="start">
+    <h2><span class="n">1</span> เข้าสู่ระบบ</h2>
+    <p class="what">เริ่มใช้งานระบบ</p>
+    <ol>
+      <li>เปิดเว็บเบราว์เซอร์ (แนะนำ Chrome) → ไปที่ลิงก์ระบบที่ได้รับ</li>
+      <li>กรอก <b>อีเมล</b> และ <b>รหัสผ่าน</b> ที่ได้รับ → กด <b>เข้าสู่ระบบ</b></li>
+      <li>ลืมรหัสผ่าน? กด <b>ลืมรหัสผ่าน</b> → ระบบส่งลิงก์รีเซ็ตไปที่อีเมล</li>
+    </ol>
+    <div class="tip">💡 กด "เพิ่มลงหน้าจอโฮม" บนมือถือ เพื่อใช้เหมือนแอป</div>
+  </section>
+
+  <section id="setup">
+    <h2><span class="n">2</span> ตั้งค่าร้านครั้งแรก (ทำก่อนเริ่มขาย)</h2>
+    <p class="what">กรอกข้อมูลร้านให้ครบ เพื่อให้ใบเสร็จสมบูรณ์</p>
+    <ol>
+      <li>ไป <span class="path">ตั้งค่า → ข้อมูลร้าน</span> → กรอกชื่อร้าน, ที่อยู่, เบอร์, เลขผู้เสียภาษี, โลโก้ → บันทึก</li>
+      <li><span class="path">ตั้งค่า → สาขา</span> → เพิ่มสาขา (ถ้ามีหลายสาขา)</li>
+      <li><span class="path">ตั้งค่า → พนักงาน</span> → เพิ่มพนักงาน + กำหนด % ค่าคอมมิชชั่น</li>
+      <li><span class="path">ตั้งค่า → ภาษี & การเงิน</span> → ตั้ง VAT (7%) และข้อความท้ายใบเสร็จ</li>
+      <li>เพิ่มสินค้าและบริการ (ดูหัวข้อ "สินค้า")</li>
+    </ol>
+  </section>
+
+  <section id="dashboard">
+    <h2><span class="n">3</span> แดชบอร์ด</h2>
+    <p class="what">ภาพรวมธุรกิจในหน้าเดียว</p>
+    <ul>
+      <li>ดูยอดขาย, คิววันนี้, งานผลิตค้าง, ลูกค้าใหม่</li>
+      <li>กราฟรายได้ 6 เดือน + สินค้าใกล้หมด</li>
+      <li>เลือกช่วงเวลา (วันนี้/สัปดาห์/เดือน/ปี) มุมขวาบน</li>
+    </ul>
+  </section>
+
+  <section id="pos">
+    <h2><span class="n">4</span> ขายหน้าร้าน (POS)</h2>
+    <p class="what">คิดเงิน ออกใบเสร็จ พร้อมส่วนลด/คูปอง/คอมมิชชั่น</p>
+    <h3>ขายปกติ</h3>
+    <ol>
+      <li>เลือกแท็บ <b>สินค้า</b> หรือ <b>บริการ</b> → กดสินค้าเพื่อใส่ตะกร้า (กด +/− ปรับจำนวน)</li>
+      <li>(ไม่บังคับ) ค้นหา/เลือก <b>ลูกค้า</b> ทางขวา</li>
+      <li>(ไม่บังคับ) เลือก <b>ผู้ขาย</b> ใต้แต่ละรายการ → ระบบคิดค่าคอมให้อัตโนมัติ</li>
+      <li>ใส่ <b>ส่วนลด</b> (% หรือ บาท) หรือ <b>รหัสคูปอง</b> แล้วกด "ใช้"</li>
+      <li>เลือกวิธีชำระ: เงินสด / โอน / QR / บัตร (โอน/QR/บัตร แนบสลิปได้)</li>
+      <li>กด <b>ชำระเงิน</b> → กด <b>พิมพ์ใบเสร็จ</b> (เลือก Save as PDF ได้)</li>
+    </ol>
+    <h3>หักมัดจำเดิม</h3>
+    <p>ถ้าลูกค้าเคยวางมัดจำไว้ → เลือกลูกค้าคนนั้น → จะมีกล่อง "หักมัดจำเดิม" ให้ติ๊ก → ยอดชำระจะลดลง</p>
+    <div class="tip">💡 การขายจะตัดสต๊อกให้อัตโนมัติ</div>
+  </section>
+
+  <section id="deposit">
+    <h2><span class="n">5</span> รับมัดจำ + สั่งทำวิก</h2>
+    <p class="what">รับเงินมัดจำ + สร้างใบสั่งผลิตวิกอัตโนมัติ</p>
+    <ol>
+      <li>ที่ POS กดปุ่ม <b>วางมัดจำ</b> (มุมขวาบนของตะกร้า)</li>
+      <li>เลือกลูกค้า + ใส่สินค้า/วิก + กรอกรายละเอียดวิก (ประเภท/สี/ความยาว)</li>
+      <li>ใส่ <b>ยอดมัดจำ</b> + วันนัดรับ → กด <b>รับมัดจำ</b></li>
+      <li>ระบบออกใบมัดจำ (แสดงยอดเต็ม/มัดจำ/คงเหลือ) + สร้างใบสั่งผลิตวิกอัตโนมัติ พร้อมเลขออเดอร์รันตามสาขา</li>
+    </ol>
+  </section>
+
+  <section id="return">
+    <h2><span class="n">6</span> คืน / เปลี่ยนสินค้า</h2>
+    <p class="what">รับคืนสินค้า + คืนสต๊อกอัตโนมัติ</p>
+    <ol>
+      <li>เมนู <span class="path">คืน/เปลี่ยนสินค้า</span> → ใส่ <b>เลขที่ใบเสร็จ</b> (RCP-...) → ค้นหา</li>
+      <li>เลือกจำนวนที่จะคืนของแต่ละรายการ + เลือกวิธีคืนเงิน</li>
+      <li>กด <b>ยืนยันคืนสินค้า</b> → สต๊อกจะเพิ่มกลับอัตโนมัติ</li>
+    </ol>
+    <p><b>เปลี่ยนสินค้า:</b> คืนของเก่า แล้วขายชิ้นใหม่ที่ POS</p>
+  </section>
+
+  <section id="customer">
+    <h2><span class="n">7</span> ลูกค้า (CRM)</h2>
+    <p class="what">เก็บข้อมูลลูกค้าครบทุกด้าน</p>
+    <h3>เพิ่มลูกค้า</h3>
+    <ol><li>เมนู <span class="path">ลูกค้า → เพิ่มลูกค้า</span> → กรอกข้อมูล + เคส (คีโม/ผมบาง ฯลฯ) + ขนาดศีรษะ → บันทึก</li></ol>
+    <h3>เปิดข้อมูลลูกค้า (แท็บต่างๆ)</h3>
+    <ul>
+      <li><b>ภาพรวม</b> — ข้อมูลหลัก</li>
+      <li><b>รูปภาพ</b> — อัปโหลดรูป Before/After, ใบเสร็จ, ใบออเดอร์วิก</li>
+      <li><b>ผลบริการ</b> — บันทึกผลบริการ + คำแนะนำ + รูปก่อน/หลังทำ</li>
+      <li><b>เอกสาร / ประวัติบริการ / การชำระเงิน / ติดต่อ / งานผลิตวิก</b></li>
+    </ul>
+  </section>
+
+  <section id="appointment">
+    <h2><span class="n">8</span> นัดหมาย</h2>
+    <p class="what">จองคิว + ซิงค์ Google Calendar</p>
+    <ol>
+      <li>เมนู <span class="path">นัดหมาย → สร้างนัดใหม่</span> → กรอกลูกค้า/บริการ/ช่าง/วันเวลา</li>
+      <li>เปิด toggle <b>Sync Google Calendar</b> (ถ้าเชื่อมต่อแล้ว) → นัดจะขึ้นปฏิทิน Google อัตโนมัติ</li>
+    </ol>
+    <div class="tip">💡 ต้องเชื่อม Google Calendar ที่ ตั้งค่า → Google Calendar ก่อน</div>
+  </section>
+
+  <section id="member">
+    <h2><span class="n">9</span> สมาชิก</h2>
+    <p class="what">จัดการระดับสมาชิก (Silver/Gold/Platinum/VIP) และแต้ม</p>
+  </section>
+
+  <section id="product">
+    <h2><span class="n">10</span> สินค้า</h2>
+    <p class="what">จัดการสินค้า ราคา ต้นทุน รูป</p>
+    <ol>
+      <li>เมนู <span class="path">สินค้าและสต๊อก → รายการสินค้า → เพิ่มสินค้า</span></li>
+      <li>กรอกชื่อ/SKU/ราคาขาย/ต้นทุน/รูป/หมวดหมู่ · ตั้ง "เป็นวิก" ถ้าเป็นสินค้าสั่งผลิต → บันทึก</li>
+      <li>แก้ไข/ลบ: กดเข้าสินค้า → แก้ไข หรือ ลบ</li>
+    </ol>
+  </section>
+
+  <section id="stock">
+    <h2><span class="n">11</span> สต๊อก</h2>
+    <p class="what">รับเข้า ปรับ ตรวจนับ ดูประวัติ</p>
+    <ul>
+      <li>เมนู <span class="path">สินค้าและสต๊อก → สต๊อกสินค้า</span></li>
+      <li><b>ปรับสต๊อก</b> — แก้จำนวนคงเหลือ (รับเข้า/ตรวจนับ)</li>
+      <li>ดูสินค้าใกล้หมด + ประวัติการเคลื่อนไหว</li>
+    </ul>
+  </section>
+
+  <section id="transfer">
+    <h2><span class="n">12</span> โอนสินค้าข้ามสาขา</h2>
+    <p class="what">โอนสต๊อกระหว่างสาขา (สำหรับร้านหลายสาขา)</p>
+    <ol>
+      <li>เมนู <span class="path">โอนสินค้า</span> → ครั้งแรกกด <b>Seed</b> ที่แต่ละสาขา (นำสต๊อกเข้าคลัง)</li>
+      <li>กด <b>สร้างใบโอน</b> → เลือกสาขาต้นทาง/ปลายทาง + รายการ + จำนวน → ยืนยัน</li>
+      <li>เปิดสาขาใหม่? กด <b>Clone</b> เพื่อโคลนรายการสินค้าเข้าสาขาใหม่ (จำนวน 0)</li>
+    </ol>
+  </section>
+
+  <section id="production">
+    <h2><span class="n">13</span> งานผลิตวิก</h2>
+    <p class="what">ติดตามใบสั่งผลิตวิก</p>
+    <ul>
+      <li>เมนู <span class="path">งานผลิตวิก</span> → เปิดใบสั่งผลิต (สร้างอัตโนมัติจากการรับมัดจำ)</li>
+      <li>กรอกช่องคนผลิต / ถุงเก็บ · เปลี่ยนสถานะงาน · อัปโหลดรูปงาน</li>
+    </ul>
+  </section>
+
+  <section id="depositpage">
+    <h2><span class="n">14</span> มัดจำ (ติดตามยอดคงเหลือ)</h2>
+    <p class="what">ดูมัดจำค้าง + รับชำระยอดคงเหลือ</p>
+    <ol><li>เมนู <span class="path">มัดจำ</span> → เปิดรายการที่ค้าง → กด <b>จ่ายยอดคงเหลือ</b> เมื่อลูกค้ามารับงาน</li></ol>
+  </section>
+
+  <section id="quotation">
+    <h2><span class="n">15</span> ใบเสนอราคา</h2>
+    <p class="what">สร้างและพิมพ์ใบเสนอราคา</p>
+    <ol><li>เมนู <span class="path">ใบเสนอราคา → สร้าง</span> → ใส่ลูกค้า + รายการ → บันทึก → กดไอคอนพิมพ์ 🖨️</li></ol>
+  </section>
+
+  <section id="accounting">
+    <h2><span class="n">16</span> บัญชี</h2>
+    <p class="what">รายรับ รายจ่าย กำไร + Export</p>
+    <ol>
+      <li>เมนู <span class="path">บัญชี</span> → เพิ่มรายจ่าย (ค่าเช่า/ค่าไฟ ฯลฯ)</li>
+      <li>ดูสรุป รายรับ/รายจ่าย/กำไร · กด <b>Export CSV</b> เปิดใน Excel ได้</li>
+    </ol>
+  </section>
+
+  <section id="commission">
+    <h2><span class="n">17</span> คอมมิชชั่น</h2>
+    <p class="what">ดูค่าคอมพนักงานรายเดือน</p>
+    <ol><li>เมนู <span class="path">คอมมิชชั่น</span> → เลือกเดือน → ดูยอดคอมของพนักงานแต่ละคน (คิดจากการขายที่ระบุผู้ขาย)</li></ol>
+  </section>
+
+  <section id="report">
+    <h2><span class="n">18</span> รายงาน</h2>
+    <p class="what">วิเคราะห์ธุรกิจ</p>
+    <ul>
+      <li>เมนู <span class="path">รายงาน</span> → แท็บ: ยอดขาย / ลูกค้า / สินค้า (รายได้แยกสินค้า-บริการ) / งานผลิต / คอมมิชชั่น</li>
+      <li>เลือกช่วงเวลา + กด <b>Export CSV</b></li>
+    </ul>
+  </section>
+
+  <section id="settings">
+    <h2><span class="n">19</span> ตั้งค่าระบบ</h2>
+    <p class="what">จัดการทุกการตั้งค่า</p>
+    <ul>
+      <li><b>ข้อมูลร้าน</b> — ชื่อ/ที่อยู่/เลขภาษี/โลโก้ (ขึ้นบนใบเสร็จ)</li>
+      <li><b>สาขา / พนักงาน / สิทธิ์การใช้งาน</b> — จัดการทีมงาน + สร้างผู้ใช้</li>
+      <li><b>ภาษี & การเงิน</b> — VAT, ข้อความท้ายใบเสร็จ</li>
+      <li><b>คูปองส่วนลด</b> — สร้างรหัสคูปอง (% หรือ บาท + วันหมดอายุ)</li>
+      <li><b>LINE OA</b> — เชื่อม LINE (มีคู่มือในหน้า)</li>
+      <li><b>Google Calendar</b> — เชื่อมปฏิทินสำหรับซิงค์นัดหมาย</li>
+    </ul>
+  </section>
+
+  <section id="faq">
+    <h2><span class="n">?</span> ปัญหาที่พบบ่อย</h2>
+    <h3>ลืมรหัสผ่าน</h3>
+    <p>หน้า login → กด "ลืมรหัสผ่าน" → เช็คอีเมล (หรือแจ้งผู้ดูแลระบบให้รีเซ็ตให้)</p>
+    <h3>ใบเสร็จไม่มีข้อมูลร้าน</h3>
+    <p>ไป ตั้งค่า → ข้อมูลร้าน แล้วกรอกให้ครบ + บันทึก</p>
+    <h3>ข้อมูลไม่อัปเดต / โหลดค้าง</h3>
+    <p>กด <b>Ctrl+Shift+R</b> (รีเฟรชแบบล้าง cache) หรือ ล็อกเอาต์แล้วเข้าใหม่</p>
+    <h3>ขายแล้วไม่มีสินค้าให้เลือก</h3>
+    <p>ต้องเพิ่มสินค้าที่ สินค้าและสต๊อก → รายการสินค้า ก่อน</p>
+    <div class="warn">⚠️ ต้องการความช่วยเหลือ ติดต่อผู้ดูแลระบบ (ผู้ขาย/ผู้ติดตั้ง)</div>
+  </section>
+
+  <p style="text-align:center; color:var(--muted); font-size:12px; margin-top:24px;">WigPro ERP · ระบบบริหารร้านวิกผมและร้านตัดผม</p>
+</main>
+</div>
+</body>
+</html>
