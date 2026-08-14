@@ -11,12 +11,21 @@ export function downloadCsv(
   rows: (string | number | null | undefined)[][],
 ): void {
   const lines = [headers, ...rows].map(r => r.map(escapeCell).join(','))
-  const csv = '﻿' + lines.join('\r\n')
+  const csv = '\ufeff' + lines.join('\r\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  downloadBlob(blob, filename.endsWith('.csv') ? filename : `${filename}.csv`)
+}
+
+export function downloadJson(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8;' })
+  downloadBlob(blob, filename.endsWith('.json') ? filename : `${filename}.json`)
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = filename.endsWith('.csv') ? filename : `${filename}.csv`
+  a.download = filename
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)

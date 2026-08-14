@@ -6,6 +6,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { collection, onSnapshot, query, where, Timestamp, doc, deleteDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
+import { isCountableDeposit, isCountableSale } from '@/lib/sales'
 import { Expense, Sale, Deposit } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -69,8 +70,10 @@ export default function AccountingPage() {
     return () => { u1(); u2(); u3() }
   }, [period, companyId])
 
-  const salesIncome   = sales.reduce((s, r) => s + r.totalAmount, 0)
-  const depositIncome = deposits.reduce((s, d) => s + d.paidAmount, 0)
+  const countableSales = sales.filter(isCountableSale)
+  const countableDeposits = deposits.filter(isCountableDeposit)
+  const salesIncome   = countableSales.reduce((s, r) => s + r.totalAmount, 0)
+  const depositIncome = countableDeposits.reduce((s, d) => s + d.paidAmount, 0)
   const totalIncome   = salesIncome + depositIncome
   const totalExpense  = expenses.reduce((s, r) => s + r.amount, 0)
   const netProfit     = totalIncome - totalExpense
@@ -81,8 +84,8 @@ export default function AccountingPage() {
   const chartData = Array.from({ length: 6 }, (_, i) => {
     const m = (now.getMonth() - 5 + i + 12) % 12
     const y = now.getFullYear() - (now.getMonth() - 5 + i < 0 ? 1 : 0)
-    const sIncome = sales.filter(s => { const d = new Date(s.createdAt); return d.getMonth()===m && d.getFullYear()===y }).reduce((a,s)=>a+s.totalAmount, 0)
-    const dIncome = deposits.filter(d => { const dt = new Date(d.createdAt); return dt.getMonth()===m && dt.getFullYear()===y }).reduce((a,d)=>a+d.paidAmount, 0)
+    const sIncome = countableSales.filter(s => { const d = new Date(s.createdAt); return d.getMonth()===m && d.getFullYear()===y }).reduce((a,s)=>a+s.totalAmount, 0)
+    const dIncome = countableDeposits.filter(d => { const dt = new Date(d.createdAt); return dt.getMonth()===m && dt.getFullYear()===y }).reduce((a,d)=>a+d.paidAmount, 0)
     const income  = sIncome + dIncome
     const expense = expenses.filter(e => { const d = new Date(e.createdAt); return d.getMonth()===m && d.getFullYear()===y }).reduce((a,e)=>a+e.amount, 0)
     return { name: monthNames[m], income, expense }
@@ -90,8 +93,8 @@ export default function AccountingPage() {
 
   // Recent transactions merged
   const transactions: Transaction[] = [
-    ...sales.slice(0,10).map(s => ({ id:'s'+s.id, type:'income' as const, desc: `ขาย #${s.receiptNo}${s.customerName ? ' - '+s.customerName : ''}`, amount: s.totalAmount, date: new Date(s.createdAt), category: 'ยอดขาย', deletable: false })),
-    ...deposits.slice(0,10).map(d => ({ id:'d'+d.id, type:'income' as const, desc: `มัดจำ #${d.depositNo} - ${d.customerName}`, amount: d.paidAmount, date: new Date(d.createdAt), category: 'มัดจำ', deletable: false })),
+    ...countableSales.slice(0,10).map(s => ({ id:'s'+s.id, type:'income' as const, desc: `ขาย #${s.receiptNo}${s.customerName ? ' - '+s.customerName : ''}`, amount: s.totalAmount, date: new Date(s.createdAt), category: 'ยอดขาย', deletable: false })),
+    ...countableDeposits.slice(0,10).map(d => ({ id:'d'+d.id, type:'income' as const, desc: `มัดจำ #${d.depositNo} - ${d.customerName}`, amount: d.paidAmount, date: new Date(d.createdAt), category: 'มัดจำ', deletable: false })),
     ...expenses.slice(0,20).map(e => ({ id:'e'+e.id, type:'expense' as const, desc: e.description, amount: e.amount, date: new Date(e.createdAt), category: e.category, deletable: true })),
   ].sort((a,b) => b.date.getTime() - a.date.getTime()).slice(0, 20)
 

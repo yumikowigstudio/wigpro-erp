@@ -1,5 +1,5 @@
 import { initializeApp, deleteApp } from 'firebase/app'
-import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth'
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth'
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -17,6 +17,12 @@ export async function createAuthUser(email: string, password: string): Promise<s
   const secondary = initializeApp(firebaseConfig, `secondary-${Date.now()}`)
   try {
     const cred = await createUserWithEmailAndPassword(getAuth(secondary), email, password)
+    return cred.user.uid
+  } catch (error) {
+    const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
+    if (code !== 'auth/email-already-in-use') throw error
+
+    const cred = await signInWithEmailAndPassword(getAuth(secondary), email, password)
     return cred.user.uid
   } finally {
     await deleteApp(secondary).catch(() => {})

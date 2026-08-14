@@ -5,7 +5,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useGoogleCalendar } from '@/hooks/useGoogleCalendar'
 import { addDocument, COLLECTIONS } from '@/lib/firestore'
 import { toast } from 'sonner'
-import { ArrowLeft, Calendar, User, Scissors, Clock, MapPin, StickyNote, CalendarCheck } from 'lucide-react'
+import { ArrowLeft, User, Scissors, Clock, StickyNote, CalendarCheck } from 'lucide-react'
 import Link from 'next/link'
 
 const serviceOptions = [

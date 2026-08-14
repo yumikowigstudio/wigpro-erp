@@ -4,6 +4,7 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebas
 import { doc, onSnapshot, setDoc, serverTimestamp, collection, addDoc } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
 import { getCollection, COLLECTIONS, where } from '@/lib/firestore'
+import { getEffectivePermissions, PermissionKey } from '@/lib/permissions'
 import { useAuthStore } from '@/store/authStore'
 import { User, Branch } from '@/types'
 import { toast } from 'sonner'
@@ -25,8 +26,17 @@ function startAuthListener() {
   } = useAuthStore.getState()
 
   let unsubscribeUser: (() => void) | null = null
+  let profileLoadTimer: ReturnType<typeof setTimeout> | null = null
+
+  const clearProfileLoadTimer = () => {
+    if (profileLoadTimer) {
+      clearTimeout(profileLoadTimer)
+      profileLoadTimer = null
+    }
+  }
 
   onAuthStateChanged(auth, async (fbUser) => {
+      clearProfileLoadTimer()
       setFirebaseUser(fbUser)
 
       // ยกเลิก listener เก่าถ้ามี
@@ -38,11 +48,31 @@ function startAuthListener() {
       if (fbUser) {
         // ใช้ onSnapshot แทน getDoc — จะ update อัตโนมัติเมื่อ Firestore เปลี่ยน
         const userRef = doc(db, COLLECTIONS.USERS, fbUser.uid)
+        profileLoadTimer = setTimeout(() => {
+          console.error('User profile load timeout:', fbUser.email)
+          toast.error('โหลดข้อมูลผู้ใช้ไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วเข้าสู่ระบบใหม่')
+          setUser(null)
+          setBranches([])
+          setCurrentBranch(null)
+          setLoading(false)
+          signOut(auth).catch(console.error)
+        }, 15000)
         unsubscribeUser = onSnapshot(userRef, async (snap) => {
+          clearProfileLoadTimer()
           if (snap.exists()) {
             const userData = { id: snap.id, ...snap.data() } as User
 
             // แปลง Timestamp เป็น Date
+            if (userData.isActive === false) {
+              toast.error('บัญชีนี้ถูกปิดใช้งาน กรุณาติดต่อผู้ดูแลระบบ')
+              setUser(null)
+              setBranches([])
+              setCurrentBranch(null)
+              setLoading(false)
+              await signOut(auth)
+              return
+            }
+
             const ud = userData as unknown as Record<string, unknown>
             if (ud.createdAt && typeof ud.createdAt === 'object') {
               const ts = ud.createdAt as { toDate?: () => Date }
@@ -109,10 +139,12 @@ function startAuthListener() {
           }
           setLoading(false)
         }, (err) => {
+          clearProfileLoadTimer()
           console.error('User snapshot error:', err)
           setLoading(false)
         })
       } else {
+        clearProfileLoadTimer()
         setUser(null)
         setBranches([])
         setCurrentBranch(null)
@@ -124,7 +156,8 @@ function startAuthListener() {
 export function useAuth() {
   const {
     user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated,
-    logout: storeLogout,
+    supportCompanyId, supportCompanyName, setCurrentBranch, setBranches,
+    setSupportCompany, clearSupportCompany, logout: storeLogout,
   } = useAuthStore()
 
   // เริ่ม listener ครั้งเดียวทั้งแอป (self-guard ภายใน)
@@ -133,7 +166,13 @@ export function useAuth() {
   }, [])
 
   const login = async (email: string, password: string) => {
-    return signInWithEmailAndPassword(auth, email, password)
+    useAuthStore.getState().setLoading(true)
+    try {
+      return await signInWithEmailAndPassword(auth, email, password)
+    } catch (error) {
+      useAuthStore.getState().setLoading(false)
+      throw error
+    }
   }
 
   const logout = async () => {
@@ -141,10 +180,44 @@ export function useAuth() {
     storeLogout()
   }
 
+  const isSupportMode = !!user && user.role === 'super_admin' && !!supportCompanyId
+  const companyId = isSupportMode ? supportCompanyId : user?.companyId ?? ''
+
+  useEffect(() => {
+    if (!user || !companyId) return
+    let cancelled = false
+    getCollection<Branch>(COLLECTIONS.BRANCHES, [
+      where('companyId', '==', companyId),
+      where('status', '==', 'active'),
+    ]).then(branchList => {
+      if (cancelled) return
+      setBranches(branchList)
+      const preferredBranchId = isSupportMode ? branchList[0]?.id : user.branchId
+      const branch = branchList.find(b => b.id === preferredBranchId) || branchList[0] || null
+      setCurrentBranch(branch)
+    }).catch((err) => {
+      console.error('Error loading branches:', err)
+      if (!cancelled) {
+        setBranches([])
+        setCurrentBranch(null)
+      }
+    })
+    return () => { cancelled = true }
+  }, [companyId, isSupportMode, setBranches, setCurrentBranch, user])
+
+  const enterSupportCompany = (nextCompanyId: string, nextCompanyName: string) => {
+    if (user?.role !== 'super_admin') return
+    setSupportCompany(nextCompanyId, nextCompanyName)
+  }
+
+  const exitSupportCompany = () => {
+    clearSupportCompany()
+  }
+
   const hasPermission = (permission: string): boolean => {
     if (!user) return false
     if (user.role === 'super_admin' || user.role === 'owner') return true
-    return user.permissions?.includes(permission) ?? false
+    return getEffectivePermissions(user.role, user.permissions).includes(permission as PermissionKey)
   }
 
   const canDiscount = (percent: number): boolean => {
@@ -155,11 +228,22 @@ export function useAuth() {
     return false
   }
 
-  // Convenience helpers — falls back to demo values if not yet migrated
-  const companyId  = user?.companyId  ?? 'demo_company'
-  const branchId   = user?.branchId   ?? 'demo_branch'
-  const userId     = user?.id         ?? 'demo_user'
-  const userName   = user?.displayName ?? 'Demo User'
+  const canSwitchBranch = !!user && ['super_admin', 'owner'].includes(user.role)
+  const switchBranch = (nextBranchId: string) => {
+    if (!canSwitchBranch) return
+    const nextBranch = branches.find(branch => branch.id === nextBranchId) || null
+    if (nextBranch) setCurrentBranch(nextBranch)
+  }
 
-  return { user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated, login, logout, hasPermission, canDiscount, companyId, branchId, userId, userName }
+  // Convenience helpers
+  const branchId   = (canSwitchBranch ? currentBranch?.id : user?.branchId) ?? user?.branchId ?? ''
+  const userId     = user?.id         ?? ''
+  const userName   = user?.displayName ?? ''
+
+  return {
+    user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated,
+    login, logout, hasPermission, canDiscount, canSwitchBranch, switchBranch,
+    companyId, branchId, userId, userName,
+    isSupportMode, supportCompanyId, supportCompanyName, enterSupportCompany, exitSupportCompany,
+  }
 }

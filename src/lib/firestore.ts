@@ -16,7 +16,6 @@ import {
   runTransaction,
   QueryConstraint,
   DocumentData,
-  WhereFilterOp,
 } from 'firebase/firestore'
 import { db } from './firebase'
 
@@ -27,6 +26,7 @@ export const COLLECTIONS = {
   USERS: 'users',
   EMPLOYEES: 'employees',
   CUSTOMERS: 'customers',
+  CUSTOMER_WORK_CASES: 'customer_work_cases',
   CUSTOMER_IMAGES: 'customer_images',
   CUSTOMER_DOCUMENTS: 'customer_documents',
   CUSTOMER_TIMELINE: 'customer_timeline',
@@ -50,6 +50,8 @@ export const COLLECTIONS = {
   ACTIVITY_LOGS: 'activity_logs',
   AUDIT_LOGS: 'audit_logs',
   DISCOUNT_REQUESTS: 'discount_requests',
+  PERMISSION_REQUESTS: 'permission_requests',
+  DOCUMENT_COUNTERS: 'document_counters',
   MEMBERSHIP_CONFIG: 'membership_config',
   POINT_TRANSACTIONS: 'point_transactions',
   SYSTEM_SETTINGS: 'system_settings',
@@ -161,34 +163,88 @@ export async function generateRunningNumber(
   }
 }
 
-// Generate wig work order number: BB MM YY(BE) #### e.g. 0105690001
-export async function generateWigOrderNo(companyId: string, branchId: string): Promise<string> {
-  const today  = new Date()
-  const month  = String(today.getMonth() + 1).padStart(2, '0')
-  const beYear = String(today.getFullYear() + 543).slice(-2) // Buddhist Era last 2 digits
+export type BranchDocumentType = 'receipt' | 'deposit' | 'quotation' | 'return' | 'transfer' | 'work_order'
 
-  // Get branch code
-  let branchCode = '01'
+const documentPrefixes: Record<BranchDocumentType, string> = {
+  receipt: 'RCP',
+  deposit: 'DEP',
+  quotation: 'QT',
+  return: 'RTN',
+  transfer: 'TF',
+  work_order: 'WO',
+}
+
+function counterId(companyId: string, branchId: string, type: BranchDocumentType, yearMonth: string) {
+  return `${companyId}_${branchId}_${type}_${yearMonth}`.replace(/[^\w-]/g, '_')
+}
+
+export async function getBranchCode(branchId: string): Promise<string> {
   try {
     const branchDoc = await getDocument<{ code?: string }>(COLLECTIONS.BRANCHES, branchId)
-    if (branchDoc?.code) branchCode = String(branchDoc.code).padStart(2, '0')
-  } catch { /* use default */ }
-
-  const prefix = `${branchCode}${month}${beYear}`
-
-  try {
-    const docs = await getCollection<{ orderNo: string }>(COLLECTIONS.WORK_ORDERS, [
-      where('companyId', '==', companyId),
-      where('branchId', '==', branchId),
-      limit(500),
-    ])
-    const thisMonthOrders = docs.filter(d => d.orderNo?.startsWith(prefix))
-    const seq = (thisMonthOrders.length + 1).toString().padStart(4, '0')
-    return `${prefix}${seq}`
+    return String(branchDoc?.code || '01').padStart(2, '0').slice(-2)
   } catch {
-    const seq = String(Date.now()).slice(-4)
-    return `${prefix}${seq}`
+    return '01'
   }
+}
+
+export async function generateBranchDocumentNo(
+  companyId: string,
+  branchId: string,
+  type: BranchDocumentType,
+): Promise<string> {
+  const today = new Date()
+  const month = String(today.getMonth() + 1).padStart(2, '0')
+  const beYear = String(today.getFullYear() + 543).slice(-2)
+  const yearMonth = `${beYear}${month}`
+  const branchCode = await getBranchCode(branchId)
+  const prefix = documentPrefixes[type]
+  const ref = doc(db, COLLECTIONS.DOCUMENT_COUNTERS, counterId(companyId, branchId, type, yearMonth))
+
+  const seq = await runTransaction(db, async tx => {
+    const snap = await tx.get(ref)
+    const next = ((snap.exists() ? snap.data().seq : 0) as number) + 1
+    tx.set(ref, {
+      companyId,
+      branchId,
+      type,
+      yearMonth,
+      branchCode,
+      seq: next,
+      updatedAt: serverTimestamp(),
+      ...(snap.exists() ? {} : { createdAt: serverTimestamp() }),
+    }, { merge: true })
+    return next
+  })
+
+  return `${prefix}-${branchCode}-${yearMonth}-${String(seq).padStart(4, '0')}`
+}
+
+// Generate wig work order number: branch + month + Thai year + sequence, e.g. 0105690001
+export async function generateWigOrderNo(companyId: string, branchId: string): Promise<string> {
+  const today = new Date()
+  const month = String(today.getMonth() + 1).padStart(2, '0')
+  const beYear = String(today.getFullYear() + 543).slice(-2)
+  const yearMonth = `${beYear}${month}`
+  const branchCode = await getBranchCode(branchId)
+  const ref = doc(db, COLLECTIONS.DOCUMENT_COUNTERS, counterId(companyId, branchId, 'work_order', yearMonth))
+
+  const seq = await runTransaction(db, async tx => {
+    const snap = await tx.get(ref)
+    const next = ((snap.exists() ? snap.data().seq : 0) as number) + 1
+    tx.set(ref, {
+      companyId,
+      branchId,
+      type: 'work_order',
+      yearMonth,
+      branchCode,
+      seq: next,
+      updatedAt: serverTimestamp(),
+      ...(snap.exists() ? {} : { createdAt: serverTimestamp() }),
+    }, { merge: true })
+    return next
+  })
+
+  return `${branchCode}${month}${beYear}${String(seq).padStart(4, '0')}`
 }
 
 export { where, orderBy, limit, onSnapshot, serverTimestamp, writeBatch, runTransaction, Timestamp }

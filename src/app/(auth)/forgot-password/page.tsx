@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { sendPasswordResetEmail } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
 import { toast } from 'sonner'
-import { ArrowLeft, Sparkles, Mail } from 'lucide-react'
+import { ArrowLeft, Mail } from 'lucide-react'
 import Link from 'next/link'
 
 export default function ForgotPasswordPage() {
@@ -32,10 +32,11 @@ export default function ForgotPasswordPage() {
 
       <div className="relative w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-[#f472b6] to-[#d946a8] shadow-2xl shadow-pink-300/50 mb-4">
-            <Sparkles className="w-9 h-9 text-white" />
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl shadow-2xl shadow-pink-300/50 mb-4 overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/icon.svg" alt="" className="w-20 h-20" />
           </div>
-          <h1 className="text-3xl font-bold text-[var(--text-primary)]">WigPro</h1>
+          <h1 className="text-3xl font-bold text-[var(--text-primary)]">ระบบบริหารร้าน</h1>
           <p className="text-[var(--text-muted)] text-sm mt-1">รีเซ็ตรหัสผ่าน</p>
         </div>
 

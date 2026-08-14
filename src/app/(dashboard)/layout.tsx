@@ -1,20 +1,27 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
+import { addDoc, collection, serverTimestamp } from 'firebase/firestore'
 import { useAuth } from '@/hooks/useAuth'
 import Sidebar from '@/components/layout/Sidebar'
 import Header from '@/components/layout/Header'
 import { cn } from '@/lib/utils'
+import { db } from '@/lib/firebase'
+import { COLLECTIONS } from '@/lib/firestore'
+import { getPagePermission } from '@/lib/permissions'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
-  const { isAuthenticated, isLoading } = useAuth()
+  const [requesting, setRequesting] = useState(false)
+  const [requested, setRequested] = useState(false)
+  const { isAuthenticated, isLoading, user, userId, companyId, hasPermission } = useAuth()
   const router = useRouter()
+  const pathname = usePathname()
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) router.replace('/login')
-  }, [isAuthenticated, isLoading, router])
+    if (!isLoading && (!isAuthenticated || !user)) router.replace('/login')
+  }, [isAuthenticated, isLoading, router, user])
 
   if (isLoading) {
     return (
@@ -27,7 +34,31 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     )
   }
 
-  if (!isAuthenticated) return null
+  if (!isAuthenticated || !user) return null
+
+  const pagePermission = getPagePermission(pathname)
+  const denied = pagePermission && !hasPermission(pagePermission)
+
+  const requestAccess = async () => {
+    if (!pagePermission || requesting || requested) return
+    setRequesting(true)
+    try {
+      await addDoc(collection(db, COLLECTIONS.PERMISSION_REQUESTS), {
+        companyId,
+        userId,
+        userEmail: user.email,
+        userName: user.displayName,
+        permission: pagePermission,
+        path: pathname,
+        status: 'pending',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      setRequested(true)
+    } finally {
+      setRequesting(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-[var(--bg-base)]">
@@ -48,12 +79,28 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Content */}
       <div
-        className="transition-all duration-300"
-        style={{ marginLeft: collapsed ? '82px' : '252px' }}
+        className={cn(
+          'transition-all duration-300',
+          collapsed ? 'md:ml-[82px]' : 'md:ml-[252px]'
+        )}
       >
         <Header onMenuToggle={() => setMobileSidebarOpen(true)} />
         <main className="px-5 pb-8 md:px-6 min-h-[calc(100vh-4rem)]">
-          {children}
+          {denied ? (
+            <div className="min-h-[calc(100vh-7rem)] flex items-center justify-center">
+              <div className="w-full max-w-md bg-white border border-[var(--border-light)] rounded-2xl shadow-[var(--shadow-card)] p-6 text-center">
+                <p className="text-lg font-bold text-[var(--text-primary)]">ต้องขอสิทธิ์จากเจ้าของร้านก่อน</p>
+                <p className="text-sm text-[var(--text-muted)] mt-2">บัญชีนี้ยังไม่ได้รับสิทธิ์เปิดหน้านี้ เจ้าของร้านสามารถเปิดให้ได้ที่ ตั้งค่า &gt; สิทธิ์การใช้งาน</p>
+                <button
+                  onClick={requestAccess}
+                  disabled={requesting || requested}
+                  className="mt-5 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white text-sm font-semibold disabled:opacity-50"
+                >
+                  {requested ? 'ส่งคำขอแล้ว' : requesting ? 'กำลังส่งคำขอ...' : 'ขออนุญาตเจ้าของร้าน'}
+                </button>
+              </div>
+            </div>
+          ) : children}
         </main>
       </div>
     </div>

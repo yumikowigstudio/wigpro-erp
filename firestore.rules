@@ -2,7 +2,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -11,8 +10,20 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
+    function hasUserProfile() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userCompanyId() {
+      return getUserData().companyId;
+    }
+
+    function userIsActive() {
+      return hasUserProfile() && getUserData().isActive != false;
+    }
+
     function hasRole(roles) {
-      return isAuthenticated() && getUserData().role in roles;
+      return isAuthenticated() && userIsActive() && getUserData().role in roles;
     }
 
     function isSuperAdmin() {
@@ -32,231 +43,355 @@ service cloud.firestore {
     }
 
     function belongsToCompany(companyId) {
-      return isAuthenticated() && getUserData().companyId == companyId;
+      return isAuthenticated() && userIsActive() && companyId is string && companyId != '' && userCompanyId() == companyId;
     }
 
-    // Companies — super_admin (เจ้าของระบบ) เห็น/จัดการทุกร้านได้
+    function hasCompanyId(data) {
+      return data.companyId is string && data.companyId != '';
+    }
+
+    function canReadCompanyData() {
+      return isSuperAdmin() || (hasCompanyId(resource.data) && belongsToCompany(resource.data.companyId));
+    }
+
+    function canCreateCompanyData() {
+      return isSuperAdmin() || (hasCompanyId(request.resource.data) && belongsToCompany(request.resource.data.companyId));
+    }
+
+    function canUpdateCompanyData() {
+      return isSuperAdmin()
+        || (hasCompanyId(resource.data)
+          && hasCompanyId(request.resource.data)
+          && belongsToCompany(resource.data.companyId)
+          && request.resource.data.companyId == resource.data.companyId);
+    }
+
+    function canDeleteCompanyData() {
+      return isSuperAdmin() || (hasCompanyId(resource.data) && belongsToCompany(resource.data.companyId));
+    }
+
+    function canCreateOwnPermissionRequest() {
+      return isAuthenticated()
+        && userIsActive()
+        && hasCompanyId(request.resource.data)
+        && belongsToCompany(request.resource.data.companyId)
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.permission is string
+        && request.resource.data.path is string;
+    }
+
+    function canReadCompanyDoc(companyId) {
+      return isSuperAdmin() || belongsToCompany(companyId);
+    }
+
+    function canReadSetting(settingId) {
+      return isSuperAdmin() || (isStaff() && (settingId == userCompanyId() || settingId == userCompanyId() + '_tax'));
+    }
+
+    function canWriteSetting(settingId) {
+      return isSuperAdmin() || (isOwner() && (settingId == userCompanyId() || settingId == userCompanyId() + '_tax'));
+    }
+
+    function assignableUserRole(role) {
+      return role in ['branch_manager', 'sales', 'stylist', 'staff', 'accountant'];
+    }
+
+    function canOwnerManageUser() {
+      return isOwner()
+        && canUpdateCompanyData()
+        && assignableUserRole(resource.data.role)
+        && assignableUserRole(request.resource.data.role)
+        && request.resource.data.companyId == resource.data.companyId
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.isActive is bool
+        && request.resource.data.permissions is list
+        && request.resource.data.branchId is string
+        && request.resource.data.branchId != '';
+    }
+
     match /companies/{companyId} {
-      allow read: if isSuperAdmin() || belongsToCompany(companyId);
-      allow write: if isSuperAdmin();
+      allow read: if canReadCompanyDoc(companyId);
+      allow create, update, delete: if isSuperAdmin();
     }
 
-    // Branches — super_admin ข้ามร้านได้
     match /branches/{branchId} {
-      allow read: if isSuperAdmin() || (isStaff() && belongsToCompany(resource.data.companyId));
-      allow write: if isOwner();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isOwner() && canCreateCompanyData();
+      allow update: if isOwner() && canUpdateCompanyData();
+      allow delete: if isOwner() && canDeleteCompanyData();
     }
 
-    // Users
     match /users/{userId} {
-      allow read: if isAuthenticated() && (request.auth.uid == userId || isBranchManager());
-      // สร้างผู้ใช้: super_admin ทำได้ทุกอย่าง · owner สร้างได้แต่ห้ามตั้งเป็น super_admin
-      // · founder (อีเมลเจ้าของระบบ) สร้างโปรไฟล์ super_admin ตัวเองได้ครั้งแรก (bootstrap)
+      allow read: if isSuperAdmin()
+        || (isAuthenticated() && request.auth.uid == userId)
+        || (isBranchManager() && canReadCompanyData());
       allow create: if isSuperAdmin()
-                    || (isOwner() && request.resource.data.role != 'super_admin')
-                    || (isAuthenticated() && request.auth.uid == userId
-                        && request.auth.token.email == 'yumikosystem@gmail.com')
-                    || (isAuthenticated() && request.auth.uid == userId
-                        && request.resource.data.role != 'super_admin');
-      // แก้ไข: super_admin ทำได้ทุกอย่าง · owner/manager จัดการผู้ใช้ในบริษัทเดียวกันได้
-      // แต่ห้ามแตะ role super_admin (ทั้งตั้งขึ้นและแก้ของที่เป็นอยู่) — กันยกระดับเป็นเจ้าของระบบ
-      // · ตัวเองแก้ได้แต่ห้ามเปลี่ยน role/companyId
+        || (isOwner()
+          && canCreateCompanyData()
+          && request.resource.data.role in ['branch_manager', 'sales', 'stylist', 'staff', 'accountant']
+          && request.resource.data.branchId is string
+          && request.resource.data.branchId != ''
+          && request.resource.data.isActive == true)
+        || (isAuthenticated()
+          && request.auth.uid == userId
+          && request.auth.token.email == 'yumikosystem@gmail.com'
+          && request.resource.data.role == 'super_admin'
+          && request.resource.data.companyId == '');
       allow update: if isSuperAdmin()
-                    || (isBranchManager()
-                        && request.resource.data.companyId == resource.data.companyId
-                        && request.resource.data.role != 'super_admin'
-                        && resource.data.role != 'super_admin')
-                    || (isAuthenticated() && request.auth.uid == userId
-                        && request.resource.data.role == resource.data.role
-                        && request.resource.data.companyId == resource.data.companyId);
-      allow delete: if isSuperAdmin() || (isOwner() && resource.data.role != 'super_admin');
+        || canOwnerManageUser()
+        || (isAuthenticated()
+          && request.auth.uid == userId
+          && canUpdateCompanyData()
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.companyId == resource.data.companyId
+          && request.resource.data.branchId == resource.data.branchId
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.permissions == resource.data.permissions);
+      allow delete: if isSuperAdmin();
     }
 
-    // Employees
     match /employees/{employeeId} {
-      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow write: if isBranchManager();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isBranchManager() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
-    // Customers
     match /customers/{customerId} {
-      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow create: if isStaff();
-      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow delete: if isBranchManager();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
+    }
+
+    match /customer_work_cases/{caseId} {
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isStaff() && canDeleteCompanyData();
     }
 
     match /customer_images/{imageId} {
-      allow read: if isStaff();
-      allow write: if isStaff();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isStaff() && canDeleteCompanyData();
     }
 
     match /customer_documents/{docId} {
-      allow read: if isStaff();
-      allow write: if isStaff();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isStaff() && canDeleteCompanyData();
     }
 
     match /customer_timeline/{timelineId} {
-      allow read: if isStaff();
-      allow create: if isStaff();
-      allow update, delete: if isBranchManager();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
-    // Service records (บันทึกผลบริการ + คำแนะนำ)
     match /service_records/{recordId} {
-      allow read:   if isStaff();
-      allow create: if isStaff();
-      allow update: if isStaff();
-      allow delete: if isStaff();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isStaff() && canDeleteCompanyData();
     }
 
-    // Appointments
     match /appointments/{appointmentId} {
-      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow create: if isStaff();
-      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow delete: if isBranchManager();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
-    // Products & Services
     match /products/{productId} {
-      allow read: if isStaff();
-      allow write: if isBranchManager();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isBranchManager() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
+    }
+
+    match /product_categories/{categoryId} {
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isBranchManager() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
+    }
+
+    match /service_categories/{categoryId} {
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isBranchManager() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
     match /services/{serviceId} {
-      allow read: if isStaff();
-      allow write: if isBranchManager();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isBranchManager() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
-    // Inventory
     match /inventory/{inventoryId} {
-      allow read: if isStaff();
-      allow write: if isStaff();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
     match /transfer_orders/{orderId} {
-      allow read: if isStaff();
-      allow create: if isStaff();
-      allow update: if isBranchManager();
-      allow delete: if isOwner();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isOwner() && canDeleteCompanyData();
     }
 
     match /stock_movements/{movementId} {
-      allow read: if isStaff();
-      allow create: if isStaff();
-      allow update, delete: if false; // Immutable
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update, delete: if false;
     }
 
-    // Work Orders (Production)
     match /work_orders/{orderId} {
-      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow create: if isStaff();
-      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow delete: if isBranchManager();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
-    // Sales & POS
+    match /production_orders/{orderId} {
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
+    }
+
     match /sales/{saleId} {
-      allow read: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow create: if isStaff();
-      allow update: if isBranchManager();
-      allow delete: if isOwner();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isOwner() && canDeleteCompanyData();
     }
 
     match /deposits/{depositId} {
-      allow read: if isStaff();
-      allow write: if isStaff();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
-    // Returns / exchanges (คืน-เปลี่ยนสินค้า)
     match /returns/{returnId} {
-      allow read:   if isStaff() && belongsToCompany(resource.data.companyId);
-      allow create: if isStaff();
-      allow update: if isBranchManager();
-      allow delete: if isOwner();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isOwner() && canDeleteCompanyData();
     }
 
-    // Coupons (คูปองส่วนลด)
     match /coupons/{couponId} {
-      allow read:   if isStaff();
-      allow write:  if isBranchManager();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isBranchManager() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
-    // Accounting
     match /expenses/{expenseId} {
-      allow read: if hasRole(['super_admin', 'owner', 'branch_manager', 'accountant']);
-      allow create: if isStaff();
-      allow update: if isBranchManager();
-      allow delete: if isOwner();
+      allow read: if hasRole(['super_admin', 'owner', 'branch_manager', 'accountant']) && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isOwner() && canDeleteCompanyData();
     }
 
-    // Commission
     match /commission_records/{recordId} {
-      allow read: if isStaff();
-      allow create: if isStaff();
-      allow update: if isBranchManager();
-      allow delete: if isOwner();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isOwner() && canDeleteCompanyData();
     }
 
-    // Documents
     match /documents/{docId} {
-      allow read: if isStaff();
-      allow write: if isStaff();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isStaff() && canDeleteCompanyData();
     }
 
-    // Quotations (ใบเสนอราคา)
     match /quotations/{quotationId} {
-      allow read:   if isStaff() && belongsToCompany(resource.data.companyId);
-      allow create: if isStaff();
-      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow delete: if isBranchManager();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
-    // Notifications — เป็นแบบทั้งร้าน (query ใช้ companyId) ไม่ใช่รายบุคคล
-    // staff ในบริษัทเดียวกันอ่าน/อัพเดท/ลบได้ ตรงกับการใช้งานจริงในแอป
     match /notifications/{notificationId} {
-      allow read:   if isStaff() && belongsToCompany(resource.data.companyId);
-      allow create: if isStaff();
-      allow update: if isStaff() && belongsToCompany(resource.data.companyId);
-      allow delete: if isStaff() && belongsToCompany(resource.data.companyId);
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isStaff() && canUpdateCompanyData();
+      allow delete: if isStaff() && canDeleteCompanyData();
     }
 
-    // Logs - append only
     match /activity_logs/{logId} {
-      allow read: if isOwner();
-      allow create: if isStaff();
+      allow read: if isOwner() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
       allow update, delete: if false;
     }
 
     match /audit_logs/{logId} {
-      allow read: if isOwner();
-      allow create: if isStaff();
-      allow update, delete: if false; // Immutable
+      allow read: if isOwner() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update, delete: if false;
     }
 
-    // Settings
+    match /permission_requests/{requestId} {
+      allow read: if isOwner() && canReadCompanyData();
+      allow create: if canCreateOwnPermissionRequest();
+      allow update: if isOwner()
+        && canUpdateCompanyData()
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if isOwner() && canDeleteCompanyData();
+    }
+
+    match /document_counters/{counterId} {
+      allow get: if isStaff()
+        && (canReadCompanyData()
+          || !exists(/databases/$(database)/documents/document_counters/$(counterId)));
+      allow list: if isStaff() && canReadCompanyData();
+      allow create, update: if isStaff()
+        && canCreateCompanyData()
+        && request.resource.data.branchId is string
+        && request.resource.data.branchId != ''
+        && request.resource.data.type is string
+        && request.resource.data.yearMonth is string
+        && request.resource.data.seq is number;
+      allow delete: if isOwner() && canDeleteCompanyData();
+    }
+
     match /system_settings/{settingId} {
-      allow read: if isStaff();
-      allow write: if isOwner();
+      allow read: if canReadSetting(settingId);
+      allow create, update, delete: if canWriteSetting(settingId);
     }
 
     match /membership_config/{configId} {
-      allow read: if isStaff();
-      allow write: if isOwner();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isOwner() && canCreateCompanyData();
+      allow update: if isOwner() && canUpdateCompanyData();
+      allow delete: if isOwner() && canDeleteCompanyData();
     }
 
     match /point_transactions/{txId} {
-      allow read: if isStaff();
-      allow create: if isStaff();
-      allow update, delete: if isOwner();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isOwner() && canUpdateCompanyData();
+      allow delete: if isOwner() && canDeleteCompanyData();
     }
 
     match /discount_requests/{requestId} {
-      allow read: if isStaff();
-      allow create: if isStaff();
-      allow update: if isBranchManager();
-      allow delete: if isOwner();
+      allow read: if isStaff() && canReadCompanyData();
+      allow create: if isStaff() && canCreateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow delete: if isOwner() && canDeleteCompanyData();
     }
   }
 }

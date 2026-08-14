@@ -4,12 +4,13 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { FileText, Plus, X, Loader2, Trash2, Printer, Search } from 'lucide-react'
 import { collection, onSnapshot, query, where, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
+import { COLLECTIONS, addDocument, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
 import { useAuth } from '@/hooks/useAuth'
 
 interface QItem { description: string; quantity: number; unitPrice: number }
 interface Quotation {
   id: string; companyId: string; branchId: string; quotationNo: string
+  branchName?: string; branchCode?: string
   customerName: string; validUntil?: string; notes?: string
   items: QItem[]; subtotal: number; vatAmount: number; total: number
   status: string; createdBy: string; createdAt: Date
@@ -19,9 +20,9 @@ interface ShopInfo { nameTh: string; taxId?: string; phone?: string; address?: s
 const inputCls = 'w-full px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
 
 export default function QuotationsPage() {
-  const { companyId, branchId, userId } = useAuth()
+  const { companyId, branchId, userId, currentBranch } = useAuth()
   const [quotations, setQuotations] = useState<Quotation[]>([])
-  const [shop, setShop]       = useState<ShopInfo>({ nameTh: 'WigPro' })
+  const [shop, setShop]       = useState<ShopInfo>({ nameTh: 'ร้านของฉัน' })
   const [loading, setLoading] = useState(true)
   const [search, setSearch]   = useState('')
   const [showModal, setShowModal] = useState(false)
@@ -32,8 +33,8 @@ export default function QuotationsPage() {
   const [items, setItems] = useState<QItem[]>([{ description: '', quantity: 1, unitPrice: 0 }])
 
   useEffect(() => {
-    if (!companyId) return
-    const q = query(collection(db, COLLECTIONS.QUOTATIONS), where('companyId', '==', companyId))
+    if (!companyId || !branchId) return
+    const q = query(collection(db, COLLECTIONS.QUOTATIONS), where('companyId', '==', companyId), where('branchId', '==', branchId))
     const unsub = onSnapshot(q, snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) }) as Quotation)
         .filter(d => d.status !== 'deleted')
@@ -45,11 +46,11 @@ export default function QuotationsPage() {
     getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId)).then(d => {
       if (d.exists()) {
         const c = d.data()
-        setShop({ nameTh: c.nameTh || 'WigPro', taxId: c.taxId, phone: c.phone, address: c.address })
+        setShop({ nameTh: c.nameTh || 'ร้านของฉัน', taxId: c.taxId, phone: c.phone, address: c.address })
       }
     }).catch(() => {})
     return unsub
-  }, [companyId])
+  }, [branchId, companyId])
 
   const subtotal = items.reduce((s, it) => s + (it.quantity || 0) * (it.unitPrice || 0), 0)
   const vatAmount = subtotal * 0.07
@@ -73,14 +74,13 @@ export default function QuotationsPage() {
       alert('ระบบกำลังโหลดข้อมูลผู้ใช้ กรุณารอสักครู่แล้วลองใหม่'); return
     }
     setSaving(true)
-    const now = new Date()
-    const mm = String(now.getMonth() + 1).padStart(2, '0')
-    const yy = String(now.getFullYear()).slice(-2)
-    const quotationNo = `QT-${mm}${yy}${String(Date.now()).slice(-5)}`
     const cleanItems = items.filter(it => it.description.trim())
     try {
+      const quotationNo = await generateBranchDocumentNo(companyId, branchId, 'quotation')
       await addDocument(COLLECTIONS.QUOTATIONS, {
         companyId, branchId, quotationNo,
+        branchName: currentBranch?.name ?? '',
+        branchCode: currentBranch?.code ?? '',
         customerName: form.customerName.trim(),
         validUntil: form.validUntil || null,
         notes: form.notes.trim() || null,
@@ -130,6 +130,7 @@ export default function QuotationsPage() {
       </style></head><body>
       <div class="head">
         <div><div class="shop">${shop.nameTh}</div>
+          ${q.branchName ? `<div class="muted">สาขา ${q.branchName}${q.branchCode ? ` (${q.branchCode})` : ''}</div>` : ''}
           ${shop.address ? `<div class="muted">${shop.address}</div>` : ''}
           ${shop.phone ? `<div class="muted">โทร. ${shop.phone}</div>` : ''}
           ${shop.taxId ? `<div class="muted">เลขผู้เสียภาษี ${shop.taxId}</div>` : ''}

@@ -1,22 +1,34 @@
 'use client'
+/* eslint-disable @next/next/no-img-element */
 import { useState, use, useEffect, useRef } from 'react'
 import Link from 'next/link'
-import Image from 'next/image'
+import { useSearchParams } from 'next/navigation'
 import {
   ArrowLeft, Phone, MessageCircle, Calendar, Star, Edit,
   ShoppingCart, Factory, CreditCard, Loader2, ImageIcon,
   Upload, Trash2, ChevronRight, Clock, Package, AlertTriangle,
   X, ZoomIn, FileText, FilePlus, Ruler, Phone as PhoneIcon,
-  MessageSquare, MapPin, StickyNote, Plus, CheckCircle2,
+  MessageSquare, MapPin, StickyNote, Plus, CheckCircle2, Scissors,
 } from 'lucide-react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { getDocument, COLLECTIONS } from '@/lib/firestore'
 import {
   collection, query, where, onSnapshot,
-  addDoc, deleteDoc, doc, serverTimestamp,
+  addDoc, deleteDoc, doc, serverTimestamp, writeBatch,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { Customer, CustomerImage, CustomerDocument, WorkOrder, Deposit, ServiceRecord } from '@/types'
+import {
+  Customer,
+  Appointment,
+  CustomerDocument,
+  CustomerImage,
+  CustomerRepairWorkType,
+  CustomerWorkCase,
+  CustomerWorkCaseType,
+  Deposit,
+  ServiceRecord,
+  WorkOrder,
+} from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -65,12 +77,28 @@ const contactTypes = [
   { id: 'note',  label: 'หมายเหตุ', icon: StickyNote,     color: 'bg-amber-100 text-amber-600'  },
 ]
 
-const imgCategories = [
-  { id: 'before',    label: 'ก่อนใส่วิก',     color: 'text-orange-600 bg-orange-50 border-orange-200' },
-  { id: 'after',     label: 'หลังใส่วิก',     color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-  { id: 'receipt',   label: 'ใบเสร็จ',        color: 'text-blue-600 bg-blue-50 border-blue-200'         },
-  { id: 'wig_order', label: 'ใบออเดอร์วิก',   color: 'text-purple-600 bg-purple-50 border-purple-200'   },
-  { id: 'other',     label: 'อื่นๆ',           color: 'text-gray-600 bg-gray-50 border-gray-200'         },
+const imgCategories: { id: CustomerImage['category']; label: string; color: string }[] = [
+  { id: 'before',    label: 'Before / ก่อนทำ', color: 'text-orange-600 bg-orange-50 border-orange-200'  },
+  { id: 'after',     label: 'After / หลังทำ',  color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+  { id: 'finished',  label: 'รูปงานเสร็จ',     color: 'text-pink-600 bg-pink-50 border-pink-200'          },
+  { id: 'receipt',   label: 'ใบเสร็จ',         color: 'text-blue-600 bg-blue-50 border-blue-200'          },
+  { id: 'wig_order', label: 'ใบออเดอร์วิก',    color: 'text-purple-600 bg-purple-50 border-purple-200'    },
+  { id: 'document',  label: 'เอกสาร',          color: 'text-cyan-700 bg-cyan-50 border-cyan-200'          },
+  { id: 'other',     label: 'อื่นๆ',            color: 'text-gray-600 bg-gray-50 border-gray-200'         },
+]
+
+const workCaseTypes: { id: CustomerWorkCaseType; label: string; hint: string; color: string }[] = [
+  { id: 'custom_wig', label: 'งานสั่งทำ', hint: 'เก็บใบสั่งทำ ใบออเดอร์ Before / After และรูปงานเสร็จ', color: 'text-purple-700 bg-purple-50 border-purple-200' },
+  { id: 'ready_made', label: 'งานสำเร็จรูป', hint: 'เก็บรูป Before / After และหมายเหตุของชิ้นงาน', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+  { id: 'repair', label: 'งานซ่อม', hint: 'ระบุประเภทงานซ่อมและเก็บรูปก่อน/หลังซ่อม', color: 'text-amber-700 bg-amber-50 border-amber-200' },
+]
+
+const repairWorkTypes: { id: CustomerRepairWorkType; label: string }[] = [
+  { id: 'reshape', label: 'แก้ทรง' },
+  { id: 'color', label: 'ทำสี' },
+  { id: 'add_hair', label: 'เติมผม' },
+  { id: 'replace_parts', label: 'เปลี่ยนวัสดุ/อุปกรณ์' },
+  { id: 'other', label: 'อื่นๆ' },
 ]
 
 const docTypes = [
@@ -81,6 +109,42 @@ const docTypes = [
 ]
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+function CustomerPhoto({
+  src,
+  alt,
+  fit = 'cover',
+}: {
+  src: string
+  alt: string
+  fit?: 'cover' | 'contain'
+}) {
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    setFailed(false)
+  }, [src])
+
+  if (!src || failed) {
+    return (
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-base)] text-[var(--text-muted)]">
+        <ImageIcon className="w-8 h-8 text-pink-300" />
+        <span className="px-3 text-center text-xs">ไม่สามารถโหลดรูปนี้ได้</span>
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={`absolute inset-0 h-full w-full ${fit === 'contain' ? 'object-contain' : 'object-cover'}`}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+    />
+  )
+}
 
 interface SaleRecord {
   id: string; receiptNo: string; totalAmount: number
@@ -96,6 +160,8 @@ interface ContactLog {
 
 export default function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id }                    = use(params)
+  const searchParams = useSearchParams()
+  const requestedTab = searchParams.get('tab')
   const { userId, companyId, branchId } = useAuth()
   const [customer, setCustomer]   = useState<Customer | null>(null)
   const [loading, setLoading]     = useState(true)
@@ -105,9 +171,15 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([])
   const [deposits,   setDeposits]   = useState<Deposit[]>([])
   const [images,     setImages]     = useState<CustomerImage[]>([])
+  const [workCases,  setWorkCases]  = useState<CustomerWorkCase[]>([])
   const [documents,  setDocuments]  = useState<CustomerDocument[]>([])
   const [contacts,   setContacts]   = useState<ContactLog[]>([])
   const [serviceRecords, setServiceRecords] = useState<ServiceRecord[]>([])
+  const [appointments, setAppointments] = useState<Appointment[]>([])
+
+  useEffect(() => {
+    if (requestedTab) setActiveTab(requestedTab)
+  }, [requestedTab])
 
   useEffect(() => {
     getDocument<Customer>(COLLECTIONS.CUSTOMERS, id)
@@ -116,7 +188,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   }, [id])
 
   useEffect(() => {
-    if (!id) return
+    if (!id || !companyId) return
     const toD = (v: unknown): Date => {
       if (!v) return new Date()
       if (typeof v === 'object' && 'toDate' in (v as object)) return (v as { toDate: () => Date }).toDate()
@@ -128,42 +200,70 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       b.createdAt.getTime() - a.createdAt.getTime()
 
     const u1 = onSnapshot(
-      query(collection(db, COLLECTIONS.SALES), where('customerId', '==', id)),
+      query(collection(db, COLLECTIONS.SALES), where('companyId', '==', companyId), where('customerId', '==', id)),
       s => setSales(s.docs.map(d => { const data = d.data(); return { id: d.id, receiptNo: data.receiptNo, totalAmount: data.totalAmount, items: data.items, createdAt: toD(data.createdAt) } }).sort(byDateDesc)),
       () => {}
     )
     const u2 = onSnapshot(
-      query(collection(db, COLLECTIONS.WORK_ORDERS), where('customerId', '==', id)),
+      query(collection(db, COLLECTIONS.WORK_ORDERS), where('companyId', '==', companyId), where('customerId', '==', id)),
       s => setWorkOrders(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, orderDate: toD(data.orderDate), expectedDate: data.expectedDate ? toD(data.expectedDate) : undefined, deliveredDate: data.deliveredDate ? toD(data.deliveredDate) : undefined, createdAt: toD(data.createdAt), updatedAt: toD(data.updatedAt) } as WorkOrder }).sort(byDateDesc)),
       () => {}
     )
     const u3 = onSnapshot(
-      query(collection(db, COLLECTIONS.DEPOSITS), where('customerId', '==', id)),
+      query(collection(db, COLLECTIONS.DEPOSITS), where('companyId', '==', companyId), where('customerId', '==', id)),
       s => setDeposits(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt), updatedAt: toD(data.updatedAt) } as Deposit }).sort(byDateDesc)),
       () => {}
     )
     const u4 = onSnapshot(
-      query(collection(db, COLLECTIONS.CUSTOMER_IMAGES), where('customerId', '==', id)),
-      s => setImages(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as CustomerImage }).sort(byDateDesc)),
+      query(collection(db, COLLECTIONS.CUSTOMER_IMAGES), where('companyId', '==', companyId), where('customerId', '==', id)),
+      s => setImages(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, imageDate: data.imageDate ? toD(data.imageDate) : undefined, createdAt: toD(data.createdAt) } as CustomerImage }).sort(byDateDesc)),
       () => {}
     )
     const u5 = onSnapshot(
-      query(collection(db, COLLECTIONS.CUSTOMER_DOCUMENTS), where('customerId', '==', id)),
+      query(collection(db, COLLECTIONS.CUSTOMER_DOCUMENTS), where('companyId', '==', companyId), where('customerId', '==', id)),
       s => setDocuments(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as CustomerDocument }).sort(byDateDesc)),
       () => {}
     )
     const u6 = onSnapshot(
-      query(collection(db, COLLECTIONS.CUSTOMER_TIMELINE), where('customerId', '==', id)),
+      query(collection(db, COLLECTIONS.CUSTOMER_TIMELINE), where('companyId', '==', companyId), where('customerId', '==', id)),
       s => setContacts(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as ContactLog }).sort(byDateDesc)),
       () => {}
     )
     const u7 = onSnapshot(
-      query(collection(db, COLLECTIONS.SERVICE_RECORDS), where('customerId', '==', id)),
+      query(collection(db, COLLECTIONS.SERVICE_RECORDS), where('companyId', '==', companyId), where('customerId', '==', id)),
       s => setServiceRecords(s.docs.map(d => { const data = d.data(); return { id: d.id, ...data, createdAt: toD(data.createdAt) } as ServiceRecord }).sort(byDateDesc)),
       () => {}
     )
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7() }
-  }, [id])
+    const u8 = onSnapshot(
+      query(collection(db, COLLECTIONS.CUSTOMER_WORK_CASES), where('companyId', '==', companyId), where('customerId', '==', id)),
+      s => setWorkCases(s.docs.map(d => {
+        const data = d.data()
+        return {
+          id: d.id,
+          ...data,
+          caseDate: toD(data.caseDate),
+          createdAt: toD(data.createdAt),
+          updatedAt: toD(data.updatedAt),
+        } as CustomerWorkCase
+      }).sort((a, b) => b.caseDate.getTime() - a.caseDate.getTime())),
+      () => {}
+    )
+    const u9 = onSnapshot(
+      query(collection(db, COLLECTIONS.APPOINTMENTS), where('companyId', '==', companyId), where('customerId', '==', id)),
+      s => setAppointments(s.docs.map(d => {
+        const data = d.data()
+        return {
+          id: d.id,
+          ...data,
+          date: toD(data.date),
+          createdAt: toD(data.createdAt),
+          updatedAt: toD(data.updatedAt),
+        } as Appointment
+      }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())),
+      () => {}
+    )
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9() }
+  }, [id, companyId])
 
   if (loading) return (
     <div className="flex items-center justify-center py-32">
@@ -181,7 +281,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
   const tabs = [
     { id: 'overview',  label: 'ภาพรวม' },
-    { id: 'photos',    label: `รูปภาพ${images.length ? ` (${images.length})` : ''}` },
+    { id: 'timeline',  label: `Timeline${sales.length + workOrders.length + deposits.length + images.length + documents.length + contacts.length + serviceRecords.length + appointments.length ? ` (${sales.length + workOrders.length + deposits.length + images.length + documents.length + contacts.length + serviceRecords.length + appointments.length})` : ''}` },
+    { id: 'photos',    label: `เคส/รูปภาพ${workCases.length || images.length ? ` (${workCases.length}/${images.length})` : ''}` },
     { id: 'documents', label: `เอกสาร${documents.length ? ` (${documents.length})` : ''}` },
     { id: 'history',   label: `ประวัติบริการ${sales.length ? ` (${sales.length})` : ''}` },
     { id: 'services',  label: `ผลบริการ${serviceRecords.length ? ` (${serviceRecords.length})` : ''}` },
@@ -285,8 +386,9 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           ))}
         </div>
         <div className="p-5">
-          {activeTab === 'overview'    && <OverviewTab customer={customer} levelCfg={levelCfg} id={id} />}
-          {activeTab === 'photos'      && <PhotosTab images={images} customerId={id} companyId={companyId} userId={userId} />}
+          {activeTab === 'overview'    && <OverviewTab customer={customer} levelCfg={levelCfg} />}
+          {activeTab === 'timeline'    && <UnifiedTimelineTab sales={sales} workOrders={workOrders} deposits={deposits} images={images} documents={documents} contacts={contacts} serviceRecords={serviceRecords} workCases={workCases} appointments={appointments} />}
+          {activeTab === 'photos'      && <PhotosTab images={images} workCases={workCases} customerId={id} companyId={companyId} branchId={branchId} userId={userId} />}
           {activeTab === 'documents'   && <DocumentsTab documents={documents} customerId={id} companyId={companyId} userId={userId} />}
           {activeTab === 'history'     && <ServiceHistoryTab sales={sales} workOrders={workOrders} />}
           {activeTab === 'services'    && <ServiceRecordsTab records={serviceRecords} customerId={id} companyId={companyId} branchId={branchId} userId={userId} />}
@@ -299,9 +401,220 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   )
 }
 
+function UnifiedTimelineTab({
+  sales,
+  workOrders,
+  deposits,
+  images,
+  documents,
+  contacts,
+  serviceRecords,
+  workCases,
+  appointments,
+}: {
+  sales: SaleRecord[]
+  workOrders: WorkOrder[]
+  deposits: Deposit[]
+  images: CustomerImage[]
+  documents: CustomerDocument[]
+  contacts: ContactLog[]
+  serviceRecords: ServiceRecord[]
+  workCases: CustomerWorkCase[]
+  appointments: Appointment[]
+}) {
+  type TimelineKind = 'sale' | 'deposit' | 'work_order' | 'image' | 'document' | 'contact' | 'service' | 'case' | 'appointment'
+  type TimelineItem = {
+    id: string
+    kind: TimelineKind
+    title: string
+    description?: string
+    amount?: number
+    date: Date
+    href?: string
+    badge?: string
+  }
+
+  const categoryLabel = (category: CustomerImage['category']) =>
+    imgCategories.find(c => c.id === category)?.label ?? category
+  const caseTypeLabel = (type: CustomerWorkCaseType) =>
+    workCaseTypes.find(c => c.id === type)?.label ?? type
+  const toDate = (value: unknown) => value instanceof Date ? value : new Date(value ? String(value) : Date.now())
+  const dateKey = (date: Date) => date.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
+
+  const items: TimelineItem[] = [
+    ...sales.map(s => ({
+      id: `sale-${s.id}`,
+      kind: 'sale' as const,
+      title: `ออกบิลขาย ${s.receiptNo}`,
+      description: s.items?.map(i => `${i.name} x${i.quantity}`).join(', '),
+      amount: s.totalAmount,
+      date: toDate(s.createdAt),
+      href: '/documents',
+    })),
+    ...deposits.map(d => ({
+      id: `deposit-${d.id}`,
+      kind: 'deposit' as const,
+      title: `รับมัดจำ ${d.depositNo}`,
+      description: [
+        d.items?.map(i => `${i.name} x${i.quantity}`).join(', '),
+        d.pickupDate ? `นัดรับ ${d.pickupDate}` : '',
+        (d.remainingAmount ?? 0) > 0 ? `ค้าง ${formatCurrency(d.remainingAmount)}` : 'ชำระครบ',
+      ].filter(Boolean).join(' · '),
+      amount: d.depositAmount,
+      date: toDate(d.createdAt),
+      href: '/deposits?status=outstanding',
+      badge: d.status,
+    })),
+    ...workOrders.map(w => ({
+      id: `wo-${w.id}`,
+      kind: 'work_order' as const,
+      title: `Work Order ${w.orderNo}`,
+      description: [
+        w.sourceNo ? `${w.sourceType === 'deposit' ? 'จากมัดจำ' : 'จากบิล'} ${w.sourceNo}` : '',
+        [w.wigType, w.wigColor, w.wigLength].filter(Boolean).join(' · '),
+        w.manufacturer ? `ผู้ผลิต ${w.manufacturer}` : '',
+      ].filter(Boolean).join(' · '),
+      amount: w.totalAmount,
+      date: toDate(w.createdAt),
+      href: '/production',
+      badge: statusCfg[w.status]?.label,
+    })),
+    ...appointments.map(a => ({
+      id: `appointment-${a.id}`,
+      kind: 'appointment' as const,
+      title: `นัดหมาย ${a.startTime || ''}`.trim(),
+      description: [
+        a.services?.map(s => s.serviceName).join(', '),
+        a.status ? `สถานะ ${a.status}` : '',
+      ].filter(Boolean).join(' · '),
+      date: toDate(a.date),
+      href: '/appointments',
+      badge: a.status,
+    })),
+    ...serviceRecords.map(r => ({
+      id: `service-${r.id}`,
+      kind: 'service' as const,
+      title: `บันทึกบริการ ${r.serviceName}`,
+      description: [r.result, r.recommendations].filter(Boolean).join(' · '),
+      date: toDate(r.createdAt),
+      href: undefined,
+    })),
+    ...workCases.map(c => ({
+      id: `case-${c.id}`,
+      kind: 'case' as const,
+      title: `เปิดเคส ${c.title}`,
+      description: [caseTypeLabel(c.type), c.notes].filter(Boolean).join(' · '),
+      date: toDate(c.caseDate),
+      href: '?tab=photos',
+    })),
+    ...images.map(img => ({
+      id: `image-${img.id}`,
+      kind: 'image' as const,
+      title: `เพิ่มรูป ${categoryLabel(img.category)}`,
+      description: img.caption,
+      date: toDate(img.imageDate ?? img.createdAt),
+      href: '?tab=photos',
+    })),
+    ...documents.map(d => ({
+      id: `doc-${d.id}`,
+      kind: 'document' as const,
+      title: `เพิ่มเอกสาร ${d.name}`,
+      description: d.type,
+      date: toDate(d.createdAt),
+      href: d.url,
+    })),
+    ...contacts.map(c => ({
+      id: `contact-${c.id}`,
+      kind: 'contact' as const,
+      title: c.title,
+      description: c.description,
+      date: toDate(c.createdAt),
+    })),
+  ].sort((a, b) => b.date.getTime() - a.date.getTime())
+
+  const iconFor = (kind: TimelineKind) => {
+    if (kind === 'sale') return <ShoppingCart className="w-4 h-4" />
+    if (kind === 'deposit') return <CreditCard className="w-4 h-4" />
+    if (kind === 'work_order') return <Factory className="w-4 h-4" />
+    if (kind === 'appointment') return <Calendar className="w-4 h-4" />
+    if (kind === 'image') return <ImageIcon className="w-4 h-4" />
+    if (kind === 'document') return <FileText className="w-4 h-4" />
+    if (kind === 'service') return <Scissors className="w-4 h-4" />
+    if (kind === 'case') return <Package className="w-4 h-4" />
+    return <MessageSquare className="w-4 h-4" />
+  }
+
+  const toneFor = (kind: TimelineKind) => {
+    if (kind === 'sale') return 'bg-emerald-50 text-emerald-600 border-emerald-100'
+    if (kind === 'deposit') return 'bg-amber-50 text-amber-600 border-amber-100'
+    if (kind === 'work_order') return 'bg-purple-50 text-purple-600 border-purple-100'
+    if (kind === 'appointment') return 'bg-blue-50 text-blue-600 border-blue-100'
+    if (kind === 'image') return 'bg-pink-50 text-pink-600 border-pink-100'
+    if (kind === 'document') return 'bg-cyan-50 text-cyan-600 border-cyan-100'
+    if (kind === 'service') return 'bg-teal-50 text-teal-600 border-teal-100'
+    return 'bg-[var(--bg-base)] text-[var(--text-muted)] border-[var(--border-light)]'
+  }
+
+  if (items.length === 0) return (
+    <div className="py-12 text-center space-y-2">
+      <Clock className="w-10 h-10 text-[var(--pink-100)] mx-auto" />
+      <p className="text-sm text-[var(--text-muted)]">ยังไม่มี Timeline ของลูกค้าคนนี้</p>
+    </div>
+  )
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+          <div><p className="text-lg font-black text-[var(--pink-600)]">{sales.length}</p><p className="text-xs text-[var(--text-muted)]">บิลขาย</p></div>
+          <div><p className="text-lg font-black text-amber-600">{deposits.filter(d => (d.remainingAmount ?? 0) > 0).length}</p><p className="text-xs text-[var(--text-muted)]">มัดจำค้าง</p></div>
+          <div><p className="text-lg font-black text-purple-600">{workOrders.filter(w => w.status !== 'delivered').length}</p><p className="text-xs text-[var(--text-muted)]">งานค้าง</p></div>
+          <div><p className="text-lg font-black text-blue-600">{appointments.filter(a => !['completed', 'cancelled'].includes(a.status)).length}</p><p className="text-xs text-[var(--text-muted)]">นัดหมายเปิด</p></div>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {items.map((item, index) => {
+          const day = dateKey(item.date)
+          const prevDay = index > 0 ? dateKey(items[index - 1].date) : ''
+          const showDay = day !== prevDay
+          const content = (
+            <div className="flex items-start gap-3 rounded-2xl border border-[var(--border-light)] bg-white p-4 hover:border-[var(--pink-100)] transition-all">
+              <div className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${toneFor(item.kind)}`}>
+                {iconFor(item.kind)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-bold text-[var(--text-primary)]">{item.title}</p>
+                  {item.badge && <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--bg-base)] border border-[var(--border-light)] text-[var(--text-muted)]">{item.badge}</span>}
+                </div>
+                {item.description && <p className="text-xs text-[var(--text-muted)] mt-0.5 line-clamp-2">{item.description}</p>}
+              </div>
+              <div className="text-right shrink-0">
+                {item.amount !== undefined && <p className="text-sm font-black text-[var(--pink-500)]">{formatCurrency(item.amount)}</p>}
+                <p className="text-[11px] text-[var(--text-muted)]">{formatDate(item.date)}</p>
+              </div>
+            </div>
+          )
+          return (
+            <div key={item.id} className="space-y-2">
+              {showDay && <p className="text-xs font-bold text-[var(--text-muted)] px-1">{day}</p>}
+              {item.href
+                ? item.href.startsWith('http')
+                  ? <a href={item.href} target="_blank" rel="noreferrer">{content}</a>
+                  : <Link href={item.href}>{content}</Link>
+                : content}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ─── Tab 1: ภาพรวม ────────────────────────────────────────────────────────────
 
-function OverviewTab({ customer, levelCfg, id }: { customer: Customer; levelCfg: { label: string; color: string } | null; id: string }) {
+function OverviewTab({ customer, levelCfg }: { customer: Customer; levelCfg: { label: string; color: string } | null }) {
   const hasMeasurements = customer.headCircumference || customer.headFrontBack || customer.headEarToEar || customer.headLeftRight
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
@@ -378,94 +691,698 @@ function OverviewTab({ customer, levelCfg, id }: { customer: Customer; levelCfg:
 
 // ─── Tab 2: รูปภาพ ─────────────────────────────────────────────────────────────
 
-function PhotosTab({ images, customerId, companyId, userId }: { images: CustomerImage[]; customerId: string; companyId: string; userId: string }) {
-  const [uploading,   setUploading]   = useState(false)
-  const [uploadCat,   setUploadCat]   = useState<string>('before')
-  const [lightbox,    setLightbox]    = useState<string | null>(null)
-  const [activeImgCat, setActiveImgCat] = useState('before')
+function PhotosTab({
+  images,
+  workCases,
+  customerId,
+  companyId,
+  branchId,
+  userId,
+}: {
+  images: CustomerImage[]
+  workCases: CustomerWorkCase[]
+  customerId: string
+  companyId: string
+  branchId: string
+  userId: string
+}) {
+  type ImgCat = CustomerImage['category']
+  type CaseForm = {
+    type: CustomerWorkCaseType
+    title: string
+    caseDate: string
+    repairTypes: CustomerRepairWorkType[]
+    notes: string
+  }
+
+  const todayInput = () => {
+    const d = new Date()
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+    return d.toISOString().slice(0, 10)
+  }
+
+  const blankCaseForm = (): CaseForm => ({
+    type: 'custom_wig',
+    title: '',
+    caseDate: todayInput(),
+    repairTypes: [],
+    notes: '',
+  })
+
+  const [uploading, setUploading] = useState<string | null>(null)
+  const [savingCase, setSavingCase] = useState(false)
+  const [showCaseForm, setShowCaseForm] = useState(false)
+  const [caseForm, setCaseForm] = useState<CaseForm>(blankCaseForm)
+  const [lightbox, setLightbox] = useState<string | null>(null)
+  const [activeImgCat, setActiveImgCat] = useState<ImgCat | 'all'>('all')
+  const [galleryCaseId, setGalleryCaseId] = useState<string | null>(null)
+  const [galleryCategory, setGalleryCategory] = useState<ImgCat | 'all'>('all')
+  const [galleryDate, setGalleryDate] = useState('all')
+  const [galleryLayout, setGalleryLayout] = useState<'compare' | 'grid4' | 'grid5'>('compare')
+  const [generalUploadCat, setGeneralUploadCat] = useState<ImgCat>('before')
   const fileRef = useRef<HTMLInputElement>(null)
+  const uploadTargetRef = useRef<{ caseId?: string; category: ImgCat }>({ category: 'before' })
+
+  const getCaseType = (type: CustomerWorkCaseType) => workCaseTypes.find(t => t.id === type) ?? workCaseTypes[0]
+  const getRepairLabel = (type: CustomerRepairWorkType) => repairWorkTypes.find(t => t.id === type)?.label ?? type
+  const getImageCategory = (category: ImgCat) => imgCategories.find(c => c.id === category) ?? imgCategories[0]
+  const caseImageCategories = (type: CustomerWorkCaseType) => {
+    const allowed: ImgCat[] = type === 'custom_wig'
+      ? ['receipt', 'wig_order', 'before', 'after', 'finished', 'document', 'other']
+      : type === 'repair'
+        ? ['before', 'after', 'finished', 'document', 'other']
+        : ['before', 'after', 'receipt', 'other']
+    return allowed.map(id => getImageCategory(id))
+  }
+
+  const openUpload = (category: ImgCat, caseId?: string) => {
+    uploadTargetRef.current = { category, caseId }
+    fileRef.current?.click()
+  }
+
+  const uploadImageFile = async (file: File, folder: string) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('upload_preset', CLOUDINARY_PRESET)
+    fd.append('folder', folder)
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`, { method: 'POST', body: fd })
+    if (!res.ok) throw new Error('upload failed')
+    return ((await res.json()) as { secure_url: string }).secure_url
+  }
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
     if (!files.length) return
-    setUploading(true)
+    if (!companyId || companyId === 'demo_company') {
+      alert('ระบบกำลังโหลดข้อมูลร้าน กรุณารอสักครู่แล้วลองใหม่')
+      return
+    }
+
+    const target = uploadTargetRef.current
+    const targetKey = `${target.caseId ?? 'general'}:${target.category}`
+    setUploading(targetKey)
     try {
       for (const file of files) {
-        const fd = new FormData()
-        fd.append('file', file)
-        fd.append('upload_preset', CLOUDINARY_PRESET)
-        fd.append('folder', `wigpro/customers/${customerId}`)
-        const res  = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`, { method: 'POST', body: fd })
-        const data = await res.json() as { secure_url: string }
-        await addDoc(collection(db, COLLECTIONS.CUSTOMER_IMAGES), {
-          customerId, companyId, category: uploadCat, url: data.secure_url,
-          uploadedBy: userId, createdAt: serverTimestamp(),
-        })
+        if (!file.type.startsWith('image/')) {
+          alert('แนบได้เฉพาะไฟล์รูปภาพเท่านั้น')
+          continue
+        }
+        if (file.size > 5 * 1024 * 1024) {
+          alert(`${file.name} ใหญ่เกิน 5MB กรุณาย่อรูปก่อนอัปโหลด`)
+          continue
+        }
+
+        const workCase = target.caseId ? workCases.find(c => c.id === target.caseId) : null
+        const categoryLabel = getImageCategory(target.category).label
+        const url = await uploadImageFile(file, `wigpro/customers/${customerId}/${target.caseId ?? 'general'}`)
+        const imageData: Record<string, unknown> = {
+          customerId,
+          companyId,
+          category: target.category,
+          url,
+          caption: `${categoryLabel} - ${workCase?.title ?? 'รูปทั่วไป'}`,
+          imageDate: serverTimestamp(),
+          uploadedBy: userId || 'system',
+          createdAt: serverTimestamp(),
+        }
+        if (target.caseId) imageData.workCaseId = target.caseId
+        await addDoc(collection(db, COLLECTIONS.CUSTOMER_IMAGES), imageData)
       }
-    } catch { alert('อัปโหลดล้มเหลว') }
-    finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
+    } catch (err) {
+      console.error(err)
+      alert('อัปโหลดล้มเหลว')
+    } finally {
+      setUploading(null)
+    }
   }
 
-  const filtered = images.filter(i => i.category === activeImgCat)
+  const toggleRepairType = (type: CustomerRepairWorkType) => {
+    setCaseForm(current => ({
+      ...current,
+      repairTypes: current.repairTypes.includes(type)
+        ? current.repairTypes.filter(t => t !== type)
+        : [...current.repairTypes, type],
+    }))
+  }
+
+  const handleCreateCase = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (savingCase) return
+    if (!companyId || companyId === 'demo_company') {
+      alert('ระบบกำลังโหลดข้อมูลร้าน กรุณารอสักครู่แล้วลองใหม่')
+      return
+    }
+    setSavingCase(true)
+    try {
+      const type = getCaseType(caseForm.type)
+      await addDoc(collection(db, COLLECTIONS.CUSTOMER_WORK_CASES), {
+        customerId,
+        companyId,
+        branchId: branchId || '',
+        type: caseForm.type,
+        title: caseForm.title.trim() || `${type.label} ${workCases.length + 1}`,
+        caseDate: caseForm.caseDate ? new Date(caseForm.caseDate) : new Date(),
+        repairTypes: caseForm.type === 'repair' ? caseForm.repairTypes : [],
+        notes: caseForm.notes.trim(),
+        status: 'active',
+        createdBy: userId || 'system',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      setCaseForm(blankCaseForm())
+      setShowCaseForm(false)
+    } catch (err) {
+      console.error(err)
+      alert('สร้างเคสงานไม่สำเร็จ กรุณาลองใหม่')
+    } finally {
+      setSavingCase(false)
+    }
+  }
+
+  const handleDeleteImage = async (imageId: string) => {
+    if (!confirm('ต้องการลบรูปนี้ใช่ไหม?')) return
+    await deleteDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, imageId)).catch(() => alert('ลบรูปไม่สำเร็จ'))
+  }
+
+  const handleDeleteCase = async (workCaseId: string) => {
+    const relatedImages = images.filter(image => image.workCaseId === workCaseId)
+    if (!confirm(`ลบเคสงานนี้พร้อมรูป ${relatedImages.length} รูปใช่ไหม?`)) return
+    if (relatedImages.length > 440) {
+      alert('เคสนี้มีรูปเยอะมาก กรุณาลบรูปบางส่วนก่อนลบเคส')
+      return
+    }
+    try {
+      const batch = writeBatch(db)
+      relatedImages.forEach(image => batch.delete(doc(db, COLLECTIONS.CUSTOMER_IMAGES, image.id)))
+      batch.delete(doc(db, COLLECTIONS.CUSTOMER_WORK_CASES, workCaseId))
+      await batch.commit()
+    } catch (err) {
+      console.error(err)
+      alert('ลบเคสงานไม่สำเร็จ')
+    }
+  }
+
+  const generalImages = images.filter(image => !image.workCaseId)
+  const filteredGeneralImages = activeImgCat === 'all'
+    ? generalImages
+    : generalImages.filter(image => image.category === activeImgCat)
+  const inputCls = 'w-full px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]'
+  const activeGalleryCase = galleryCaseId ? workCases.find(workCase => workCase.id === galleryCaseId) ?? null : null
+  const activeGalleryImages = activeGalleryCase ? images.filter(image => image.workCaseId === activeGalleryCase.id) : []
+  const imageDateKey = (image: CustomerImage) => {
+    const d = image.imageDate ?? image.createdAt
+    if (!(d instanceof Date) || Number.isNaN(d.getTime())) return 'unknown'
+    return d.toISOString().slice(0, 10)
+  }
+  const galleryDateOptions = Array.from(new Set(activeGalleryImages.map(imageDateKey))).filter(key => key !== 'unknown')
+  const galleryImages = activeGalleryImages.filter(image =>
+    (galleryCategory === 'all' || image.category === galleryCategory) &&
+    (galleryDate === 'all' || imageDateKey(image) === galleryDate)
+  )
+  const galleryCompareCategories: ImgCat[] = galleryCategory === 'all'
+    ? ['before', 'after', 'finished']
+    : [galleryCategory]
+  const galleryGridClass = galleryLayout === 'grid5'
+    ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
+    : 'grid-cols-2 md:grid-cols-4'
+  const openCaseGallery = (workCaseId: string) => {
+    setGalleryCaseId(workCaseId)
+    setGalleryCategory('all')
+    setGalleryDate('all')
+  }
 
   return (
-    <>
+    <div className="space-y-5">
       <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleUpload} />
-      {/* Category tabs */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {imgCategories.map(c => (
-          <button key={c.id} onClick={() => setActiveImgCat(c.id)}
-            className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
-              activeImgCat === c.id ? c.color + ' ring-1 ring-current' : 'bg-[var(--bg-base)] border-[var(--border-light)] text-[var(--text-secondary)]'
-            }`}>
-            {c.label} ({images.filter(i => i.category === c.id).length})
-          </button>
-        ))}
-        <button
-          onClick={() => { setUploadCat(activeImgCat); fileRef.current?.click() }}
-          disabled={uploading}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-xs font-semibold hover:opacity-90 transition-all disabled:opacity-50">
-          {uploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
-          อัปโหลด
-        </button>
-      </div>
 
-      {filtered.length === 0 ? (
-        <div className="h-40 flex flex-col items-center justify-center gap-2 border-2 border-dashed border-[var(--border-light)] rounded-xl cursor-pointer hover:border-[var(--pink-200)] transition-all"
-          onClick={() => { setUploadCat(activeImgCat); fileRef.current?.click() }}>
-          <ImageIcon className="w-8 h-8 text-[var(--text-light)]" />
-          <p className="text-xs text-[var(--text-muted)]">คลิกเพื่ออัปโหลดรูป{imgCategories.find(c => c.id === activeImgCat)?.label}</p>
+      <div className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-4 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-[var(--text-primary)] text-sm">อัลบั้ม / เคสงานลูกค้า</h3>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{workCases.length} เคส · {images.length} รูป</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCaseForm(true)}
+            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-xs font-semibold hover:opacity-90 transition-all shadow-md">
+            <Plus className="w-3.5 h-3.5" /> สร้างเคสงาน
+          </button>
         </div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-          {filtered.map(img => (
-            <div key={img.id} className="relative group aspect-square rounded-xl overflow-hidden border border-[var(--border-light)]">
-              <Image src={img.url} alt="customer" fill className="object-cover" sizes="160px" />
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                <button onClick={() => setLightbox(img.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
-                  <ZoomIn className="w-3.5 h-3.5" />
+
+        {showCaseForm && (
+          <form onSubmit={handleCreateCase} className="rounded-2xl border border-[var(--border-light)] bg-white p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="font-semibold text-sm text-[var(--text-primary)]">สร้างเคสงานใหม่</h4>
+              <button type="button" onClick={() => setShowCaseForm(false)} className="p-1 rounded-lg hover:bg-[var(--bg-base)]">
+                <X className="w-4 h-4 text-[var(--text-muted)]" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              {workCaseTypes.map(type => (
+                <button
+                  key={type.id}
+                  type="button"
+                  onClick={() => setCaseForm(current => ({ ...current, type: type.id }))}
+                  className={`text-left rounded-2xl border p-3 transition-all ${
+                    caseForm.type === type.id ? `${type.color} ring-1 ring-current` : 'border-[var(--border-light)] bg-[var(--bg-base)] text-[var(--text-secondary)]'
+                  }`}>
+                  <span className="block text-sm font-bold">{type.label}</span>
+                  <span className="block text-[11px] mt-1 opacity-80">{type.hint}</span>
                 </button>
-                <button onClick={() => deleteDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, img.id))} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ชื่อเคส / ชิ้นงาน</label>
+                <input
+                  value={caseForm.title}
+                  onChange={e => setCaseForm(current => ({ ...current, title: e.target.value }))}
+                  placeholder="เช่น ชิ้นที่ 1, วิกฟูคัสตอม, งานซ่อมหน้าม้า"
+                  className={inputCls}
+                />
               </div>
-              <div className="absolute bottom-0 left-0 right-0 bg-black/40 px-1.5 py-0.5">
-                <p className="text-white text-[9px]">{formatDate(img.createdAt)}</p>
+              <div>
+                <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">วันที่</label>
+                <input
+                  type="date"
+                  value={caseForm.caseDate}
+                  onChange={e => setCaseForm(current => ({ ...current, caseDate: e.target.value }))}
+                  className={inputCls}
+                />
               </div>
             </div>
+
+            {caseForm.type === 'repair' && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-[var(--text-muted)]">ประเภทงานซ่อม</p>
+                <div className="flex flex-wrap gap-2">
+                  {repairWorkTypes.map(type => (
+                    <button
+                      key={type.id}
+                      type="button"
+                      onClick={() => toggleRepairType(type.id)}
+                      className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                        caseForm.repairTypes.includes(type.id)
+                          ? 'bg-amber-50 text-amber-700 border-amber-200 ring-1 ring-amber-500'
+                          : 'bg-[var(--bg-base)] border-[var(--border-light)] text-[var(--text-secondary)]'
+                      }`}>
+                      {type.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <textarea
+              value={caseForm.notes}
+              onChange={e => setCaseForm(current => ({ ...current, notes: e.target.value }))}
+              rows={3}
+              placeholder="หมายเหตุของเคสนี้ เช่น รายละเอียดงาน สิ่งที่ต้องระวัง หรือข้อมูลที่อยากให้ทีมเห็น"
+              className={inputCls + ' resize-none'}
+            />
+
+            <button
+              type="submit"
+              disabled={savingCase}
+              className="w-full py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2">
+              {savingCase ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+              {savingCase ? 'กำลังสร้างเคส...' : 'บันทึกเคสงาน'}
+            </button>
+          </form>
+        )}
+      </div>
+
+      {workCases.length === 0 ? (
+        <div className="py-12 text-center space-y-2 rounded-2xl border border-dashed border-[var(--border-light)]">
+          <ImageIcon className="w-10 h-10 text-[var(--pink-100)] mx-auto" />
+          <p className="text-sm text-[var(--text-muted)]">ยังไม่มีเคสงานของลูกค้าคนนี้</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {workCases.map(workCase => {
+            const type = getCaseType(workCase.type)
+            const caseImages = images.filter(image => image.workCaseId === workCase.id)
+            const categories = caseImageCategories(workCase.type)
+
+            return (
+              <div key={workCase.id} className="rounded-2xl border border-[var(--border-light)] bg-white overflow-hidden">
+                <div className="p-4 border-b border-[var(--border-light)] flex flex-col lg:flex-row lg:items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${type.color}`}>{type.label}</span>
+                      <h4 className="font-bold text-[var(--text-primary)]">{workCase.title}</h4>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-[var(--text-muted)]">
+                      <span>{formatDate(workCase.caseDate)}</span>
+                      <span>·</span>
+                      <span>{caseImages.length} รูป</span>
+                      {workCase.type === 'repair' && workCase.repairTypes?.length ? (
+                        <>
+                          <span>·</span>
+                          <span>{workCase.repairTypes.map(getRepairLabel).join(', ')}</span>
+                        </>
+                      ) : null}
+                    </div>
+                    {workCase.notes && <p className="text-xs text-[var(--text-secondary)] mt-2 whitespace-pre-line">{workCase.notes}</p>}
+                  </div>
+                  <div className="self-start flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openCaseGallery(workCase.id)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] text-xs font-semibold text-[var(--text-secondary)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)] transition-all">
+                      <ZoomIn className="w-3.5 h-3.5" /> ดู Before & After
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCase(workCase.id)}
+                      className="p-2 rounded-xl text-[var(--text-muted)] hover:text-red-500 hover:bg-red-50 transition-all">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-4">
+                  {categories.map(category => {
+                    const groupedImages = caseImages.filter(image => image.category === category.id)
+                    const key = `${workCase.id}:${category.id}`
+                    const isUploading = uploading === key
+                    return (
+                      <section key={category.id} className="space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${category.color}`}>
+                            {category.label} ({groupedImages.length})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => openUpload(category.id, workCase.id)}
+                            disabled={Boolean(uploading)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] text-[11px] font-semibold text-[var(--text-secondary)] hover:border-[var(--pink-200)] disabled:opacity-50">
+                            {isUploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+                            เพิ่มรูป
+                          </button>
+                        </div>
+
+                        {groupedImages.length === 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => openUpload(category.id, workCase.id)}
+                            disabled={Boolean(uploading)}
+                            className="w-full h-24 rounded-2xl border-2 border-dashed border-[var(--border-light)] bg-[var(--bg-base)] text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)] transition-all disabled:opacity-50">
+                            เพิ่มรูป{category.label}
+                          </button>
+                        ) : (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                            {groupedImages.map(image => (
+                              <div key={image.id} className="relative group aspect-square rounded-xl overflow-hidden border border-[var(--border-light)] bg-[var(--bg-base)]">
+                                <CustomerPhoto src={image.url} alt={image.caption || category.label} />
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                                  <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
+                                    <ZoomIn className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
+                                  <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </section>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-[var(--border-light)] bg-white p-4 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-[var(--text-primary)] text-sm">รูปทั่วไป / รูปเดิม</h3>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{generalImages.length} รูปที่ยังไม่ได้ผูกกับเคสงาน</p>
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={generalUploadCat}
+              onChange={e => setGeneralUploadCat(e.target.value as ImgCat)}
+              className="px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
+              {imgCategories.map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
+            </select>
+            <button
+              type="button"
+              onClick={() => openUpload(generalUploadCat)}
+              disabled={Boolean(uploading)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-xs font-semibold hover:opacity-90 transition-all disabled:opacity-50">
+              {uploading?.startsWith('general:') ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+              เพิ่มรูป
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveImgCat('all')}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+              activeImgCat === 'all'
+                ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white border-transparent'
+                : 'bg-[var(--bg-base)] border-[var(--border-light)] text-[var(--text-secondary)]'
+            }`}>
+            ทั้งหมด ({generalImages.length})
+          </button>
+          {imgCategories.map(category => (
+            <button
+              key={category.id}
+              type="button"
+              onClick={() => setActiveImgCat(category.id)}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                activeImgCat === category.id ? category.color + ' ring-1 ring-current' : 'bg-[var(--bg-base)] border-[var(--border-light)] text-[var(--text-secondary)]'
+              }`}>
+              {category.label} ({generalImages.filter(image => image.category === category.id).length})
+            </button>
           ))}
+        </div>
+
+        {filteredGeneralImages.length === 0 ? (
+          <button
+            type="button"
+            onClick={() => openUpload(generalUploadCat)}
+            className="w-full h-32 flex flex-col items-center justify-center gap-2 border-2 border-dashed border-[var(--border-light)] rounded-xl hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)] transition-all">
+            <ImageIcon className="w-8 h-8 text-[var(--text-light)]" />
+            <span className="text-xs text-[var(--text-muted)]">ยังไม่มีรูปในหมวดนี้</span>
+          </button>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {filteredGeneralImages.map(image => {
+              const category = getImageCategory(image.category)
+              return (
+                <div key={image.id} className="relative group aspect-square rounded-xl overflow-hidden border border-[var(--border-light)] bg-[var(--bg-base)]">
+                  <CustomerPhoto src={image.url} alt={image.caption || 'customer'} />
+                  <span className={`absolute left-2 top-2 text-[9px] px-2 py-0.5 rounded-full border font-semibold ${category.color}`}>{category.label}</span>
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                    <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
+                      <ZoomIn className="w-3.5 h-3.5" />
+                    </button>
+                    <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
+                    <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {activeGalleryCase && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5">
+          <div className="bg-white w-full max-w-6xl max-h-[92vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col">
+            <div className="shrink-0 border-b border-[var(--border-light)] p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-bold text-[var(--pink-600)] uppercase tracking-wide">Before & After Gallery</p>
+                  <h3 className="text-lg font-bold text-[var(--text-primary)] truncate">{activeGalleryCase.title}</h3>
+                  <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                    {formatDate(activeGalleryCase.caseDate)} · {activeGalleryImages.length} รูป · {getCaseType(activeGalleryCase.type).label}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setGalleryCaseId(null)}
+                  className="h-9 w-9 shrink-0 rounded-xl border border-[var(--border-light)] flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-base)]">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-[1.2fr_1fr_1fr_auto] gap-2">
+                <select
+                  value={galleryCaseId ?? ''}
+                  onChange={e => {
+                    setGalleryCaseId(e.target.value)
+                    setGalleryCategory('all')
+                    setGalleryDate('all')
+                  }}
+                  className="px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
+                  {workCases.map(workCase => <option key={workCase.id} value={workCase.id}>{workCase.title} · {formatDate(workCase.caseDate)}</option>)}
+                </select>
+                <select
+                  value={galleryCategory}
+                  onChange={e => setGalleryCategory(e.target.value as ImgCat | 'all')}
+                  className="px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
+                  <option value="all">ทุกหมวดรูป</option>
+                  {caseImageCategories(activeGalleryCase.type).map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
+                </select>
+                <select
+                  value={galleryDate}
+                  onChange={e => setGalleryDate(e.target.value)}
+                  className="px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
+                  <option value="all">ทุกวันที่</option>
+                  {galleryDateOptions.map(date => <option key={date} value={date}>{formatDate(new Date(`${date}T00:00:00`))}</option>)}
+                </select>
+                <div className="flex rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-1">
+                  {[
+                    ['compare', 'เทียบ'],
+                    ['grid4', '4 ช่อง'],
+                    ['grid5', '5 ช่อง'],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setGalleryLayout(value as 'compare' | 'grid4' | 'grid5')}
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                        galleryLayout === value ? 'bg-white text-[var(--pink-600)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                      }`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {(['before', 'after', 'finished'] as ImgCat[]).map(categoryId => {
+                  const category = getImageCategory(categoryId)
+                  const key = `${activeGalleryCase.id}:${categoryId}`
+                  return (
+                    <button
+                      key={categoryId}
+                      type="button"
+                      onClick={() => openUpload(categoryId, activeGalleryCase.id)}
+                      disabled={Boolean(uploading)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-semibold disabled:opacity-50 ${category.color}`}>
+                      {uploading === key ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+                      เพิ่ม {category.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto bg-[var(--bg-base)] p-4">
+              {galleryImages.length === 0 ? (
+                <div className="min-h-[20rem] flex flex-col items-center justify-center gap-2 text-center">
+                  <ImageIcon className="w-10 h-10 text-[var(--pink-200)]" />
+                  <p className="text-sm font-semibold text-[var(--text-secondary)]">ยังไม่มีรูปตามเงื่อนไขนี้</p>
+                  <p className="text-xs text-[var(--text-muted)]">เลือกวันที่/หมวดอื่น หรือกดเพิ่มรูปด้านบน</p>
+                </div>
+              ) : galleryLayout === 'compare' ? (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {galleryCompareCategories.map(categoryId => {
+                    const category = getImageCategory(categoryId)
+                    const categoryImages = galleryImages.filter(image => image.category === categoryId)
+                    return (
+                      <section key={categoryId} className="rounded-2xl border border-[var(--border-light)] bg-white p-3 space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${category.color}`}>
+                            {category.label} ({categoryImages.length})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => openUpload(categoryId, activeGalleryCase.id)}
+                            disabled={Boolean(uploading)}
+                            className="px-2.5 py-1.5 rounded-xl bg-[var(--bg-base)] border border-[var(--border-light)] text-[11px] font-semibold text-[var(--text-secondary)] disabled:opacity-50">
+                            เพิ่มรูป
+                          </button>
+                        </div>
+                        {categoryImages.length === 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => openUpload(categoryId, activeGalleryCase.id)}
+                            className="w-full h-36 rounded-2xl border-2 border-dashed border-[var(--border-light)] text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]">
+                            ยังไม่มีรูปหมวดนี้
+                          </button>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-2">
+                            {categoryImages.map(image => (
+                              <div key={image.id} className="relative group aspect-[4/5] rounded-xl overflow-hidden border border-[var(--border-light)] bg-[var(--bg-base)]">
+                                <CustomerPhoto src={image.url} alt={image.caption || category.label} />
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                                  <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
+                                    <ZoomIn className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
+                                  <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </section>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className={`grid ${galleryGridClass} gap-3`}>
+                  {galleryImages.map(image => {
+                    const category = getImageCategory(image.category)
+                    return (
+                      <div key={image.id} className="relative group aspect-square rounded-2xl overflow-hidden border border-[var(--border-light)] bg-white">
+                        <CustomerPhoto src={image.url} alt={image.caption || category.label} />
+                        <span className={`absolute left-2 top-2 text-[9px] px-2 py-0.5 rounded-full border font-semibold ${category.color}`}>{category.label}</span>
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                          <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
+                            <ZoomIn className="w-3.5 h-3.5" />
+                          </button>
+                          <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
+                          <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
       {lightbox && (
         <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" onClick={() => setLightbox(null)}>
-          <button className="absolute top-4 right-4 text-white/70 hover:text-white p-2"><X className="w-6 h-6" /></button>
+          <button type="button" className="absolute top-4 right-4 text-white/70 hover:text-white p-2"><X className="w-6 h-6" /></button>
           <div className="relative max-w-2xl max-h-[85vh] w-full h-full">
-            <Image src={lightbox} alt="preview" fill className="object-contain" sizes="800px" />
+            <CustomerPhoto src={lightbox} alt="preview" fit="contain" />
           </div>
         </div>
       )}
-    </>
+    </div>
   )
 }
 
@@ -661,7 +1578,11 @@ function ServiceRecordsTab({ records, customerId, companyId, branchId, userId }:
     setUploading(which)
     try {
       const url = await uploadServiceImage(file)
-      which === 'before' ? setBeforeImg(url) : setAfterImg(url)
+      if (which === 'before') {
+        setBeforeImg(url)
+      } else {
+        setAfterImg(url)
+      }
     } catch { alert('อัปโหลดรูปไม่สำเร็จ') } finally { setUploading(null) }
   }
 

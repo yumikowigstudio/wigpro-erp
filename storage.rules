@@ -6,52 +6,118 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    // Images under 10MB
+    function userData() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && userData().role == 'super_admin';
+    }
+
+    function belongsToCompany(companyId) {
+      return isAuthenticated()
+        && companyId is string
+        && companyId != ''
+        && (isSuperAdmin() || userData().companyId == companyId);
+    }
+
+    function metadataCompanyMatches(companyId) {
+      return request.resource.metadata.companyId == companyId;
+    }
+
+    function resourceCompanyMatches() {
+      return resource.metadata.companyId is string && belongsToCompany(resource.metadata.companyId);
+    }
+
     function isValidImage() {
-      return request.resource.contentType.matches('image/.*')
-        && request.resource.size < 10 * 1024 * 1024;
+      return request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType in [
+          'image/jpeg',
+          'image/png',
+          'image/webp',
+          'image/gif'
+        ];
     }
 
-    // Documents under 20MB
     function isValidDocument() {
-      return request.resource.contentType.matches('application/.*')
-        && request.resource.size < 20 * 1024 * 1024;
+      return request.resource.size <= 20 * 1024 * 1024
+        && request.resource.contentType in [
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        ];
     }
 
-    // Customer images
+    function customerCompanyId(customerId) {
+      return firestore.get(/databases/(default)/documents/customers/$(customerId)).data.companyId;
+    }
+
+    function productCompanyId(productId) {
+      return firestore.get(/databases/(default)/documents/products/$(productId)).data.companyId;
+    }
+
+    function workOrderCompanyId(orderId) {
+      return firestore.get(/databases/(default)/documents/work_orders/$(orderId)).data.companyId;
+    }
+
+    function documentCompanyId(docId) {
+      return firestore.get(/databases/(default)/documents/documents/$(docId)).data.companyId;
+    }
+
+    match /companies/{companyId}/{allPaths=**} {
+      allow read: if belongsToCompany(companyId);
+      allow create, update: if belongsToCompany(companyId)
+        && metadataCompanyMatches(companyId)
+        && (isValidImage() || isValidDocument());
+      allow delete: if belongsToCompany(companyId);
+    }
+
     match /customers/{customerId}/{allPaths=**} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && isValidImage();
+      allow read: if belongsToCompany(customerCompanyId(customerId));
+      allow create, update: if belongsToCompany(customerCompanyId(customerId))
+        && metadataCompanyMatches(customerCompanyId(customerId))
+        && isValidImage();
+      allow delete: if belongsToCompany(customerCompanyId(customerId));
     }
 
-    // Product images
     match /products/{productId}/{allPaths=**} {
-      allow read: if true; // Public
-      allow write: if isAuthenticated();
+      allow read: if belongsToCompany(productCompanyId(productId));
+      allow create, update: if belongsToCompany(productCompanyId(productId))
+        && metadataCompanyMatches(productCompanyId(productId))
+        && isValidImage();
+      allow delete: if belongsToCompany(productCompanyId(productId));
     }
 
-    // Work order images
     match /work_orders/{orderId}/{allPaths=**} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && isValidImage();
+      allow read: if belongsToCompany(workOrderCompanyId(orderId));
+      allow create, update: if belongsToCompany(workOrderCompanyId(orderId))
+        && metadataCompanyMatches(workOrderCompanyId(orderId))
+        && isValidImage();
+      allow delete: if belongsToCompany(workOrderCompanyId(orderId));
     }
 
-    // Documents
     match /documents/{docId}/{allPaths=**} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && (isValidImage() || isValidDocument());
+      allow read: if belongsToCompany(documentCompanyId(docId));
+      allow create, update: if belongsToCompany(documentCompanyId(docId))
+        && metadataCompanyMatches(documentCompanyId(docId))
+        && (isValidImage() || isValidDocument());
+      allow delete: if belongsToCompany(documentCompanyId(docId));
     }
 
-    // Payment slips
     match /payment_slips/{slipId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && isValidImage();
+      allow read: if resourceCompanyMatches();
+      allow create, update: if metadataCompanyMatches(request.resource.metadata.companyId) && belongsToCompany(request.resource.metadata.companyId) && isValidImage();
+      allow delete: if resourceCompanyMatches();
     }
 
-    // Company logos
     match /company/{companyId}/{allPaths=**} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow read: if belongsToCompany(companyId);
+      allow create, update: if belongsToCompany(companyId)
+        && metadataCompanyMatches(companyId)
+        && isValidImage();
+      allow delete: if belongsToCompany(companyId);
     }
   }
 }

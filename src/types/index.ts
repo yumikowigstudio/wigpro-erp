@@ -34,11 +34,30 @@ export interface Branch {
   address?: string
   phone?: string
   email?: string
+  receiptName?: string
+  receiptAddress?: string
+  receiptPhone?: string
+  receiptEmail?: string
+  receiptTaxId?: string
+  receiptFooter?: string
   managerId?: string
   isMainBranch: boolean
   status: Status
   createdAt: Date
   updatedAt: Date
+}
+
+export interface ReceiptShopSnapshot {
+  nameTh: string
+  address?: string
+  phone?: string
+  email?: string
+  taxId?: string
+  logoUrl?: string
+  receiptFooter?: string
+  branchId?: string
+  branchName?: string
+  branchCode?: string
 }
 
 // ==========================================
@@ -122,12 +141,33 @@ export interface CustomerImage {
   id: string
   companyId: string
   customerId: string
-  category: 'before' | 'after' | 'receipt' | 'wig_order' | 'document' | 'other'
+  workCaseId?: string
+  category: 'before' | 'after' | 'finished' | 'receipt' | 'wig_order' | 'document' | 'other'
   url: string
   thumbnail?: string
   caption?: string
+  imageDate?: Date
   uploadedBy: string
   createdAt: Date
+}
+
+export type CustomerWorkCaseType = 'custom_wig' | 'ready_made' | 'repair'
+export type CustomerRepairWorkType = 'reshape' | 'color' | 'add_hair' | 'replace_parts' | 'other'
+
+export interface CustomerWorkCase {
+  id: string
+  companyId: string
+  customerId: string
+  branchId?: string
+  type: CustomerWorkCaseType
+  title: string
+  caseDate: Date
+  repairTypes?: CustomerRepairWorkType[]
+  notes?: string
+  status: Status
+  createdBy: string
+  createdAt: Date
+  updatedAt: Date
 }
 
 export interface CustomerDocument {
@@ -347,10 +387,13 @@ export interface StockMovement {
   companyId: string
   branchId: string
   productId: string
-  type: 'in' | 'out' | 'transfer_in' | 'transfer_out' | 'adjust' | 'return'
+  type: 'in' | 'out' | 'transfer_in' | 'transfer_out' | 'adjust' | 'return' | 'cancel_return'
   quantity: number
-  previousQty: number
-  newQty: number
+  previousQty: number | null
+  newQty: number | null
+  isNegativeStock?: boolean
+  negativeStockReason?: string
+  approvedBy?: string
   referenceId?: string
   referenceType?: string
   costPrice: number
@@ -377,10 +420,19 @@ export interface WorkOrder {
   id: string
   companyId: string
   branchId: string
+  branchName?: string
+  branchCode?: string
+  receiptInfo?: ReceiptShopSnapshot
   orderNo: string // e.g. 0105690001
   customerId: string
   customerName: string
   saleOrderId: string
+  saleReceiptNo?: string
+  sourceType?: 'sale' | 'deposit' | 'manual'
+  sourceNo?: string
+  sourceItemId?: string
+  sourceItemName?: string
+  sourceItemQty?: number
   // Wig details
   wigType?: string
   wigColor?: string
@@ -422,6 +474,9 @@ export interface Deposit {
   id: string
   companyId: string
   branchId: string
+  branchName?: string
+  branchCode?: string
+  receiptInfo?: ReceiptShopSnapshot
   depositNo: string
   customerId: string
   customerName: string
@@ -429,11 +484,17 @@ export interface Deposit {
   referenceType?: 'work_order' | 'sale'
   items: DepositItem[]
   totalAmount: number
+  preVatAmount?: number
+  taxAmount?: number
+  taxIncluded?: boolean
+  showVatOnReceipt?: boolean
   depositAmount: number
   paidAmount: number
   remainingAmount: number
   status: DepositStatus
   notes?: string
+  pickupDate?: string
+  slipUrl?: string
   createdBy: string
   createdAt: Date
   updatedAt: Date
@@ -443,9 +504,16 @@ export interface DepositItem {
   productId?: string
   serviceId?: string
   name: string
+  isWigProduct?: boolean
+  wigType?: string
   quantity: number
   unitPrice: number
+  discountAmount?: number
+  taxType?: 'vat' | 'non_vat'
+  taxAmount?: number
+  taxIncluded?: boolean
   total: number
+  note?: string
 }
 
 // ==========================================
@@ -455,6 +523,7 @@ export interface DepositItem {
 export type PaymentMethod = 'cash' | 'transfer' | 'qr' | 'credit_card'
 
 export type SaleStatus = 'pending' | 'completed' | 'returned' | 'cancelled'
+export type PaymentStatus = 'pending' | 'confirmed' | 'rejected'
 
 export interface Sale {
   id: string
@@ -470,15 +539,50 @@ export interface Sale {
   discountApprovedBy?: string
   discountReason?: string
   taxAmount: number
+  preVatAmount?: number
+  taxIncluded?: boolean
+  showVatOnReceipt?: boolean
   totalAmount: number
   depositDeducted?: number
   payments: Payment[]
   paidAmount: number
   changeAmount: number
   status: SaleStatus
+  paymentStatus?: PaymentStatus
+  paymentConfirmedBy?: string
+  paymentConfirmedAt?: Date
+  hasNegativeStockSale?: boolean
+  negativeStockReason?: string
+  negativeStockApprovedBy?: string
+  negativeStockApprovedAt?: Date
+  negativeStockItems?: Array<{
+    id: string
+    name: string
+    sku?: string
+    stockQty: number
+    requestedQty: number
+    shortageQty: number
+  }>
+  stockRestoredOnCancel?: boolean
+  stockRestoredBy?: string
+  stockRestoredByName?: string
+  stockRestoredAt?: Date
+  stockRestoreItems?: Array<{
+    lineIndex?: number
+    productId: string
+    name: string
+    sku?: string
+    quantity: number
+  }>
+  cancelReason?: string
+  cancelledBy?: string
+  cancelledByName?: string
+  cancelledAt?: Date
   notes?: string
   createdBy: string
   branchName?: string
+  branchCode?: string
+  receiptInfo?: ReceiptShopSnapshot
   createdAt: Date
   updatedAt: Date
 }
@@ -489,15 +593,25 @@ export interface SaleItem {
   serviceId?: string
   name: string
   sku?: string
+  isWigProduct?: boolean
+  wigType?: string
   quantity: number
   unitPrice: number
   discountAmount: number
   taxType: 'vat' | 'non_vat'
   taxAmount: number
+  taxIncluded?: boolean
   total: number
+  note?: string
   staffId?: string
   staffName?: string
   commissionAmount?: number
+  stockBefore?: number | null
+  stockAfter?: number | null
+  isNegativeStockSale?: boolean
+  negativeStockQty?: number
+  negativeStockReason?: string | null
+  negativeStockApprovedBy?: string | null
 }
 
 export interface Payment {
@@ -546,7 +660,7 @@ export interface CommissionRecord {
   saleAmount: number
   commissionRate?: number
   commissionAmount: number
-  status: 'pending' | 'approved' | 'paid'
+  status: 'pending' | 'approved' | 'paid' | 'cancelled'
   month: string // YYYY-MM
   createdAt: Date
   updatedAt: Date

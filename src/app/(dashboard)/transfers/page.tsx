@@ -1,23 +1,48 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { formatDate } from '@/lib/utils'
-import { ArrowLeftRight, Plus, X, Loader2, Package, Copy, Download } from 'lucide-react'
-import { collection, onSnapshot, query, where, addDoc, serverTimestamp } from 'firebase/firestore'
+import { ArrowLeftRight, Plus, X, Loader2, Package, Copy, Download, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { collection, onSnapshot, query, where, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
+import { COLLECTIONS, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
 import { getBranchStock, adjustBranchStock, invId } from '@/lib/stock'
 import { useAuth } from '@/hooks/useAuth'
 
 interface Branch { id: string; name: string; code?: string }
 interface Prod { id: string; name: string; sku?: string; stockQty?: number; costPrice?: number }
 interface Inv { productId: string; branchId: string; quantity: number }
-interface TItem { productId: string; name: string; quantity: number }
-interface TOrder { id: string; orderNo: string; fromBranchId: string; toBranchId: string; items: TItem[]; createdAt?: Date }
+interface TItem {
+  productId: string
+  name?: string
+  productName?: string
+  sku?: string
+  quantity?: number
+  requestedQty?: number
+  approvedQty?: number
+  receivedQty?: number
+  costPrice?: number
+}
+interface TOrder {
+  id: string
+  orderNo: string
+  fromBranchId: string
+  toBranchId: string
+  items: TItem[]
+  status?: string
+  createdAt?: Date
+  receivedAt?: Date
+  receivedBy?: string
+}
 
 const sel = 'px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]'
+const transferQty = (item: TItem) => Number(item.receivedQty ?? item.approvedQty ?? item.requestedQty ?? item.quantity ?? 0)
+const transferItemName = (item: TItem, products: Prod[]) =>
+  item.productName || item.name || products.find(p => p.id === item.productId)?.name || item.productId
 
 export default function TransfersPage() {
-  const { companyId, userId } = useAuth()
+  const searchParams = useSearchParams()
+  const { companyId, branchId, userId } = useAuth()
   const [branches, setBranches] = useState<Branch[]>([])
   const [products, setProducts] = useState<Prod[]>([])
   const [inv, setInv] = useState<Record<string, number>>({})   // key `${pid}_${bid}` -> qty
@@ -44,13 +69,30 @@ export default function TransfersPage() {
     return () => { u1(); u2(); u3(); u4() }
   }, [companyId])
 
+  useEffect(() => {
+    const toBranch = searchParams?.get('toBranch') ?? ''
+    if (!toBranch) return
+    setTo(toBranch)
+    setShowModal(true)
+  }, [searchParams])
+
+  useEffect(() => {
+    if (!to || from || branches.length < 2) return
+    const source = branches.find(branch => branch.id !== to)
+    if (source) setFrom(source.id)
+  }, [branches, from, to])
+
   const branchName = (id: string) => branches.find(b => b.id === id)?.name ?? id
   const avail = (pid: string, bid: string) => inv[invId(pid, bid)] ?? 0
+  const targetBranch = to ? branches.find(b => b.id === to) : null
+  const targetReadyCount = targetBranch ? products.filter(p => inv[invId(p.id, targetBranch.id)] !== undefined).length : 0
+  const targetQty = targetBranch ? products.reduce((sum, p) => sum + avail(p.id, targetBranch.id), 0) : 0
 
   // Seed: สร้างสต๊อกในคลัง (inventory) จาก product.stockQty เข้าสาขาที่เลือก
   const seedBranch = async (bid: string) => {
     if (!bid || !companyId) return
     setBusy('seed')
+    setMsg({ t: 'ok', m: `กำลังรับสต๊อกเข้าสาขา "${branchName(bid)}"...` })
     try {
       for (const p of products) {
         await adjustBranchStock({ companyId, productId: p.id, productName: p.name, branchId: bid,
@@ -66,6 +108,7 @@ export default function TransfersPage() {
     if (!bid || !companyId) return
     if (!confirm(`โคลนรายการสินค้าทั้งหมดเข้าสาขา "${branchName(bid)}" (จำนวน 0)?`)) return
     setBusy('clone')
+    setMsg({ t: 'ok', m: `กำลังเตรียมรายการสินค้าให้ "${branchName(bid)}"...` })
     try {
       for (const p of products) {
         if (inv[invId(p.id, bid)] === undefined) {
@@ -95,24 +138,79 @@ export default function TransfersPage() {
       }
     }
     setBusy('transfer')
+    setMsg({ t: 'ok', m: `กำลังโอนสินค้าไปยัง "${branchName(to)}"...` })
     try {
-      const orderNo = `TF-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}${String(Date.now()).slice(-4)}`
+      const orderNo = await generateBranchDocumentNo(companyId, from, 'transfer')
       for (const r of items) {
         const p = products.find(x => x.id === r.productId)!
         const qty = Number(r.quantity)
         await adjustBranchStock({ companyId, productId: p.id, productName: p.name, branchId: from, delta: -qty, type: 'transfer_out', costPrice: p.costPrice, referenceType: 'transfer', referenceNo: orderNo, performedBy: userId })
-        await adjustBranchStock({ companyId, productId: p.id, productName: p.name, branchId: to, delta: qty, type: 'transfer_in', costPrice: p.costPrice, referenceType: 'transfer', referenceNo: orderNo, performedBy: userId })
       }
       await addDoc(collection(db, COLLECTIONS.TRANSFER_ORDERS), {
         companyId, orderNo, fromBranchId: from, toBranchId: to,
-        items: items.map(r => ({ productId: r.productId, name: products.find(p => p.id === r.productId)?.name ?? '', quantity: Number(r.quantity) })),
-        status: 'received', requestedBy: userId, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+        items: items.map(r => {
+          const p = products.find(product => product.id === r.productId)
+          return {
+            productId: r.productId,
+            name: p?.name ?? '',
+            productName: p?.name ?? '',
+            sku: p?.sku ?? '',
+            quantity: Number(r.quantity),
+            requestedQty: Number(r.quantity),
+            approvedQty: Number(r.quantity),
+            costPrice: p?.costPrice ?? 0,
+          }
+        }),
+        status: 'in_transit', requestedBy: userId, requestedAt: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       })
       setMsg({ t: 'ok', m: `โอนสำเร็จ (${orderNo})` })
+      setMsg({ t: 'ok', m: `สร้างใบโอน ${orderNo} แล้ว รอปลายทางตรวจรับก่อนเข้าสต๊อก` })
       setRows([{ productId: '', quantity: '' }]); setShowModal(false)
     } catch (e) { setMsg({ t: 'err', m: 'โอนไม่สำเร็จ: ' + (e instanceof Error ? e.message : '') }) }
     finally { setBusy('') }
   }
+
+  const receiveTransfer = async (order: TOrder) => {
+    if (!companyId || order.status === 'received') return
+    if (!confirm(`ยืนยันตรวจรับใบโอน ${order.orderNo} เข้าสาขา ${branchName(order.toBranchId)}?`)) return
+    setBusy(`receive-${order.id}`)
+    setMsg({ t: 'ok', m: `กำลังตรวจรับใบโอน ${order.orderNo}...` })
+    try {
+      for (const item of order.items ?? []) {
+        const qty = transferQty(item)
+        if (qty <= 0) continue
+        const p = products.find(product => product.id === item.productId)
+        await adjustBranchStock({
+          companyId,
+          productId: item.productId,
+          productName: transferItemName(item, products),
+          branchId: order.toBranchId,
+          delta: qty,
+          type: 'transfer_in',
+          costPrice: item.costPrice ?? p?.costPrice ?? 0,
+          referenceType: 'transfer',
+          referenceNo: order.orderNo,
+          performedBy: userId,
+          notes: `ตรวจรับใบโอน ${order.orderNo}`,
+        })
+      }
+
+      await updateDoc(doc(db, COLLECTIONS.TRANSFER_ORDERS, order.id), {
+        status: 'received',
+        receivedAt: serverTimestamp(),
+        receivedBy: userId,
+        items: (order.items ?? []).map(item => ({ ...item, receivedQty: transferQty(item) })),
+        updatedAt: serverTimestamp(),
+      })
+      setMsg({ t: 'ok', m: `ตรวจรับใบโอน ${order.orderNo} เรียบร้อย สต๊อกเข้าปลายทางแล้ว` })
+    } catch (e) {
+      setMsg({ t: 'err', m: 'ตรวจรับไม่สำเร็จ: ' + (e instanceof Error ? e.message : '') })
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const pendingReceiveCount = orders.filter(o => o.status !== 'received' && o.status !== 'cancelled').length
 
   return (
     <div className="space-y-6">
@@ -135,8 +233,42 @@ export default function TransfersPage() {
         </div>
       )}
 
+      {targetBranch && (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 flex flex-col lg:flex-row lg:items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shrink-0">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-emerald-800">กำลังเตรียมสต๊อกให้ {targetBranch.name}</p>
+            <p className="text-xs text-emerald-700 mt-0.5">
+              มีรายการสินค้าในคลังสาขานี้ {targetReadyCount}/{products.length} รายการ · จำนวนรวม {targetQty} ชิ้น
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => cloneToBranch(targetBranch.id)} disabled={!!busy}
+              className="px-3 py-2 rounded-xl bg-white text-blue-700 text-xs font-bold border border-blue-100 disabled:opacity-50 flex items-center gap-1.5">
+              {busy === 'clone' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}
+              {busy === 'clone' ? 'กำลังเตรียม...' : 'เตรียมรายการสินค้า'}
+            </button>
+            <button onClick={() => seedBranch(targetBranch.id)} disabled={!!busy}
+              className="px-3 py-2 rounded-xl bg-white text-emerald-700 text-xs font-bold border border-emerald-100 disabled:opacity-50 flex items-center gap-1.5">
+              {busy === 'seed' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+              {busy === 'seed' ? 'กำลังรับเข้า...' : 'รับเข้าจากสต๊อกหลัก'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {msg && (
         <div className={`px-4 py-2.5 rounded-xl text-sm font-medium ${msg.t === 'ok' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-600 border border-red-200'}`}>{msg.m}</div>
+      )}
+
+      {pendingReceiveCount > 0 && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex flex-col sm:flex-row sm:items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span className="font-semibold">มีใบโอนรอตรวจรับ {pendingReceiveCount} ใบ</span>
+          <span className="text-xs text-amber-700">ปลายทางต้องกดตรวจรับก่อน สต๊อกจึงจะเข้าในสาขานั้น</span>
+        </div>
       )}
 
       {/* เครื่องมือคลัง */}
@@ -148,11 +280,13 @@ export default function TransfersPage() {
               <span className="text-xs font-medium">{b.name}</span>
               <button onClick={() => seedBranch(b.id)} disabled={!!busy} title="นำสต๊อกสินค้าปัจจุบันเข้าคลังสาขานี้"
                 className="text-[11px] px-2 py-1 bg-emerald-50 text-emerald-700 rounded-lg font-semibold disabled:opacity-40 flex items-center gap-1">
-                <Download className="w-3 h-3" /> Seed
+                {busy === 'seed' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                {busy === 'seed' ? 'กำลังทำ...' : 'Seed'}
               </button>
               <button onClick={() => cloneToBranch(b.id)} disabled={!!busy} title="โคลนรายการสินค้าเข้าสาขานี้ (จำนวน 0)"
                 className="text-[11px] px-2 py-1 bg-blue-50 text-blue-700 rounded-lg font-semibold disabled:opacity-40 flex items-center gap-1">
-                <Copy className="w-3 h-3" /> Clone
+                {busy === 'clone' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Copy className="w-3 h-3" />}
+                {busy === 'clone' ? 'กำลังทำ...' : 'Clone'}
               </button>
             </div>
           ))}
@@ -192,9 +326,36 @@ export default function TransfersPage() {
               <div key={o.id} className="bg-white rounded-xl border border-[var(--border-light)] p-3 flex items-center gap-3">
                 <Package className="w-4 h-4 text-[var(--pink-400)] shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold">{o.orderNo}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-semibold">{o.orderNo}</p>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                      o.status === 'received'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-amber-50 text-amber-700 border border-amber-200'
+                    }`}>
+                      {o.status === 'received' ? 'รับเข้าแล้ว' : 'รอตรวจรับ'}
+                    </span>
+                    {branchId === o.toBranchId && o.status !== 'received' && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 font-semibold">
+                        งานของสาขานี้
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-[var(--text-muted)]">{branchName(o.fromBranchId)} → {branchName(o.toBranchId)} · {o.items?.length ?? 0} รายการ{o.createdAt ? ` · ${formatDate(o.createdAt)}` : ''}</p>
+                  <p className="text-xs text-[var(--text-light)] mt-0.5">
+                    จำนวนรวม {o.items?.reduce((sum, item) => sum + transferQty(item), 0) ?? 0} ชิ้น
+                  </p>
                 </div>
+                {o.status !== 'received' && (
+                  <button
+                    onClick={() => receiveTransfer(o)}
+                    disabled={!!busy}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold hover:bg-emerald-100 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    {busy === `receive-${o.id}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                    ตรวจรับ
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -242,9 +403,10 @@ export default function TransfersPage() {
               </div>
             </div>
             <div className="p-4 border-t border-[var(--border-light)] flex gap-3">
-              <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 border border-[var(--border-light)] rounded-xl text-sm font-semibold text-[var(--text-secondary)]">ยกเลิก</button>
-              <button onClick={submitTransfer} disabled={busy === 'transfer'} className="flex-1 py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-bold disabled:opacity-40 flex items-center justify-center gap-2">
-                {busy === 'transfer' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowLeftRight className="w-4 h-4" />} ยืนยันโอน
+              <button onClick={() => setShowModal(false)} disabled={!!busy} className="flex-1 py-2.5 border border-[var(--border-light)] rounded-xl text-sm font-semibold text-[var(--text-secondary)] disabled:opacity-50">ยกเลิก</button>
+              <button onClick={submitTransfer} disabled={!!busy} className="flex-1 py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+                {busy === 'transfer' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowLeftRight className="w-4 h-4" />}
+                {busy === 'transfer' ? 'กำลังโอน...' : 'ยืนยันโอน'}
               </button>
             </div>
           </div>

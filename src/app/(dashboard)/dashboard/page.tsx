@@ -5,17 +5,18 @@ import StatCard from '@/components/dashboard/StatCard'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import {
   TrendingUp, Users, Factory, Calendar,
-  AlertTriangle, Scissors, Phone, ChevronRight,
+  AlertTriangle, Scissors, Phone, ChevronRight, Building2, CreditCard,
 } from 'lucide-react'
 import Link from 'next/link'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell,
 } from 'recharts'
-import { collection, onSnapshot, query, where, Timestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
-import { Appointment, Sale } from '@/types'
+import { isCountableSale } from '@/lib/sales'
+import { Appointment, Sale, WorkOrder } from '@/types'
 
 const PROD_COLORS: Record<string, string> = {
   pending: '#fbbf24', in_progress: '#c084fc', qc: '#60a5fa', ready: '#4ade80'
@@ -54,7 +55,7 @@ function getPeriodRange(period: Period): { start: Date; end: Date; label: string
 }
 
 export default function DashboardPage() {
-  const { companyId, currentBranch } = useAuth()
+  const { companyId, branchId, currentBranch, branches, user } = useAuth()
   const [period, setPeriod]       = useState<Period>('month')
 
   /* Period-dependent data */
@@ -72,34 +73,38 @@ export default function DashboardPage() {
     { name: 'เม.ย.', sales: 0 }, { name: 'พ.ค.', sales: 0 }, { name: 'มิ.ย.', sales: 0 },
   ])
   const [sixMonthTotal, setSixMonthTotal] = useState(0)
+  const [branchStats, setBranchStats] = useState<Array<{ id: string; name: string; salesToday: number; pendingPayments: number; activeWorkOrders: number }>>([])
 
   /* ─── Period-dependent queries ─── */
   useEffect(() => {
-    if (!companyId) return
+    if (!companyId || !branchId) return
     const { start, end } = getPeriodRange(period)
-    const tsStart = Timestamp.fromDate(start)
-    const tsEnd   = Timestamp.fromDate(end)
 
-    // Period sales — NO orderBy to avoid composite index (where+where already fine)
     const saleQ = query(
       collection(db, COLLECTIONS.SALES),
       where('companyId', '==', companyId),
-      where('createdAt', '>=', tsStart),
-      where('createdAt', '<=', tsEnd),
+      where('branchId', '==', branchId),
     )
     const u1 = onSnapshot(saleQ, snap => {
-      setPeriodSales(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[])
+      const list = (snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[])
+        .filter(s => {
+          const d = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt)
+          return d >= start && d <= end && isCountableSale(s)
+        })
+      setPeriodSales(list)
     }, () => {})
 
-    // Period appointments
     const aptPeriodQ = query(
       collection(db, COLLECTIONS.APPOINTMENTS),
       where('companyId', '==', companyId),
-      where('date', '>=', tsStart),
-      where('date', '<=', tsEnd),
+      where('branchId', '==', branchId),
     )
     const u2 = onSnapshot(aptPeriodQ, snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Appointment[]
+      const list = (snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Appointment[])
+        .filter(a => {
+          const d = a.date instanceof Date ? a.date : new Date(a.date)
+          return d >= start && d <= end
+        })
       list.sort((a, b) => {
         const da = a.date instanceof Date ? a.date : new Date(a.date)
         const db_ = b.date instanceof Date ? b.date : new Date(b.date)
@@ -108,33 +113,40 @@ export default function DashboardPage() {
       setPeriodApts(list)
     }, () => {})
 
-    // New customers in period
     const custQ = query(
       collection(db, COLLECTIONS.CUSTOMERS),
       where('companyId', '==', companyId),
-      where('createdAt', '>=', tsStart),
-      where('createdAt', '<=', tsEnd),
+      where('branchId', '==', branchId),
     )
-    const u3 = onSnapshot(custQ, snap => setPeriodNewCust(snap.size), () => {})
+    const u3 = onSnapshot(custQ, snap => {
+      const count = snap.docs.filter(d => {
+        const data = convertTimestamps(d.data())
+        const createdAt = data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt)
+        return createdAt >= start && createdAt <= end && data.status !== 'deleted'
+      }).length
+      setPeriodNewCust(count)
+    }, () => {})
 
     return () => { u1(); u2(); u3() }
-  }, [period, companyId])
+  }, [branchId, period, companyId])
 
   /* ─── Static queries (run once) ─── */
   useEffect(() => {
-    if (!companyId) return
+    if (!companyId || !branchId) return
     const today    = new Date(); today.setHours(0,0,0,0)
     const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1)
 
-    // Today's appointments for bottom card
     const aptTodayQ = query(
       collection(db, COLLECTIONS.APPOINTMENTS),
       where('companyId', '==', companyId),
-      where('date', '>=', Timestamp.fromDate(today)),
-      where('date', '<', Timestamp.fromDate(tomorrow)),
+      where('branchId', '==', branchId),
     )
     const u1 = onSnapshot(aptTodayQ, snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Appointment[]
+      const list = (snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Appointment[])
+        .filter(a => {
+          const d = a.date instanceof Date ? a.date : new Date(a.date)
+          return d >= today && d < tomorrow
+        })
       list.sort((a, b) => (a.startTime ?? '').localeCompare(b.startTime ?? ''))
       setTodayApts(list)
     }, () => {})
@@ -146,10 +158,14 @@ export default function DashboardPage() {
     const monthSaleQ = query(
       collection(db, COLLECTIONS.SALES),
       where('companyId', '==', companyId),
-      where('createdAt', '>=', Timestamp.fromDate(sixMonthsAgo)),
+      where('branchId', '==', branchId),
     )
     const u2 = onSnapshot(monthSaleQ, snap => {
-      const allSales = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]
+      const allSales = (snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[])
+        .filter(s => {
+          const d = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt)
+          return d >= sixMonthsAgo && isCountableSale(s)
+        })
       setSixMonthTotal(allSales.reduce((s, r) => s + (r.totalAmount ?? 0), 0))
       const monthNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
       const now2 = new Date()
@@ -169,6 +185,7 @@ export default function DashboardPage() {
     const prodQ = query(
       collection(db, COLLECTIONS.PRODUCTION_ORDERS),
       where('companyId', '==', companyId),
+      where('branchId', '==', branchId),
       where('status', 'in', ['pending','in_progress','qc','ready']),
     )
     const u3 = onSnapshot(prodQ, snap => {
@@ -199,7 +216,40 @@ export default function DashboardPage() {
     }, () => {})
 
     return () => { u1(); u2(); u3(); u4() }
-  }, [companyId])
+  }, [branchId, companyId])
+
+  useEffect(() => {
+    if (!companyId || !user || !['owner', 'super_admin'].includes(user.role)) return
+    const today = new Date(); today.setHours(0,0,0,0)
+    let sales: Sale[] = []
+    let workOrders: WorkOrder[] = []
+    const updateStats = () => {
+      setBranchStats(branches.map(branch => {
+        const branchSales = sales.filter(s => s.branchId === branch.id)
+        return {
+          id: branch.id,
+          name: branch.name,
+          salesToday: branchSales
+            .filter(s => {
+              const d = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt)
+              return d >= today && isCountableSale(s)
+            })
+            .reduce((sum, s) => sum + (s.totalAmount ?? 0), 0),
+          pendingPayments: branchSales.filter(s => isCountableSale(s) && (s.paymentStatus === 'pending' || s.status === 'pending')).length,
+          activeWorkOrders: workOrders.filter(w => w.branchId === branch.id && !['delivered', 'cancelled'].includes(w.status ?? '')).length,
+        }
+      }))
+    }
+    const u1 = onSnapshot(query(collection(db, COLLECTIONS.SALES), where('companyId', '==', companyId)), snap => {
+      sales = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]
+      updateStats()
+    }, () => {})
+    const u2 = onSnapshot(query(collection(db, COLLECTIONS.WORK_ORDERS), where('companyId', '==', companyId)), snap => {
+      workOrders = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as WorkOrder[]
+      updateStats()
+    }, () => {})
+    return () => { u1(); u2() }
+  }, [branches, companyId, user])
 
   const periodSalesTotal  = periodSales.reduce((s, r) => s + (r.totalAmount ?? 0), 0)
   const totalProdPending  = productionData.reduce((s, p) => s + p.value, 0)
@@ -262,6 +312,46 @@ export default function DashboardPage() {
           icon={Users} trend={{ value: 0, label: '' }} color="purple"
         />
       </div>
+
+      {branchStats.length > 1 && (
+        <div className="bg-white rounded-2xl border border-[var(--border-light)] p-5 shadow-[var(--shadow-card)]">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-[var(--pink-500)]" />
+                ภาพรวมทุกสาขา
+              </h3>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">ยอดขายวันนี้ บิลรอชำระ และงานผลิตค้าง</p>
+            </div>
+            <Link href="/reports" className="text-xs text-[var(--pink-400)] hover:text-[var(--pink-500)] flex items-center gap-0.5 font-medium">
+              ดูรายงาน <ChevronRight className="w-3 h-3" />
+            </Link>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {branchStats.map(branch => (
+              <div key={branch.id} className="rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-4">
+                <p className="text-sm font-bold text-[var(--text-primary)] truncate">{branch.name}</p>
+                <div className="grid grid-cols-3 gap-2 mt-3">
+                  <div>
+                    <p className="text-[10px] text-[var(--text-muted)]">ยอดวันนี้</p>
+                    <p className="text-sm font-bold text-[var(--pink-600)]">{formatCurrency(branch.salesToday)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-[var(--text-muted)]">รอชำระ</p>
+                    <p className="text-sm font-bold text-amber-600 flex items-center gap-1">
+                      <CreditCard className="w-3 h-3" /> {branch.pendingPayments}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-[var(--text-muted)]">งานค้าง</p>
+                    <p className="text-sm font-bold text-purple-600">{branch.activeWorkOrders}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Charts row */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">

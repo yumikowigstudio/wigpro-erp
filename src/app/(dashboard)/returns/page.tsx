@@ -4,7 +4,8 @@ import { formatCurrency } from '@/lib/utils'
 import { Undo2, Search, Loader2, Package, CheckCircle2 } from 'lucide-react'
 import { collection, query, where, getDocs, doc, updateDoc, increment, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { COLLECTIONS, addDocument } from '@/lib/firestore'
+import { COLLECTIONS, addDocument, generateBranchDocumentNo } from '@/lib/firestore'
+import { adjustBranchStock } from '@/lib/stock'
 import { Sale, SaleItem } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -27,12 +28,13 @@ export default function ReturnsPage() {
   const [done, setDone]     = useState<{ returnNo: string; total: number } | null>(null)
 
   const handleSearch = async () => {
-    if (!receiptNo.trim() || !companyId) return
+    if (!receiptNo.trim() || !companyId || !branchId) return
     setSearching(true); setSale(null); setDone(null)
     try {
       const snap = await getDocs(query(
         collection(db, COLLECTIONS.SALES),
         where('companyId', '==', companyId),
+        where('branchId', '==', branchId),
         where('receiptNo', '==', receiptNo.trim()),
       ))
       if (snap.empty) { alert('ไม่พบใบเสร็จเลขที่นี้'); return }
@@ -59,11 +61,13 @@ export default function ReturnsPage() {
     if (!confirm(`ยืนยันการคืนสินค้า คืนเงิน ${formatCurrency(refundTotal)}?`)) return
     setSaving(true)
     const returnedItems = rows.filter(r => r.returnQty > 0)
-    const returnNo = `RTN-${new Date().toISOString().slice(2,10).replace(/-/g,'')}${String(Date.now()).slice(-4)}`
+    const saleBranchId = sale.branchId || branchId
     try {
+      const returnNo = await generateBranchDocumentNo(companyId, saleBranchId, 'return')
       await addDocument(COLLECTIONS.RETURNS, {
-        companyId, branchId, returnNo,
+        companyId, branchId: saleBranchId, returnNo,
         originalSaleId: sale.id, originalReceiptNo: sale.receiptNo,
+        branchName: sale.branchName ?? null,
         customerId: sale.customerId ?? null, customerName: sale.customerName ?? null,
         items: returnedItems.map(r => ({ productId: r.productId ?? null, name: r.name, quantity: r.returnQty, unitPrice: r.unitPrice, total: r.returnQty * r.unitPrice })),
         refundSubtotal, refundVat, refundTotal, method,
@@ -76,11 +80,12 @@ export default function ReturnsPage() {
         await updateDoc(doc(db, COLLECTIONS.PRODUCTS, r.productId), {
           stockQty: increment(r.returnQty), updatedAt: serverTimestamp(),
         }).catch(() => {})
-        addDocument(COLLECTIONS.STOCK_MOVEMENTS, {
-          companyId, branchId, productId: r.productId, productName: r.name,
-          type: 'in', quantity: r.returnQty, referenceType: 'return', referenceNo: returnNo,
+        await adjustBranchStock({
+          companyId, branchId: saleBranchId, productId: r.productId, productName: r.name,
+          delta: r.returnQty, type: 'return', referenceType: 'return', referenceNo: returnNo,
           notes: `คืนจากบิล ${sale.receiptNo}`,
-        } as never).catch(() => {})
+          performedBy: userId,
+        }).catch(() => {})
       }
 
       setDone({ returnNo, total: refundTotal })

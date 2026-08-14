@@ -1,20 +1,68 @@
-'use client'
+﻿'use client'
 import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import {
   Store, Building2, Users, Receipt, Shield, Bell, Save,
   Loader2, Check, Plus, Edit, Trash2, X, Phone, Mail,
   MapPin, Hash, UserCog, Eye, EyeOff, Calendar as CalendarIcon, Ticket, MessageCircle,
+  ImagePlus, Package,
 } from 'lucide-react'
-import { doc, getDoc, setDoc, serverTimestamp, collection, onSnapshot,
-  query, where, addDoc, updateDoc, deleteDoc } from 'firebase/firestore'
-import { createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth'
+import { doc, getDoc, getDocs, setDoc, serverTimestamp, collection, onSnapshot,
+  query, where, addDoc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore'
+import { sendPasswordResetEmail } from 'firebase/auth'
 import { db, auth } from '@/lib/firebase'
+import { createAuthUser } from '@/lib/adminUser'
 import { COLLECTIONS } from '@/lib/firestore'
 import { useAuth } from '@/hooks/useAuth'
+import { usePermissionAction } from '@/hooks/usePermissionAction'
+import { ALL_PERMISSION_KEYS, DEFAULT_ROLE_PERMISSIONS, PERMISSION_GROUPS, PermissionKey } from '@/lib/permissions'
+import { UserRole } from '@/types'
+import { invId } from '@/lib/stock'
 
 /* ─── Shared ─── */
 const inputCls = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
+const logoFileTypes = ['image/jpeg', 'image/png', 'image/webp']
+
+async function resizeLogo(file: File): Promise<string> {
+  if (!logoFileTypes.includes(file.type)) {
+    throw new Error('รองรับเฉพาะไฟล์ JPG, PNG หรือ WebP')
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    throw new Error('ไฟล์ใหญ่เกินไป กรุณาใช้รูปไม่เกิน 5MB')
+  }
+
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error('อ่านไฟล์รูปไม่สำเร็จ'))
+    reader.readAsDataURL(file)
+  })
+
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('เปิดรูปไม่สำเร็จ'))
+    img.src = dataUrl
+  })
+
+  const maxSize = 512
+  const scale = Math.min(1, maxSize / Math.max(image.width, image.height))
+  const width = Math.max(1, Math.round(image.width * scale))
+  const height = Math.max(1, Math.round(image.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('ประมวลผลรูปไม่สำเร็จ')
+  ctx.drawImage(image, 0, 0, width, height)
+
+  const output = canvas.toDataURL('image/webp', 0.82)
+  if (output.length > 700_000) {
+    throw new Error('รูปยังใหญ่เกินไป กรุณาใช้โลโก้ที่เล็กกว่านี้')
+  }
+  return output
+}
 
 function SaveBtn({ saving, saved, onClick, label = 'บันทึก' }: { saving: boolean; saved: boolean; onClick: () => void; label?: string }) {
   return (
@@ -37,6 +85,7 @@ function CompanySection({ companyId }: { companyId: string }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [logoMsg, setLogoMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
   useEffect(() => {
     getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId))
@@ -55,6 +104,20 @@ function CompanySection({ companyId }: { companyId: string }) {
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setLogoMsg(null)
+    try {
+      const logoUrl = await resizeLogo(file)
+      setForm(f => ({ ...f, logoUrl }))
+      setLogoMsg({ type: 'ok', text: 'เลือกรูปโลโก้แล้ว กดบันทึกเพื่อใช้งาน' })
+    } catch (error) {
+      setLogoMsg({ type: 'err', text: error instanceof Error ? error.message : 'อัปโหลดรูปไม่สำเร็จ' })
+    }
+  }
+
   if (loading) return <div className="py-12 text-center"><Loader2 className="w-6 h-6 text-[var(--pink-300)] animate-spin mx-auto" /></div>
 
   return (
@@ -64,16 +127,43 @@ function CompanySection({ companyId }: { companyId: string }) {
         <p className="text-xs text-[var(--text-muted)] mt-0.5">ข้อมูลจะปรากฏบนใบเสร็จและเอกสารทุกฉบับ</p>
       </div>
 
-      {/* Logo */}
       <div>
-        <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">URL โลโก้ร้าน</label>
-        <input value={form.logoUrl} onChange={set('logoUrl')} placeholder="https://..." className={inputCls} />
-        {form.logoUrl && (
-          <div className="mt-2 w-16 h-16 rounded-xl border border-[var(--border-light)] overflow-hidden bg-[var(--bg-base)] flex items-center justify-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={form.logoUrl} alt="logo" className="w-full h-full object-contain" onError={e => { (e.target as HTMLImageElement).style.display='none' }} />
+        <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">โลโก้ร้าน</label>
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+          <div className="w-20 h-20 rounded-2xl border border-[var(--border-light)] overflow-hidden bg-[var(--bg-base)] flex items-center justify-center shrink-0">
+            {form.logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={form.logoUrl} alt="logo" className="w-full h-full object-contain" onError={e => { (e.target as HTMLImageElement).style.display='none' }} />
+            ) : (
+              <ImagePlus className="w-6 h-6 text-[var(--text-light)]" />
+            )}
           </div>
-        )}
+          <div className="flex-1 space-y-2">
+            <div className="flex flex-wrap gap-2">
+              <label className="inline-flex items-center gap-2 px-4 py-2.5 bg-[var(--pink-100)] text-[var(--pink-600)] rounded-xl text-sm font-semibold cursor-pointer hover:bg-[var(--pink-200)] transition-all">
+                <ImagePlus className="w-4 h-4" />
+                เลือกรูปโลโก้
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleLogoUpload} className="hidden" />
+              </label>
+              {form.logoUrl && (
+                <button
+                  type="button"
+                  onClick={() => { setForm(f => ({ ...f, logoUrl: '' })); setLogoMsg({ type: 'ok', text: 'ลบโลโก้แล้ว กดบันทึกเพื่อยืนยัน' }) }}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 border border-red-100 text-red-500 rounded-xl text-sm font-semibold hover:bg-red-50 transition-all"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  ลบรูป
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-[var(--text-muted)]">รองรับ JPG, PNG, WebP ขนาดไม่เกิน 5MB ระบบจะย่อรูปให้เหมาะกับโลโก้อัตโนมัติ</p>
+            {logoMsg && (
+              <p className={`text-xs font-medium ${logoMsg.type === 'ok' ? 'text-emerald-600' : 'text-red-500'}`}>
+                {logoMsg.text}
+              </p>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -118,8 +208,27 @@ function CompanySection({ companyId }: { companyId: string }) {
 ═══════════════════════════════════════ */
 interface Branch {
   id: string; name: string; code: string; phone?: string
-  address?: string; isMainBranch: boolean; status: string; companyId: string
+  email?: string; address?: string; isMainBranch: boolean; status: string; companyId: string
+  receiptName?: string; receiptAddress?: string; receiptPhone?: string
+  receiptEmail?: string; receiptTaxId?: string; receiptFooter?: string
 }
+
+const blankBranchForm = () => ({
+  name: '',
+  code: '',
+  phone: '',
+  email: '',
+  address: '',
+  status: 'active',
+  receiptName: '',
+  receiptAddress: '',
+  receiptPhone: '',
+  receiptEmail: '',
+  receiptTaxId: '',
+  receiptFooter: '',
+  loginEmail: '',
+  loginPassword: '',
+})
 
 function BranchSection({ companyId }: { companyId: string }) {
   const [branches, setBranches] = useState<Branch[]>([])
@@ -127,7 +236,16 @@ function BranchSection({ companyId }: { companyId: string }) {
   const [showModal, setShowModal] = useState(false)
   const [editItem, setEditItem] = useState<Branch | null>(null)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ name: '', code: '', phone: '', address: '' })
+  const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [form, setForm] = useState(blankBranchForm)
+  const [companyReceipt, setCompanyReceipt] = useState({
+    nameTh: '',
+    address: '',
+    phone: '',
+    email: '',
+    taxId: '',
+    receiptFooter: '',
+  })
 
   useEffect(() => {
     const q = query(collection(db, COLLECTIONS.BRANCHES), where('companyId', '==', companyId))
@@ -137,21 +255,143 @@ function BranchSection({ companyId }: { companyId: string }) {
     }, () => setLoading(false))
   }, [companyId])
 
-  const openAdd = () => { setEditItem(null); setForm({ name: '', code: '', phone: '', address: '' }); setShowModal(true) }
-  const openEdit = (b: Branch) => { setEditItem(b); setForm({ name: b.name, code: b.code, phone: b.phone ?? '', address: b.address ?? '' }); setShowModal(true) }
+  useEffect(() => {
+    let active = true
+    Promise.all([
+      getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId)),
+      getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, `${companyId}_tax`)),
+    ]).then(([companySnap, taxSnap]) => {
+      if (!active) return
+      const company = companySnap.exists() ? companySnap.data() : {}
+      const tax = taxSnap.exists() ? taxSnap.data() : {}
+      setCompanyReceipt({
+        nameTh: typeof company.nameTh === 'string' ? company.nameTh : '',
+        address: typeof company.address === 'string' ? company.address : '',
+        phone: typeof company.phone === 'string' ? company.phone : '',
+        email: typeof company.email === 'string' ? company.email : '',
+        taxId: typeof company.taxId === 'string' ? company.taxId : '',
+        receiptFooter: typeof tax.receiptFooter === 'string' ? tax.receiptFooter : '',
+      })
+    }).catch(() => {})
+    return () => { active = false }
+  }, [companyId])
+
+  const openAdd = () => {
+    setEditItem(null)
+    setMsg(null)
+    setForm(blankBranchForm())
+    setShowModal(true)
+  }
+  const openEdit = (b: Branch) => {
+    setEditItem(b)
+    setMsg(null)
+    setForm({
+      name: b.name,
+      code: b.code,
+      phone: b.phone ?? '',
+      email: b.email ?? '',
+      address: b.address ?? '',
+      status: b.status ?? 'active',
+      receiptName: b.receiptName ?? '',
+      receiptAddress: b.receiptAddress ?? '',
+      receiptPhone: b.receiptPhone ?? '',
+      receiptEmail: b.receiptEmail ?? '',
+      receiptTaxId: b.receiptTaxId ?? '',
+      receiptFooter: b.receiptFooter ?? '',
+      loginEmail: '',
+      loginPassword: '',
+    })
+    setShowModal(true)
+  }
+
+  const applyCompanyReceipt = () => {
+    setForm(current => ({
+      ...current,
+      receiptName: companyReceipt.nameTh || current.name,
+      receiptAddress: companyReceipt.address || current.address,
+      receiptPhone: companyReceipt.phone || current.phone,
+      receiptEmail: companyReceipt.email || current.email,
+      receiptTaxId: companyReceipt.taxId,
+      receiptFooter: companyReceipt.receiptFooter,
+    }))
+  }
 
   const handleSave = async () => {
     if (!form.name.trim() || !form.code.trim()) return
+    if (!editItem && (!form.loginEmail.trim() || form.loginPassword.length < 6)) {
+      setMsg({ type: 'err', text: 'การเพิ่มสาขาใหม่ต้องมีอีเมลล็อกอินและรหัสผ่านอย่างน้อย 6 ตัวสำหรับผู้จัดการสาขา' })
+      return
+    }
     setSaving(true)
+    setMsg({ type: 'ok', text: editItem ? 'กำลังบันทึกสาขา...' : 'กำลังสร้างสาขาและบัญชีผู้จัดการ...' })
+    const receiptFields = {
+      receiptName: form.receiptName.trim(),
+      receiptAddress: form.receiptAddress.trim(),
+      receiptPhone: form.receiptPhone.trim(),
+      receiptEmail: form.receiptEmail.trim(),
+      receiptTaxId: form.receiptTaxId.trim(),
+      receiptFooter: form.receiptFooter.trim(),
+    }
     try {
       if (editItem) {
-        await updateDoc(doc(db, COLLECTIONS.BRANCHES, editItem.id), { ...form, updatedAt: serverTimestamp() })
-      } else {
-        await addDoc(collection(db, COLLECTIONS.BRANCHES), {
-          ...form, companyId, isMainBranch: false, status: 'active', createdAt: serverTimestamp(),
+        await updateDoc(doc(db, COLLECTIONS.BRANCHES, editItem.id), {
+          name: form.name.trim(),
+          code: form.code.trim(),
+          phone: form.phone.trim(),
+          email: form.email.trim(),
+          address: form.address.trim(),
+          status: editItem.isMainBranch ? 'active' : form.status,
+          ...receiptFields,
+          updatedAt: serverTimestamp(),
         })
+      } else {
+        const branchRef = await addDoc(collection(db, COLLECTIONS.BRANCHES), {
+          name: form.name.trim(),
+          code: form.code.trim(),
+          phone: form.phone.trim(),
+          email: form.email.trim() || form.loginEmail.trim(),
+          address: form.address.trim(),
+          ...receiptFields,
+          companyId,
+          isMainBranch: false,
+          status: form.status,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+        const uid = await createAuthUser(form.loginEmail.trim(), form.loginPassword)
+        await setDoc(doc(db, COLLECTIONS.USERS, uid), {
+          email: form.loginEmail.trim(),
+          displayName: `ผู้จัดการ ${form.name.trim()}`,
+          role: 'branch_manager',
+          branchId: branchRef.id,
+          companyId,
+          isActive: true,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          permissions: DEFAULT_ROLE_PERMISSIONS.branch_manager,
+        })
+        const productSnap = await getDocs(query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId)))
+        const batch = writeBatch(db)
+        productSnap.docs.forEach(productDoc => {
+          const product = productDoc.data()
+          batch.set(doc(db, COLLECTIONS.INVENTORY, invId(productDoc.id, branchRef.id)), {
+            companyId,
+            branchId: branchRef.id,
+            productId: productDoc.id,
+            quantity: 0,
+            reservedQty: 0,
+            availableQty: 0,
+            costPrice: product.costPrice ?? 0,
+            updatedAt: serverTimestamp(),
+          }, { merge: true })
+        })
+        await batch.commit()
       }
+      setMsg({ type: 'ok', text: editItem ? 'บันทึกสาขาสำเร็จ' : 'สร้างสาขาและบัญชีผู้จัดการสำเร็จ' })
       setShowModal(false)
+    } catch (e: unknown) {
+      const text = e instanceof Error ? e.message : 'เกิดข้อผิดพลาด'
+      setMsg({ type: 'err', text: text.includes('email-already-in-use') ? 'อีเมลนี้มีบัญชีอยู่แล้ว กรุณาใช้รหัสผ่านเดิมของบัญชีนั้น หรือใช้อีเมลอื่น' : text })
     } finally { setSaving(false) }
   }
 
@@ -159,6 +399,15 @@ function BranchSection({ companyId }: { companyId: string }) {
     if (isMain) { alert('ไม่สามารถลบสาขาหลักได้'); return }
     if (!confirm('ลบสาขานี้?')) return
     await deleteDoc(doc(db, COLLECTIONS.BRANCHES, id))
+  }
+
+  const receiptPreview = {
+    name: form.receiptName.trim() || form.name.trim() || companyReceipt.nameTh || 'ชื่อร้าน',
+    address: form.receiptAddress.trim() || form.address.trim() || companyReceipt.address,
+    phone: form.receiptPhone.trim() || form.phone.trim() || companyReceipt.phone,
+    email: form.receiptEmail.trim() || form.email.trim() || companyReceipt.email,
+    taxId: form.receiptTaxId.trim() || companyReceipt.taxId,
+    footer: form.receiptFooter.trim() || companyReceipt.receiptFooter,
   }
 
   return (
@@ -173,6 +422,14 @@ function BranchSection({ companyId }: { companyId: string }) {
           <Plus className="w-4 h-4" /> เพิ่มสาขา
         </button>
       </div>
+
+      {msg && !showModal && (
+        <div className={`p-3 rounded-xl border text-sm font-medium ${
+          msg.type === 'ok' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-600'
+        }`}>
+          {msg.text}
+        </div>
+      )}
 
       {loading ? (
         <div className="py-12 text-center"><Loader2 className="w-6 h-6 text-[var(--pink-300)] animate-spin mx-auto" /></div>
@@ -193,11 +450,17 @@ function BranchSection({ companyId }: { companyId: string }) {
                 </div>
                 <div className="flex gap-3 mt-0.5 text-xs text-[var(--text-muted)]">
                   <span className="flex items-center gap-1"><Hash className="w-3 h-3" />{b.code}</span>
+                  {b.email && <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{b.email}</span>}
                   {b.phone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{b.phone}</span>}
                   {b.address && <span className="flex items-center gap-1 truncate"><MapPin className="w-3 h-3 shrink-0" />{b.address}</span>}
                 </div>
               </div>
               <div className="flex gap-1 shrink-0">
+                <Link href={`/transfers?toBranch=${encodeURIComponent(b.id)}`}
+                  className="p-2 rounded-xl hover:bg-white text-[var(--text-muted)] hover:text-emerald-600 transition-all"
+                  title="เติม/โอนสต๊อกเข้าสาขานี้">
+                  <Package className="w-4 h-4" />
+                </Link>
                 <button onClick={() => openEdit(b)} className="p-2 rounded-xl hover:bg-white text-[var(--text-muted)] hover:text-blue-500 transition-all">
                   <Edit className="w-4 h-4" />
                 </button>
@@ -215,12 +478,19 @@ function BranchSection({ companyId }: { companyId: string }) {
       {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[92vh] overflow-hidden flex flex-col">
             <div className="flex items-center justify-between p-5 border-b border-[var(--border-light)]">
               <h3 className="font-bold text-[var(--text-primary)]">{editItem ? 'แก้ไขสาขา' : 'เพิ่มสาขาใหม่'}</h3>
               <button onClick={() => setShowModal(false)} className="p-2 rounded-xl hover:bg-[var(--bg-base)]"><X className="w-4 h-4" /></button>
             </div>
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-5 overflow-y-auto">
+              {msg && (
+                <div className={`p-3 rounded-xl border text-sm ${
+                  msg.type === 'ok' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-600'
+                }`}>
+                  {msg.text}
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">ชื่อสาขา *</label>
                 <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="สาขาสุขุมวิท" className={inputCls} />
@@ -234,15 +504,103 @@ function BranchSection({ companyId }: { companyId: string }) {
                 <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="02-xxx-xxxx" className={inputCls} />
               </div>
               <div>
+                <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">อีเมลของสาขา</label>
+                <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="branch@shop.com" className={inputCls} />
+              </div>
+              <div>
                 <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">ที่อยู่</label>
                 <textarea rows={2} value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="ที่อยู่สาขา..." className={`${inputCls} resize-none`} />
               </div>
+              <div>
+                <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">สถานะสาขา</label>
+                <select
+                  value={form.status}
+                  onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
+                  disabled={Boolean(editItem?.isMainBranch)}
+                  className={inputCls}>
+                  <option value="active">เปิดใช้งาน</option>
+                  <option value="archived">ปิดใช้งานชั่วคราว</option>
+                </select>
+              </div>
+
+              <div className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-4 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2">
+                      <Receipt className="w-4 h-4 text-[var(--pink-500)]" /> ข้อมูลบนใบเสร็จของสาขานี้
+                    </p>
+                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">ถ้าไม่กรอก ระบบจะใช้ข้อมูลร้านกลาง หรือข้อมูลสาขาแทน</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={applyCompanyReceipt}
+                    className="px-3 py-2 rounded-xl border border-[var(--border-light)] bg-white text-xs font-semibold text-[var(--text-secondary)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]">
+                    ใช้ข้อมูลร้านกลาง
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">ชื่อที่แสดงบนใบเสร็จ</label>
+                    <input value={form.receiptName} onChange={e => setForm(f => ({ ...f, receiptName: e.target.value }))} placeholder="เช่น Yumiko Wig Studio สาขาบางนา" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">เลขผู้เสียภาษี</label>
+                    <input value={form.receiptTaxId} onChange={e => setForm(f => ({ ...f, receiptTaxId: e.target.value }))} placeholder="0105550015357" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">เบอร์โทรบนใบเสร็จ</label>
+                    <input value={form.receiptPhone} onChange={e => setForm(f => ({ ...f, receiptPhone: e.target.value }))} placeholder="02-xxx-xxxx" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">อีเมลบนใบเสร็จ</label>
+                    <input type="email" value={form.receiptEmail} onChange={e => setForm(f => ({ ...f, receiptEmail: e.target.value }))} placeholder="branch@shop.com" className={inputCls} />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">ที่อยู่บนใบเสร็จ</label>
+                  <textarea rows={2} value={form.receiptAddress} onChange={e => setForm(f => ({ ...f, receiptAddress: e.target.value }))} placeholder="ที่อยู่สำหรับออกใบเสร็จของสาขานี้" className={`${inputCls} resize-none`} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">ข้อความท้ายใบเสร็จ</label>
+                  <input value={form.receiptFooter} onChange={e => setForm(f => ({ ...f, receiptFooter: e.target.value }))} placeholder="ขอบคุณที่ใช้บริการ" className={inputCls} />
+                </div>
+
+                <div className="rounded-2xl border border-dashed border-[var(--pink-200)] bg-white p-4">
+                  <p className="text-[11px] font-bold text-[var(--pink-600)] mb-2">ตัวอย่างหัวใบเสร็จ</p>
+                  <div className="text-center space-y-1 text-xs text-[var(--text-secondary)]">
+                    <p className="text-sm font-bold text-[var(--text-primary)]">{receiptPreview.name}</p>
+                    <p className="text-[11px]">สาขา {form.name || '-'}{form.code ? ` (${form.code})` : ''}</p>
+                    {receiptPreview.address && <p className="whitespace-pre-line">{receiptPreview.address}</p>}
+                    {receiptPreview.phone && <p>โทร. {receiptPreview.phone}</p>}
+                    {receiptPreview.email && <p>{receiptPreview.email}</p>}
+                    {receiptPreview.taxId && <p>เลขผู้เสียภาษี {receiptPreview.taxId}</p>}
+                    {receiptPreview.footer && <p className="pt-2 text-[var(--text-muted)]">{receiptPreview.footer}</p>}
+                  </div>
+                </div>
+              </div>
+              {!editItem && (
+                <div className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-4 space-y-3">
+                  <div>
+                    <p className="text-sm font-bold text-[var(--text-primary)]">บัญชีผู้จัดการสาขา *</p>
+                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">จำเป็นต้องกรอก ระบบจะสร้างบัญชีที่มีอำนาจดูแลสาขานี้ให้ทันที</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">อีเมลล็อกอิน *</label>
+                    <input type="email" value={form.loginEmail} onChange={e => setForm(f => ({ ...f, loginEmail: e.target.value }))} placeholder="manager.branch@shop.com" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">รหัสผ่านเริ่มต้น *</label>
+                    <input type="text" value={form.loginPassword} onChange={e => setForm(f => ({ ...f, loginPassword: e.target.value }))} placeholder="อย่างน้อย 6 ตัว" className={inputCls} />
+                  </div>
+                </div>
+              )}
               <div className="flex gap-3 pt-2">
-                <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 border border-[var(--border-light)] rounded-xl text-sm font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-base)]">ยกเลิก</button>
-                <button onClick={handleSave} disabled={saving || !form.name.trim() || !form.code.trim()}
+                <button onClick={() => setShowModal(false)} disabled={saving} className="flex-1 py-2.5 border border-[var(--border-light)] rounded-xl text-sm font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-base)] disabled:opacity-50">ยกเลิก</button>
+                <button onClick={handleSave} disabled={saving || !form.name.trim() || !form.code.trim() || (!editItem && (!form.loginEmail.trim() || form.loginPassword.length < 6))}
                   className="flex-1 py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-semibold disabled:opacity-40 flex items-center justify-center gap-2">
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                  {editItem ? 'บันทึก' : 'เพิ่มสาขา'}
+                  {saving ? (editItem ? 'กำลังบันทึก...' : 'กำลังสร้าง...') : editItem ? 'บันทึก' : 'เพิ่มสาขา'}
                 </button>
               </div>
             </div>
@@ -416,16 +774,44 @@ function StaffSection({ companyId, branches }: { companyId: string; branches: Br
 /* ═══════════════════════════════════════
    4. สิทธิ์การใช้งาน (System Users)
 ═══════════════════════════════════════ */
-interface SysUser { id: string; email: string; displayName: string; role: string; branchId: string; isActive: boolean; companyId: string }
+interface SysUser {
+  id: string
+  email: string
+  displayName: string
+  role: UserRole
+  branchId: string
+  isActive: boolean
+  companyId: string
+  permissions?: string[]
+}
 
-function PermissionsSection({ companyId, branches }: { companyId: string; branches: Branch[] }) {
+interface PermissionRequest {
+  id: string
+  companyId: string
+  userId: string
+  userEmail?: string
+  userName?: string
+  permission: PermissionKey
+  label?: string
+  path?: string
+  status: 'pending' | 'approved' | 'rejected'
+}
+
+function PermissionsSection({ companyId, branches, currentUserId, currentUserRole }: { companyId: string; branches: Branch[]; currentUserId: string; currentUserRole: UserRole }) {
   const [users, setUsers] = useState<SysUser[]>([])
+  const [requests, setRequests] = useState<PermissionRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
   const [showPw, setShowPw] = useState(false)
   const [form, setForm] = useState({ email: '', displayName: '', password: '', role: 'staff', branchId: '' })
   const [err, setErr] = useState('')
+  const [editingUserId, setEditingUserId] = useState('')
+  const [editRole, setEditRole] = useState<UserRole>('staff')
+  const [editBranchId, setEditBranchId] = useState('')
+  const [editPermissions, setEditPermissions] = useState<string[]>([])
+  const canManageUsers = currentUserRole === 'super_admin' || currentUserRole === 'owner'
+  const assignableRoles = ROLE_OPTIONS.filter(role => !['super_admin', 'owner'].includes(role.value))
 
   useEffect(() => {
     const q = query(collection(db, COLLECTIONS.USERS), where('companyId', '==', companyId))
@@ -433,6 +819,17 @@ function PermissionsSection({ companyId, branches }: { companyId: string; branch
       setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as SysUser)))
       setLoading(false)
     }, () => setLoading(false))
+  }, [companyId])
+
+  useEffect(() => {
+    const q = query(collection(db, COLLECTIONS.PERMISSION_REQUESTS), where('companyId', '==', companyId))
+    return onSnapshot(q, snap => {
+      setRequests(
+        snap.docs
+          .map(d => ({ id: d.id, ...d.data() } as PermissionRequest))
+          .filter(r => r.status === 'pending')
+      )
+    }, () => setRequests([]))
   }, [companyId])
 
   const openAdd = () => {
@@ -445,13 +842,13 @@ function PermissionsSection({ companyId, branches }: { companyId: string; branch
     if (form.password.length < 6) { setErr('รหัสผ่านต้องมีอย่างน้อย 6 ตัว'); return }
     setSaving(true); setErr('')
     try {
-      const cred = await createUserWithEmailAndPassword(auth, form.email, form.password)
-      await setDoc(doc(db, COLLECTIONS.USERS, cred.user.uid), {
+      const uid = await createAuthUser(form.email, form.password)
+      await setDoc(doc(db, COLLECTIONS.USERS, uid), {
         email: form.email, displayName: form.displayName,
         role: form.role, branchId: form.branchId,
         companyId, isActive: true,
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-        permissions: [],
+        permissions: DEFAULT_ROLE_PERMISSIONS[form.role as UserRole] ?? [],
       })
       setShowModal(false)
     } catch (e: unknown) {
@@ -465,8 +862,92 @@ function PermissionsSection({ companyId, branches }: { companyId: string; branch
     alert(`ส่งลิงก์รีเซ็ตรหัสผ่านไปที่ ${email} แล้ว`)
   }
 
+  const isProtectedUser = (user: SysUser) => user.id === currentUserId || ['owner', 'super_admin'].includes(user.role)
+
   const toggleActive = async (user: SysUser) => {
+    if (isProtectedUser(user)) {
+      alert('บัญชีเจ้าของร้าน/ผู้ดูแลระบบ และบัญชีที่กำลังใช้งานอยู่ ไม่สามารถระงับจากหน้านี้ได้')
+      return
+    }
+    if (user.isActive) {
+      const ok = window.confirm(`ยืนยันระงับบัญชี ${user.email}? ผู้ใช้นี้จะเข้าใช้งานไม่ได้ทันที`)
+      if (!ok) return
+    }
     await updateDoc(doc(db, COLLECTIONS.USERS, user.id), { isActive: !user.isActive, updatedAt: serverTimestamp() })
+  }
+
+  const openEditPermissions = (user: SysUser) => {
+    if (isProtectedUser(user)) return
+    setEditingUserId(user.id)
+    setEditRole(user.role)
+    setEditBranchId(user.branchId || branches[0]?.id || '')
+    setEditPermissions(user.permissions && user.permissions.length > 0 ? user.permissions : DEFAULT_ROLE_PERMISSIONS[user.role] ?? [])
+    setErr('')
+  }
+
+  const togglePermission = (permission: PermissionKey) => {
+    setEditPermissions(prev => prev.includes(permission) ? prev.filter(p => p !== permission) : [...prev, permission])
+  }
+
+  const applyRolePreset = (role: UserRole) => {
+    setEditRole(role)
+    setEditPermissions(DEFAULT_ROLE_PERMISSIONS[role] ?? [])
+  }
+
+  const savePermissions = async () => {
+    if (!editingUserId) return
+    const target = users.find(u => u.id === editingUserId)
+    if (!target || isProtectedUser(target)) return
+    setSaving(true)
+    try {
+      const cleanPermissions = editPermissions.filter(p => ALL_PERMISSION_KEYS.includes(p as PermissionKey))
+      await updateDoc(doc(db, COLLECTIONS.USERS, editingUserId), {
+        role: editRole,
+        branchId: editBranchId,
+        permissions: cleanPermissions,
+        updatedAt: serverTimestamp(),
+      })
+      setEditingUserId('')
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'บันทึกสิทธิ์ไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const approveRequest = async (request: PermissionRequest) => {
+    const target = users.find(u => u.id === request.userId)
+    if (!target || isProtectedUser(target)) return
+    const nextPermissions = Array.from(new Set([...(target.permissions ?? DEFAULT_ROLE_PERMISSIONS[target.role] ?? []), request.permission]))
+    setSaving(true)
+    try {
+      await updateDoc(doc(db, COLLECTIONS.USERS, target.id), {
+        permissions: nextPermissions,
+        updatedAt: serverTimestamp(),
+      })
+      await updateDoc(doc(db, COLLECTIONS.PERMISSION_REQUESTS, request.id), {
+        status: 'approved',
+        approvedBy: currentUserId,
+        approvedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const rejectRequest = async (request: PermissionRequest) => {
+    setSaving(true)
+    try {
+      await updateDoc(doc(db, COLLECTIONS.PERMISSION_REQUESTS, request.id), {
+        status: 'rejected',
+        rejectedBy: currentUserId,
+        rejectedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -476,10 +957,46 @@ function PermissionsSection({ companyId, branches }: { companyId: string; branch
           <h2 className="text-lg font-bold text-[var(--text-primary)]">สิทธิ์การใช้งาน</h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5">บัญชีผู้ใช้ที่มีสิทธิ์เข้าระบบ</p>
         </div>
-        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-semibold shadow-sm">
+        <button onClick={openAdd} disabled={!canManageUsers} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-semibold shadow-sm disabled:opacity-50">
           <Plus className="w-4 h-4" /> เพิ่มผู้ใช้
         </button>
       </div>
+
+      {requests.length > 0 && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+          <div>
+            <p className="text-sm font-bold text-amber-800">คำขออนุมัติสิทธิ์ ({requests.length})</p>
+            <p className="text-xs text-amber-700 mt-0.5">พนักงานขอสิทธิ์จากจุดที่ใช้งานไม่ได้ เจ้าของร้านอนุมัติได้จากตรงนี้</p>
+          </div>
+          <div className="space-y-2">
+            {requests.map(request => {
+              const target = users.find(u => u.id === request.userId)
+              return (
+                <div key={request.id} className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-xl bg-white border border-amber-100 p-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-[var(--text-primary)]">{request.label || request.permission}</p>
+                    <p className="text-xs text-[var(--text-muted)] truncate">
+                      {target?.displayName || request.userName || request.userEmail || request.userId}
+                      {request.path ? ` - ${request.path}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => approveRequest(request)} disabled={saving || !target || isProtectedUser(target)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
+                      อนุมัติ
+                    </button>
+                    <button onClick={() => rejectRequest(request)} disabled={saving}
+                      className="px-3 py-1.5 rounded-lg bg-white border border-amber-200 text-amber-700 text-xs font-semibold disabled:opacity-50">
+                      ปฏิเสธ
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
 
       {loading ? (
         <div className="py-12 text-center"><Loader2 className="w-6 h-6 text-[var(--pink-300)] animate-spin mx-auto" /></div>
@@ -488,6 +1005,7 @@ function PermissionsSection({ companyId, branches }: { companyId: string; branch
           {users.map(u => {
             const roleCfg = ROLE_OPTIONS.find(r => r.value === u.role) ?? ROLE_OPTIONS[4]
             const branch = branches.find(b => b.id === u.branchId)
+            const protectedUser = isProtectedUser(u)
             return (
               <div key={u.id} className={`bg-[var(--bg-base)] rounded-2xl border p-4 flex items-center gap-3 transition-all ${u.isActive ? 'border-[var(--border-light)]' : 'border-gray-200 opacity-60'}`}>
                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-100 to-blue-100 flex items-center justify-center shrink-0 text-purple-500 font-bold text-sm">
@@ -505,12 +1023,22 @@ function PermissionsSection({ companyId, branches }: { companyId: string; branch
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
+                  <button
+                    onClick={() => openEditPermissions(u)}
+                    disabled={protectedUser}
+                    title={protectedUser ? 'บัญชีหลักแก้สิทธิ์จากหน้านี้ไม่ได้' : 'ปรับสิทธิ์ละเอียด'}
+                    className="p-2 rounded-xl hover:bg-white text-[var(--text-muted)] hover:text-[var(--pink-500)] transition-all disabled:opacity-30 disabled:cursor-not-allowed">
+                    <Edit className="w-4 h-4" />
+                  </button>
                   <button onClick={() => handleResetPassword(u.email)} title="รีเซ็ตรหัสผ่าน"
                     className="p-2 rounded-xl hover:bg-white text-[var(--text-muted)] hover:text-amber-500 transition-all">
                     <UserCog className="w-4 h-4" />
                   </button>
-                  <button onClick={() => toggleActive(u)} title={u.isActive ? 'ระงับการใช้งาน' : 'เปิดใช้งาน'}
-                    className="p-2 rounded-xl hover:bg-white text-[var(--text-muted)] hover:text-blue-500 transition-all">
+                  <button
+                    onClick={() => toggleActive(u)}
+                    disabled={protectedUser}
+                    title={protectedUser ? 'บัญชีหลักไม่สามารถระงับจากหน้านี้ได้' : u.isActive ? 'ระงับการใช้งาน' : 'เปิดใช้งาน'}
+                    className="p-2 rounded-xl hover:bg-white text-[var(--text-muted)] hover:text-blue-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed">
                     {u.isActive ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
                   </button>
                 </div>
@@ -519,6 +1047,72 @@ function PermissionsSection({ companyId, branches }: { companyId: string; branch
           })}
         </div>
       )}
+
+      {editingUserId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-[var(--border-light)]">
+              <div>
+                <h3 className="font-bold text-[var(--text-primary)]">ปรับสิทธิ์การใช้งาน</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-0.5">เลือกได้ละเอียดเป็นรายหน้าและรายคำสั่ง</p>
+              </div>
+              <button onClick={() => setEditingUserId('')} className="p-2 rounded-xl hover:bg-[var(--bg-base)]"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-5 overflow-y-auto space-y-5">
+              {err && <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-600">{err}</div>}
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">ตำแหน่ง / ชุดสิทธิ์เริ่มต้น</label>
+                  <select value={editRole} onChange={e => applyRolePreset(e.target.value as UserRole)} className={inputCls}>
+                    {assignableRoles.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">สาขาหลักของผู้ใช้</label>
+                  <select value={editBranchId} onChange={e => setEditBranchId(e.target.value)} className={inputCls}>
+                    {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {PERMISSION_GROUPS.map(group => (
+                  <section key={group.title} className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-4">
+                    <div className="mb-3">
+                      <p className="text-sm font-bold text-[var(--text-primary)]">{group.title}</p>
+                      <p className="text-xs text-[var(--text-muted)]">{group.description}</p>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      {group.permissions.map(item => (
+                        <label key={item.key} className="flex items-start gap-2 rounded-xl bg-white border border-[var(--border-light)] p-3 cursor-pointer hover:border-[var(--pink-200)] transition-all">
+                          <input
+                            type="checkbox"
+                            checked={editPermissions.includes(item.key)}
+                            onChange={() => togglePermission(item.key)}
+                            className="mt-0.5 accent-[var(--pink-500)]"
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-[var(--text-primary)]">{item.label}</span>
+                            {item.note && <span className="block text-[11px] text-[var(--text-muted)] mt-0.5">{item.note}</span>}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </div>
+            <div className="p-5 border-t border-[var(--border-light)] flex flex-col sm:flex-row gap-3 sm:justify-end">
+              <button onClick={() => setEditingUserId('')} className="px-5 py-2.5 border border-[var(--border-light)] rounded-xl text-sm font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-base)]">ยกเลิก</button>
+              <button onClick={savePermissions} disabled={saving} className="px-5 py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2">
+                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                {saving ? 'กำลังบันทึก...' : 'บันทึกสิทธิ์'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
@@ -549,7 +1143,7 @@ function PermissionsSection({ companyId, branches }: { companyId: string; branch
               <div>
                 <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">ตำแหน่ง / สิทธิ์</label>
                 <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} className={inputCls}>
-                  {ROLE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  {assignableRoles.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
               </div>
               <div>
@@ -652,6 +1246,99 @@ function TaxSection({ companyId }: { companyId: string }) {
         <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">ข้อความท้ายใบเสร็จ</label>
         <input value={form.receiptFooter} onChange={e => setForm(f => ({ ...f, receiptFooter: e.target.value }))} placeholder="ขอบคุณที่ใช้บริการ" className={inputCls} />
       </div>
+      <SaveBtn saving={saving} saved={saved} onClick={handleSave} />
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════
+   สต๊อก & POS
+═══════════════════════════════════════ */
+function StockPolicySection({ companyId }: { companyId: string }) {
+  const def = {
+    inventoryAllowNegativeStock: false,
+    inventoryNegativeStockRequiresReason: true,
+    inventoryNegativeStockManagerOnly: true,
+  }
+  const [form, setForm] = useState(def)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const { ensurePermission } = usePermissionAction()
+
+  useEffect(() => {
+    getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId))
+      .then(d => {
+        if (!d.exists()) return
+        const data = d.data()
+        setForm({
+          inventoryAllowNegativeStock: Boolean(data.inventoryAllowNegativeStock),
+          inventoryNegativeStockRequiresReason: data.inventoryNegativeStockRequiresReason !== false,
+          inventoryNegativeStockManagerOnly: data.inventoryNegativeStockManagerOnly !== false,
+        })
+      })
+      .finally(() => setLoading(false))
+  }, [companyId])
+
+  const handleSave = async () => {
+    if (!await ensurePermission('action.settings.manage', 'แก้ตั้งค่าร้าน')) return
+    setSaving(true)
+    try {
+      await setDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId), { ...form, updatedAt: serverTimestamp() }, { merge: true })
+      setSaved(true); setTimeout(() => setSaved(false), 3000)
+    } finally { setSaving(false) }
+  }
+
+  const set = (key: keyof typeof form) =>
+    setForm(f => ({ ...f, [key]: !f[key] }))
+
+  if (loading) return <div className="py-12 text-center"><Loader2 className="w-6 h-6 text-[var(--pink-300)] animate-spin mx-auto" /></div>
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div>
+        <h2 className="text-lg font-bold text-[var(--text-primary)]">สต๊อก & POS</h2>
+        <p className="text-xs text-[var(--text-muted)] mt-0.5">ควบคุมวิธีขายสินค้าเมื่อจำนวนในสต๊อกไม่พอ</p>
+      </div>
+
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+        แนะนำให้เปิดขายติดลบเฉพาะช่วงจำเป็น เช่น ขายหน้าร้านก่อนรับสินค้าเข้าระบบ หรือยังไม่ได้ตรวจรับโอนสต๊อก
+        ทุกบิลที่ทำให้ติดลบจะถูกบันทึกประวัติไว้เพื่อตามซ่อมสต๊อกภายหลัง
+      </div>
+
+      {([
+        {
+          key: 'inventoryAllowNegativeStock' as const,
+          title: 'อนุญาตให้ POS ขายเกินจำนวนสต๊อก',
+          desc: 'ถ้าปิดไว้ ระบบจะกันเหมือนเดิมและขายสินค้า 0 ชิ้นไม่ได้',
+        },
+        {
+          key: 'inventoryNegativeStockRequiresReason' as const,
+          title: 'บังคับกรอกเหตุผลก่อนบันทึกบิลติดลบ',
+          desc: 'ช่วยให้ย้อนหลังได้ว่าขายติดลบเพราะอะไร เช่น ของอยู่หน้าร้านแต่ยังไม่ได้รับเข้า',
+        },
+        {
+          key: 'inventoryNegativeStockManagerOnly' as const,
+          title: 'ต้องมีสิทธิ์พิเศษก่อนขายติดลบ',
+          desc: 'ถ้าพนักงานไม่มีสิทธิ์ ระบบจะส่งคำขอให้เจ้าของร้านอนุมัติ',
+        },
+      ]).map(item => (
+        <button
+          key={item.key}
+          type="button"
+          onClick={() => set(item.key)}
+          className="w-full flex items-center gap-4 rounded-2xl border border-[var(--border-light)] bg-white p-4 text-left hover:bg-[var(--pink-50)]/40 transition-all"
+        >
+          <div className={`relative h-6 w-11 rounded-full transition-all ${form[item.key] ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0]' : 'bg-gray-200'}`}>
+            <div className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-all ${form[item.key] ? 'left-6' : 'left-1'}`} />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-[var(--text-primary)]">{item.title}</p>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{item.desc}</p>
+          </div>
+        </button>
+      ))}
+
       <SaveBtn saving={saving} saved={saved} onClick={handleSave} />
     </div>
   )
@@ -922,6 +1609,7 @@ const SECTIONS = [
   { id: 'staff',       label: 'พนักงาน',          icon: Users        },
   { id: 'permissions', label: 'สิทธิ์การใช้งาน', icon: Shield       },
   { id: 'tax',         label: 'ภาษี & การเงิน',   icon: Receipt      },
+  { id: 'inventory',   label: 'สต๊อก & POS',      icon: Package      },
   { id: 'coupons',     label: 'คูปองส่วนลด',      icon: Ticket       },
   { id: 'line',        label: 'LINE OA',          icon: MessageCircle },
   { id: 'google',      label: 'Google Calendar',  icon: CalendarIcon },
@@ -930,14 +1618,26 @@ const SECTIONS = [
 
 function SettingsInner() {
   const searchParams = useSearchParams()
-  const { companyId, userId } = useAuth()
+  const { companyId, userId, user } = useAuth()
   const [activeSection, setActiveSection] = useState('company')
   const [branches, setBranches] = useState<Branch[]>([])
+  const canOpenPermissions = user?.role === 'super_admin' || user?.role === 'owner'
+  const visibleSections = SECTIONS.filter(s => s.id !== 'permissions' || canOpenPermissions)
 
   useEffect(() => {
     const tab = searchParams?.get('tab')
+    if (tab === 'permissions' && !canOpenPermissions) {
+      setActiveSection('company')
+      return
+    }
     if (tab) setActiveSection(tab)
-  }, [searchParams])
+  }, [canOpenPermissions, searchParams])
+
+  useEffect(() => {
+    if (activeSection === 'permissions' && !canOpenPermissions) {
+      setActiveSection('company')
+    }
+  }, [activeSection, canOpenPermissions])
 
   useEffect(() => {
     if (!companyId || companyId === 'demo_company') return
@@ -956,7 +1656,7 @@ function SettingsInner() {
         {/* Sidebar */}
         <div className="w-full lg:w-56 shrink-0">
           <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-2 space-y-0.5">
-            {SECTIONS.map(s => (
+            {visibleSections.map(s => (
               <button key={s.id} onClick={() => setActiveSection(s.id)}
                 className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
                   activeSection === s.id
@@ -975,8 +1675,9 @@ function SettingsInner() {
           {activeSection === 'company'     && <CompanySection companyId={companyId} />}
           {activeSection === 'branches'    && <BranchSection companyId={companyId} />}
           {activeSection === 'staff'       && <StaffSection companyId={companyId} branches={branches} />}
-          {activeSection === 'permissions' && <PermissionsSection companyId={companyId} branches={branches} />}
+          {activeSection === 'permissions' && canOpenPermissions && user && <PermissionsSection companyId={companyId} branches={branches} currentUserId={userId} currentUserRole={user.role} />}
           {activeSection === 'tax'         && <TaxSection companyId={companyId} />}
+          {activeSection === 'inventory'   && <StockPolicySection companyId={companyId} />}
           {activeSection === 'coupons'     && <CouponSection companyId={companyId} />}
           {activeSection === 'line'        && <LineSection />}
           {activeSection === 'google'      && <GoogleSection userId={userId} />}

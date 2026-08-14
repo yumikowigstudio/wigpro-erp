@@ -1,11 +1,11 @@
 'use client'
 import { useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { Bell, Search, Menu, ChevronDown, Building2, LogOut, Settings, User } from 'lucide-react'
+import { Bell, Search, Menu, ChevronDown, Building2, LogOut, Settings, User, XCircle } from 'lucide-react'
 import Link from 'next/link'
 
 export default function Header({ onMenuToggle }: { onMenuToggle?: () => void }) {
-  const { user, currentBranch, logout } = useAuth()
+  const { user, currentBranch, branches, canSwitchBranch, switchBranch, logout, isSupportMode, supportCompanyName, exitSupportCompany } = useAuth()
   const [showUserMenu, setShowUserMenu] = useState(false)
 
   return (
@@ -31,11 +31,32 @@ export default function Header({ onMenuToggle }: { onMenuToggle?: () => void }) 
       </div>
 
       <div className="flex items-center gap-2 ml-auto">
+        {isSupportMode && (
+          <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-2xl text-amber-700 shadow-[var(--shadow-sm)]">
+            <span className="text-xs font-semibold">โหมดดูแล: {supportCompanyName || 'ร้านลูกค้า'}</span>
+            <button onClick={exitSupportCompany} title="ออกจากโหมดดูแลร้าน" className="hover:text-amber-900">
+              <XCircle className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         {/* Branch badge */}
         {currentBranch && (
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-white/70 border border-[var(--border-light)] rounded-2xl shadow-[var(--shadow-sm)] backdrop-blur-sm">
             <Building2 className="w-3.5 h-3.5 text-[var(--pink-400)]" />
-            <span className="text-xs font-medium text-[var(--text-secondary)]">{currentBranch.name}</span>
+            {canSwitchBranch && branches.length > 1 ? (
+              <select
+                value={currentBranch.id}
+                onChange={e => switchBranch(e.target.value)}
+                className="max-w-32 bg-transparent text-xs font-medium text-[var(--text-secondary)] focus:outline-none cursor-pointer"
+                title="เลือกสาขาที่ต้องการดู"
+              >
+                {branches.map(branch => (
+                  <option key={branch.id} value={branch.id}>{branch.name}</option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-xs font-medium text-[var(--text-secondary)]">{currentBranch.name}</span>
+            )}
           </div>
         )}
 

@@ -1,4 +1,5 @@
 'use client'
+/* eslint-disable @next/next/no-img-element */
 import { useState, useEffect } from 'react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import {
@@ -27,6 +28,8 @@ const statusCfg: Record<ProdStatus, { label: string; color: string; next?: ProdS
 }
 
 const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
+
+const WIG_TYPE_OPTIONS = ['ฮาฟวิก', 'ฟูวิก', 'วิกกึ่งฟู', 'ฟูวิกญี่ปุ่น', 'อื่นๆ']
 
 const CLOUDINARY_CLOUD  = 'dqea32qab'
 const CLOUDINARY_PRESET = 'wigpro_products'
@@ -87,7 +90,7 @@ function InlineEdit({
 }
 
 export default function ProductionPage() {
-  const { companyId, branchId, userId } = useAuth()
+  const { companyId, branchId, userId, currentBranch } = useAuth()
   const [orders, setOrders]             = useState<WorkOrder[]>([])
   const [loading, setLoading]           = useState(true)
   const [search, setSearch]             = useState('')
@@ -105,10 +108,11 @@ export default function ProductionPage() {
   })
 
   useEffect(() => {
-    if (!companyId) return
+    if (!companyId || !branchId) return
     const q = query(
       collection(db, COLLECTIONS.WORK_ORDERS),
       where('companyId', '==', companyId),
+      where('branchId', '==', branchId),
     )
     return onSnapshot(q, snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as WorkOrder[]
@@ -116,7 +120,7 @@ export default function ProductionPage() {
       setOrders(list)
       setLoading(false)
     }, () => setLoading(false))
-  }, [companyId])
+  }, [branchId, companyId])
 
   const filtered = orders.filter(o => {
     const q = search.toLowerCase()
@@ -125,6 +129,11 @@ export default function ProductionPage() {
   })
 
   const advance = async (id: string, next: ProdStatus) => {
+    const order = orders.find(o => o.id === id)
+    if (!order) return
+    if (next === 'shipped' && !order.manufacturer && !confirm('ยังไม่ได้ระบุโรงงาน/ผู้ผลิต ต้องการเปลี่ยนเป็นส่งแล้วต่อหรือไม่?')) return
+    if (next === 'ready_to_pickup' && (order.completedImages?.length ?? 0) === 0 && !confirm('ยังไม่มีรูปงานเสร็จ/QC ต้องการเปลี่ยนเป็นพร้อมรับต่อหรือไม่?')) return
+    if (next === 'delivered' && (order.remainingAmount ?? 0) > 0 && !confirm(`ยังมียอดค้าง ${formatCurrency(order.remainingAmount ?? 0)} ต้องการส่งมอบต่อหรือไม่?`)) return
     const extra: Record<string, unknown> = {}
     if (next === 'shipped')         extra.shippedDate              = serverTimestamp()
     if (next === 'at_branch')       extra.receivedAtBranchDate     = serverTimestamp()
@@ -160,16 +169,24 @@ export default function ProductionPage() {
   }
 
   const handleAdd = async (e: React.FormEvent) => {
-    e.preventDefault(); setSaving(true)
+    e.preventDefault()
+    const total = parseFloat(form.totalAmount) || 0
+    const dep = parseFloat(form.depositAmount) || 0
+    if (!companyId || !branchId) { alert('ไม่พบข้อมูลร้าน/สาขา กรุณาโหลดหน้าใหม่'); return }
+    if (!form.customerName.trim()) { alert('กรุณาระบุชื่อลูกค้า'); return }
+    if (total < 0 || dep < 0) { alert('ยอดเงินต้องไม่ติดลบ'); return }
+    if (dep > total) { alert('ยอดมัดจำต้องไม่เกินยอดรวม'); return }
+    setSaving(true)
     try {
       const orderNo = await generateWigOrderNo(companyId, branchId)
-      const total   = parseFloat(form.totalAmount)   || 0
-      const dep     = parseFloat(form.depositAmount) || 0
       const woData: Record<string, unknown> = {
         companyId, branchId, orderNo,
+        branchName: currentBranch?.name ?? '',
+        branchCode: currentBranch?.code ?? '',
         customerId: selectedCustomerId || '',
         customerName: form.customerName,
         saleOrderId: '',
+        sourceType: 'manual',
         totalAmount: total, depositAmount: dep, remainingAmount: total - dep,
         status: 'waiting', progressImages: [], completedImages: [],
         performedBy: userId, orderDate: new Date(),
@@ -223,6 +240,40 @@ export default function ProductionPage() {
         ))}
       </div>
 
+      <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+          <div>
+            <p className="text-sm font-bold text-[var(--text-primary)]">สถานะงานผลิต</p>
+            <p className="text-xs text-[var(--text-muted)]">กดสถานะเพื่อกรองงานในขั้นตอนนั้นได้ทันที</p>
+          </div>
+          {filterStatus && (
+            <button type="button" onClick={() => setFilterStatus('')} className="text-xs font-semibold text-[var(--pink-500)] hover:underline">
+              ล้างตัวกรอง
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {Object.entries(statusCfg).map(([key, cfg]) => {
+            const count = orders.filter(order => order.status === key).length
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setFilterStatus(filterStatus === key ? '' : key)}
+                className={`rounded-xl border px-3 py-2 text-left transition-all ${
+                  filterStatus === key
+                    ? 'border-[var(--pink-300)] bg-[var(--pink-50)] shadow-sm'
+                    : 'border-[var(--border-light)] bg-[var(--bg-base)] hover:bg-[var(--pink-50)]'
+                }`}
+              >
+                <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full font-semibold ${cfg.color}`}>{cfg.label}</span>
+                <p className="mt-1 text-lg font-bold text-[var(--text-primary)]">{count}</p>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       {/* Filter */}
       <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-4 flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
@@ -267,6 +318,11 @@ export default function ProductionPage() {
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <p className="font-mono text-sm font-bold text-[var(--pink-500)]">{order.orderNo}</p>
                         {cfg && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>{cfg.label}</span>}
+                        {order.sourceNo && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">
+                            {order.sourceType === 'deposit' ? 'จากมัดจำ' : 'จากบิล'} {order.sourceNo}
+                          </span>
+                        )}
                         {isOverdue && (
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 flex items-center gap-1">
                             <AlertTriangle className="w-3 h-3" />เกินกำหนด
@@ -477,7 +533,13 @@ export default function ProductionPage() {
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ประเภทวิก</label>
-                  <input value={form.wigType} onChange={e => setForm(f=>({...f,wigType:e.target.value}))} className={inputClass} placeholder="สั้น/ยาว/กลาง" />
+                  <select
+                    value={form.wigType}
+                    onChange={e => setForm(f=>({...f,wigType:e.target.value}))}
+                    className={inputClass}>
+                    <option value="">เลือกประเภทวิก</option>
+                    {WIG_TYPE_OPTIONS.map(type => <option key={type} value={type}>{type}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">สี</label>

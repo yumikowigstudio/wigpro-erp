@@ -1,22 +1,66 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { formatDate, formatCurrency } from '@/lib/utils'
-import { FileText, Search, Download, Eye, Printer, Loader2, Receipt } from 'lucide-react'
 import {
-  collection, query, where, onSnapshot,
-} from 'firebase/firestore'
+  AlertTriangle, CheckCircle2, Download, Eye, FileText, Loader2,
+  Pencil, Printer, Receipt, Search, X,
+} from 'lucide-react'
+import { collection, doc, getDocs, increment, onSnapshot, query, runTransaction, serverTimestamp, updateDoc, where, writeBatch } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
+import { invId } from '@/lib/stock'
+import { uploadToCloudinary } from '@/lib/cloudinary'
 import { useAuth } from '@/hooks/useAuth'
+import { usePermissionAction } from '@/hooks/usePermissionAction'
+import { PaymentMethod, PaymentStatus, Sale, SaleStatus } from '@/types'
 import Link from 'next/link'
 
 const docTypeConfig = {
-  quotation:       { label: 'ใบเสนอราคา',     color: 'bg-blue-100 text-blue-700'                },
-  deposit_receipt: { label: 'ใบมัดจำ',         color: 'bg-amber-100 text-amber-700'              },
-  receipt:         { label: 'ใบเสร็จรับเงิน',  color: 'bg-emerald-100 text-emerald-700'          },
-  tax_invoice:     { label: 'ใบกำกับภาษี',     color: 'bg-purple-100 text-purple-700'            },
-  work_order:      { label: 'ใบสั่งผลิตวิก',   color: 'bg-[#f5ede3] text-[var(--pink-600)]'     },
+  quotation:       { label: 'ใบเสนอราคา',     color: 'bg-blue-100 text-blue-700'       },
+  deposit_receipt: { label: 'ใบมัดจำ',         color: 'bg-amber-100 text-amber-700'     },
+  receipt:         { label: 'ใบเสร็จรับเงิน',  color: 'bg-emerald-100 text-emerald-700' },
+  tax_invoice:     { label: 'ใบกำกับภาษี',     color: 'bg-purple-100 text-purple-700'   },
+  work_order:      { label: 'ใบสั่งผลิตวิก',   color: 'bg-[#f5ede3] text-[var(--pink-600)]' },
 }
+
+const paymentLabels: Record<PaymentMethod | string, string> = {
+  cash: 'เงินสด',
+  transfer: 'โอนเงิน',
+  qr: 'QR Code',
+  credit_card: 'บัตรเครดิต',
+}
+
+const paymentStatusConfig: Record<PaymentStatus | 'unknown', { label: string; color: string }> = {
+  confirmed: { label: 'ชำระแล้ว', color: 'bg-emerald-100 text-emerald-700' },
+  pending:   { label: 'รอตรวจสอบ', color: 'bg-amber-100 text-amber-700' },
+  rejected:  { label: 'ไม่ผ่าน', color: 'bg-red-100 text-red-700' },
+  unknown:   { label: 'ไม่ระบุ', color: 'bg-gray-100 text-gray-600' },
+}
+
+const saleStatusConfig: Record<SaleStatus, { label: string; color: string }> = {
+  completed: { label: 'ปกติ', color: 'bg-emerald-50 text-emerald-700' },
+  pending:   { label: 'รอชำระ', color: 'bg-amber-50 text-amber-700' },
+  returned:  { label: 'คืนสินค้า', color: 'bg-blue-50 text-blue-700' },
+  cancelled: { label: 'ยกเลิก', color: 'bg-red-50 text-red-700' },
+}
+
+const restorableSaleItems = (sale: Sale) =>
+  (sale.items ?? [])
+    .flatMap((item, lineIndex) => item.type === 'product' && item.productId && item.quantity > 0 ? [{
+      lineIndex,
+      productId: item.productId!,
+      name: item.name,
+      sku: item.sku,
+      quantity: Number(item.quantity ?? 0),
+    }] : [])
+
+const escapeHtml = (value: string | number | null | undefined) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
 
 interface DocItem {
   id:           string
@@ -27,21 +71,30 @@ interface DocItem {
   createdAt:    Date
   sourceId:     string
   sourceType:   'receipt' | 'deposit' | 'work_order'
+  branchName?:   string
+  sale?:        Sale
 }
 
 export default function DocumentsPage() {
-  const { companyId } = useAuth()
-  const [docs,      setDocs]      = useState<DocItem[]>([])
-  const [loading,   setLoading]   = useState(true)
-  const [search,    setSearch]    = useState('')
+  const { companyId, branchId, userId, userName } = useAuth()
+  const { ensurePermission, hasPermission } = usePermissionAction()
+  const [docs, setDocs] = useState<DocItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState('')
+  const [selectedSale, setSelectedSale] = useState<Sale | null>(null)
+  const [editForm, setEditForm] = useState({ customerName: '', notes: '' })
+  const [cancelReason, setCancelReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [message, setMessage] = useState('')
 
   useEffect(() => {
-    if (!companyId) return
+    if (!companyId || !branchId) return
 
-    let receipts:    DocItem[] = []
-    let deposits:    DocItem[] = []
-    let workOrders:  DocItem[] = []
+    let receipts: DocItem[] = []
+    let deposits: DocItem[] = []
+    let workOrders: DocItem[] = []
     let loaded = 0
     const done = () => { loaded++; if (loaded === 3) setLoading(false) }
 
@@ -51,93 +104,343 @@ export default function DocumentsPage() {
       setDocs(all)
     }
 
-    /* ── Receipts (Sales) ── */
-    const q1 = query(collection(db, COLLECTIONS.SALES), where('companyId', '==', companyId))
+    const q1 = query(collection(db, COLLECTIONS.SALES), where('companyId', '==', companyId), where('branchId', '==', branchId))
     const u1 = onSnapshot(q1, snap => {
       receipts = snap.docs.map(d => {
-        const data = convertTimestamps(d.data())
+        const data = convertTimestamps(d.data()) as Omit<Sale, 'id'>
+        const sale = { id: d.id, ...data } as Sale
         return {
-          id:           d.id,
-          type:         'receipt' as const,
-          docNo:        data.receiptNo ?? d.id,
-          customerName: data.customerName ?? 'ลูกค้าทั่วไป',
-          amount:       data.totalAmount ?? data.total ?? 0,
-          createdAt:    data.createdAt instanceof Date ? data.createdAt : new Date(),
-          sourceId:     d.id,
-          sourceType:   'receipt' as const,
+          id: d.id,
+          type: 'receipt' as const,
+          docNo: sale.receiptNo ?? d.id,
+          customerName: sale.customerName ?? 'ลูกค้าทั่วไป',
+          amount: sale.totalAmount ?? 0,
+          createdAt: sale.createdAt instanceof Date ? sale.createdAt : new Date(),
+          sourceId: d.id,
+          sourceType: 'receipt' as const,
+          branchName: sale.branchName,
+          sale,
         }
       })
       merge(); done()
     }, () => done())
 
-    /* ── Deposits ── */
-    const q2 = query(collection(db, COLLECTIONS.DEPOSITS), where('companyId', '==', companyId))
+    const q2 = query(collection(db, COLLECTIONS.DEPOSITS), where('companyId', '==', companyId), where('branchId', '==', branchId))
     const u2 = onSnapshot(q2, snap => {
       deposits = snap.docs.map(d => {
         const data = convertTimestamps(d.data())
         return {
-          id:           d.id,
-          type:         'deposit_receipt' as const,
-          docNo:        data.depositNo ?? d.id,
-          customerName: data.customerName ?? '—',
-          amount:       data.depositAmount ?? 0,
-          createdAt:    data.createdAt instanceof Date ? data.createdAt : new Date(),
-          sourceId:     d.id,
-          sourceType:   'deposit' as const,
+          id: d.id,
+          type: 'deposit_receipt' as const,
+          docNo: data.depositNo ?? d.id,
+          customerName: data.customerName ?? '-',
+          amount: data.depositAmount ?? 0,
+          createdAt: data.createdAt instanceof Date ? data.createdAt : new Date(),
+          sourceId: d.id,
+          sourceType: 'deposit' as const,
+          branchName: data.branchName,
         }
       })
       merge(); done()
     }, () => done())
 
-    /* ── Work Orders ── */
-    const q3 = query(collection(db, COLLECTIONS.WORK_ORDERS), where('companyId', '==', companyId))
+    const q3 = query(collection(db, COLLECTIONS.WORK_ORDERS), where('companyId', '==', companyId), where('branchId', '==', branchId))
     const u3 = onSnapshot(q3, snap => {
       workOrders = snap.docs.map(d => {
         const data = convertTimestamps(d.data())
         return {
-          id:           d.id,
-          type:         'work_order' as const,
-          docNo:        data.orderNo ?? d.id,
-          customerName: data.customerName ?? '—',
-          amount:       data.totalPrice ?? data.price ?? 0,
-          createdAt:    data.createdAt instanceof Date ? data.createdAt : new Date(),
-          sourceId:     d.id,
-          sourceType:   'work_order' as const,
+          id: d.id,
+          type: 'work_order' as const,
+          docNo: data.orderNo ?? d.id,
+          customerName: data.customerName ?? '-',
+          amount: data.totalPrice ?? data.price ?? data.totalAmount ?? 0,
+          createdAt: data.createdAt instanceof Date ? data.createdAt : new Date(),
+          sourceId: d.id,
+          sourceType: 'work_order' as const,
+          branchName: data.branchName,
         }
       })
       merge(); done()
     }, () => done())
 
     return () => { u1(); u2(); u3() }
-  }, [companyId])
+  }, [branchId, companyId])
 
-  const filtered = docs.filter(d => {
+  const filtered = useMemo(() => docs.filter(d => {
     const q = search.toLowerCase()
     return (!q || [d.docNo, d.customerName].some(v => v.toLowerCase().includes(q)))
       && (!filterType || d.type === filterType)
-  })
+  }), [docs, filterType, search])
 
-  const handlePrint = (item: DocItem) => {
-    // Open in new window for printing (placeholder — can extend later)
-    alert(`พิมพ์เอกสาร ${item.docNo}\n\nฟีเจอร์พิมพ์ PDF จะพัฒนาเพิ่มเติม`)
+  const openSale = (sale: Sale) => {
+    setSelectedSale(sale)
+    setEditForm({ customerName: sale.customerName ?? '', notes: sale.notes ?? '' })
+    setCancelReason('')
+    setMessage('')
+  }
+
+  const activeSale = selectedSale ? (docs.find(d => d.sourceId === selectedSale.id)?.sale ?? selectedSale) : null
+  const firstPayment = activeSale?.payments?.[0]
+  const paymentStatus = activeSale?.paymentStatus ?? (activeSale?.status === 'completed' ? 'confirmed' : 'pending')
+  const paymentCfg = paymentStatusConfig[paymentStatus] ?? paymentStatusConfig.unknown
+  const canEditBill = hasPermission('action.sales.editBill')
+  const canAttachSlip = hasPermission('action.sales.attachSlip')
+  const canConfirmPayment = hasPermission('action.sales.confirmPayment')
+  const canCancelBill = hasPermission('action.sales.cancelBill')
+  const activeSaleRestoreItems = activeSale ? restorableSaleItems(activeSale) : []
+  const activeSaleRestoreQty = activeSaleRestoreItems.reduce((sum, item) => sum + item.quantity, 0)
+  const activeSaleRestoredQty = activeSale?.stockRestoreItems?.reduce((sum, item) => sum + (item.quantity ?? 0), 0) ?? 0
+
+  const saveSaleText = async () => {
+    if (!activeSale) return
+    if (!await ensurePermission('action.sales.editBill', 'แก้ไขบิลย้อนหลัง')) return
+    setSaving(true)
+    setMessage('')
+    try {
+      await updateDoc(doc(db, COLLECTIONS.SALES, activeSale.id), {
+        customerName: editForm.customerName.trim() || 'ลูกค้าทั่วไป',
+        notes: editForm.notes.trim(),
+        updatedAt: serverTimestamp(),
+      })
+      setMessage('บันทึกข้อมูลบิลแล้ว')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'บันทึกไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const uploadSlip = async (file?: File) => {
+    if (!activeSale || !file) return
+    if (!await ensurePermission('action.sales.attachSlip', 'แนบ/เปลี่ยนสลิปย้อนหลัง')) return
+    if (!file.type.startsWith('image/')) { setMessage('กรุณาเลือกไฟล์รูปภาพ'); return }
+    if (file.size > 5 * 1024 * 1024) { setMessage('ไฟล์ใหญ่เกิน 5MB'); return }
+    setUploading(true)
+    setMessage('')
+    try {
+      const slipUrl = await uploadToCloudinary(file, 'wigpro/slips')
+      const payments = [...(activeSale.payments ?? [])]
+      const base = payments[0] ?? { method: 'transfer' as PaymentMethod, amount: activeSale.totalAmount ?? 0 }
+      payments[0] = { ...base, slipUrl }
+      await updateDoc(doc(db, COLLECTIONS.SALES, activeSale.id), {
+        payments,
+        paymentStatus: 'pending',
+        status: activeSale.status === 'cancelled' ? 'cancelled' : 'pending',
+        updatedAt: serverTimestamp(),
+      })
+      setMessage('แนบสลิปแล้ว รอการยืนยันชำระเงิน')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'อัปโหลดสลิปไม่สำเร็จ')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const confirmPayment = async () => {
+    if (!activeSale) return
+    if (!await ensurePermission('action.sales.confirmPayment', 'ยืนยันการชำระเงิน')) return
+    setSaving(true)
+    setMessage('')
+    try {
+      const payments = (activeSale.payments ?? []).map((p, index) => index === 0
+        ? { ...p, approvedBy: userId, approvedAt: new Date() }
+        : p)
+      await updateDoc(doc(db, COLLECTIONS.SALES, activeSale.id), {
+        payments,
+        paymentStatus: 'confirmed',
+        paymentConfirmedBy: userId,
+        paymentConfirmedAt: serverTimestamp(),
+        status: activeSale.status === 'cancelled' ? 'cancelled' : 'completed',
+        updatedAt: serverTimestamp(),
+      })
+      setMessage('ยืนยันการชำระเงินแล้ว')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'ยืนยันไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const cancelBill = async () => {
+    if (!activeSale || !cancelReason.trim()) {
+      setMessage('กรุณาระบุเหตุผลการยกเลิกบิล')
+      return
+    }
+    if (activeSale.status === 'cancelled') {
+      setMessage('บิลนี้ถูกยกเลิกแล้ว')
+      return
+    }
+    if (!await ensurePermission('action.sales.cancelBill', 'ยกเลิกบิล')) return
+    setSaving(true)
+    setMessage('')
+    try {
+      const saleBranchId = activeSale.branchId || branchId
+      let restoredQty = 0
+      await runTransaction(db, async transaction => {
+        const saleRef = doc(db, COLLECTIONS.SALES, activeSale.id)
+        const saleSnap = await transaction.get(saleRef)
+        if (!saleSnap.exists()) throw new Error('ไม่พบบิลนี้')
+
+        const liveSale = convertTimestamps(saleSnap.data()) as Sale
+        if (liveSale.status === 'cancelled') throw new Error('บิลนี้ถูกยกเลิกแล้ว')
+        const liveRestoreItems = liveSale.stockRestoredOnCancel ? [] : restorableSaleItems(liveSale)
+        const liveSaleBranchId = liveSale.branchId || saleBranchId
+        restoredQty = liveRestoreItems.reduce((sum, item) => sum + item.quantity, 0)
+
+        const stockChanges = []
+        for (const item of liveRestoreItems) {
+          const inventoryRef = doc(db, COLLECTIONS.INVENTORY, invId(item.productId, liveSaleBranchId))
+          stockChanges.push({ item, inventoryRef })
+        }
+
+        for (const change of stockChanges) {
+          const movementRef = doc(collection(db, COLLECTIONS.STOCK_MOVEMENTS))
+          transaction.set(change.inventoryRef, {
+            companyId,
+            productId: change.item.productId,
+            branchId: liveSaleBranchId,
+            quantity: increment(change.item.quantity),
+            updatedAt: serverTimestamp(),
+          }, { merge: true })
+          transaction.set(movementRef, {
+            companyId,
+            branchId: liveSaleBranchId,
+            productId: change.item.productId,
+            productName: change.item.name,
+            type: 'cancel_return',
+            quantity: change.item.quantity,
+            previousQty: null,
+            newQty: null,
+            referenceType: 'sale_cancel',
+            referenceNo: liveSale.receiptNo,
+            costPrice: 0,
+            notes: `คืนสต๊อกจากการยกเลิกบิล ${liveSale.receiptNo} · เหตุผล: ${cancelReason.trim()}`,
+            performedBy: userId,
+            performedByName: userName || null,
+            createdAt: serverTimestamp(),
+          }, { merge: true })
+        }
+
+        transaction.update(saleRef, {
+          status: 'cancelled',
+          paymentStatus: 'rejected',
+          cancelReason: cancelReason.trim(),
+          cancelledBy: userId,
+          cancelledByName: userName || null,
+          cancelledAt: serverTimestamp(),
+          stockRestoredOnCancel: liveSale.stockRestoredOnCancel || liveRestoreItems.length > 0,
+          ...(liveRestoreItems.length > 0 ? {
+            stockRestoredBy: userId,
+            stockRestoredByName: userName || null,
+            stockRestoredAt: serverTimestamp(),
+            stockRestoreItems: liveRestoreItems,
+          } : {}),
+          updatedAt: serverTimestamp(),
+        })
+      })
+      try {
+        const commissionSnap = await getDocs(query(
+          collection(db, COLLECTIONS.COMMISSION_RECORDS),
+          where('companyId', '==', companyId),
+          where('saleId', '==', activeSale.id),
+        ))
+        if (!commissionSnap.empty) {
+          const batch = writeBatch(db)
+          commissionSnap.docs.forEach(record => {
+            batch.update(record.ref, {
+              status: 'cancelled',
+              cancelledBy: userId,
+              cancelledAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            })
+          })
+          await batch.commit()
+        }
+      } catch (commissionErr) {
+        console.error('Commission cancel sync error:', commissionErr)
+      }
+      setMessage(restoredQty > 0
+        ? `ยกเลิกบิลแล้ว และคืนสต๊อก ${restoredQty} ชิ้น`
+        : 'ยกเลิกบิลแล้ว')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'ยกเลิกบิลไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const printSale = (sale: Sale) => {
+    const win = window.open('', '_blank', 'width=420,height=720,scrollbars=yes')
+    if (!win) { setMessage('กรุณาอนุญาต popup เพื่อพิมพ์'); return }
+    const showVat = sale.showVatOnReceipt ?? ((sale.taxAmount ?? 0) > 0)
+    const preVatAmount = sale.preVatAmount ?? Math.max((sale.totalAmount ?? 0) - (sale.taxAmount ?? 0), 0)
+    const rows = sale.items.map(item => `
+      <tr>
+        <td>
+          <div>${escapeHtml(item.name)}</div>
+          ${showVat && item.taxType === 'non_vat' ? '<div class="line-note">ไม่นับ VAT</div>' : ''}
+          ${item.note ? `<div class="line-note">หมายเหตุ: ${escapeHtml(item.note)}</div>` : ''}
+        </td>
+        <td class="center">${item.quantity}</td>
+        <td class="right">${formatCurrency(item.unitPrice)}</td>
+        <td class="right">${formatCurrency(item.total)}</td>
+      </tr>`).join('')
+    const receiptInfo = sale.receiptInfo
+    const shopName = receiptInfo?.nameTh || ''
+    const branchName = receiptInfo?.branchName || sale.branchName || ''
+    const branchCode = receiptInfo?.branchCode || sale.branchCode || ''
+    win.document.write(`<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"/>
+      <title>ใบเสร็จ ${sale.receiptNo}</title>
+      <style>
+        body{font-family:'Sarabun','Noto Sans Thai',sans-serif;color:#321333;padding:18px;max-width:360px;margin:auto;font-size:13px}
+        h1{text-align:center;font-size:18px;margin:0 0 8px}.shop{text-align:center;margin-bottom:10px}.shop-name{font-weight:700;font-size:16px}.shop-sub{font-size:11px;color:#777;white-space:pre-line}.logo{height:44px;max-width:120px;object-fit:contain;margin:0 auto 6px;display:block}
+        .muted{color:#777}.row{display:flex;justify-content:space-between;margin:4px 0}.total{font-weight:700;font-size:16px;border-top:1px dashed #aaa;padding-top:8px;margin-top:8px}
+        table{width:100%;border-collapse:collapse;margin-top:12px}td,th{border-bottom:1px solid #eee;padding:6px 2px;text-align:left}.right{text-align:right}.center{text-align:center}
+        .cancel{color:#b91c1c;text-align:center;font-weight:700;margin:8px 0}
+        .line-note{font-size:10px;color:#7c4a7c;margin-top:2px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+      </style></head><body>
+      ${receiptInfo ? `<div class="shop">
+        ${receiptInfo.logoUrl ? `<img class="logo" src="${receiptInfo.logoUrl}" alt="logo"/>` : ''}
+        ${shopName ? `<div class="shop-name">${shopName}</div>` : ''}
+        ${branchName ? `<div class="shop-sub">สาขา ${branchName}${branchCode ? ` (${branchCode})` : ''}</div>` : ''}
+        ${receiptInfo.address ? `<div class="shop-sub">${receiptInfo.address}</div>` : ''}
+        ${receiptInfo.phone ? `<div class="shop-sub">โทร. ${receiptInfo.phone}</div>` : ''}
+        ${receiptInfo.email ? `<div class="shop-sub">${receiptInfo.email}</div>` : ''}
+        ${receiptInfo.taxId ? `<div class="shop-sub">เลขผู้เสียภาษี ${receiptInfo.taxId}</div>` : ''}
+      </div>` : ''}
+      <h1>ใบเสร็จรับเงิน</h1>
+      ${sale.status === 'cancelled' ? '<div class="cancel">บิลถูกยกเลิก</div>' : ''}
+      ${!receiptInfo && branchName ? `<div class="row"><span class="muted">สาขา</span><span>${branchName}${branchCode ? ` (${branchCode})` : ''}</span></div>` : ''}
+      <div class="row"><span class="muted">เลขที่</span><strong>${sale.receiptNo}</strong></div>
+      <div class="row"><span class="muted">วันที่</span><span>${formatDate(sale.createdAt)}</span></div>
+      <div class="row"><span class="muted">ลูกค้า</span><span>${sale.customerName ?? 'ลูกค้าทั่วไป'}</span></div>
+      <table><thead><tr><th>รายการ</th><th>จำนวน</th><th class="right">ราคา</th><th class="right">รวม</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="row"><span class="muted">ก่อนส่วนลด</span><span>${formatCurrency(sale.subtotal)}</span></div>
+      <div class="row"><span class="muted">ส่วนลด</span><span>${formatCurrency(sale.discountAmount)}</span></div>
+      ${showVat ? `
+        <div class="row"><span class="muted">มูลค่าก่อน VAT</span><span>${formatCurrency(preVatAmount)}</span></div>
+        <div class="row"><span class="muted">VAT 7% (รวมอยู่ในราคา)</span><span>${formatCurrency(sale.taxAmount)}</span></div>
+      ` : ''}
+      <div class="row total"><span>ยอดสุทธิ</span><span>${formatCurrency(sale.totalAmount)}</span></div>
+      ${receiptInfo?.receiptFooter ? `<div class="shop-sub" style="text-align:center;margin-top:12px">${receiptInfo.receiptFooter}</div>` : ''}
+      <script>window.onload=()=>window.print()</script>
+      </body></html>`)
+    win.document.close()
   }
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-[var(--text-primary)]">เอกสาร</h1>
+          <h1 className="text-2xl font-bold text-[var(--text-primary)]">เอกสารและประวัติบิล</h1>
           <p className="text-sm text-[var(--text-muted)]">{loading ? '...' : `${filtered.length} ฉบับ`}</p>
         </div>
-        <div className="flex gap-2 text-xs text-[var(--text-muted)]">
-          <div className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[var(--border-light)] rounded-xl">
-            <Receipt className="w-3.5 h-3.5 text-[var(--pink-400)]" />
-            <span>ดึงข้อมูลอัตโนมัติจากระบบ</span>
-          </div>
+        <div className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[var(--border-light)] rounded-xl text-xs text-[var(--text-muted)]">
+          <Receipt className="w-3.5 h-3.5 text-[var(--pink-400)]" />
+          <span>ดูใบเสร็จ แนบสลิป ยืนยันชำระ และยกเลิกบิล</span>
         </div>
       </div>
 
-      {/* Type summary chips */}
       {!loading && (
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => setFilterType('')}
@@ -157,7 +460,6 @@ export default function DocumentsPage() {
         </div>
       )}
 
-      {/* Search & Filter */}
       <div className="bg-white rounded-2xl border border-[var(--border-light)] p-4 flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
@@ -171,7 +473,6 @@ export default function DocumentsPage() {
         </select>
       </div>
 
-      {/* Documents list */}
       {loading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 className="w-8 h-8 animate-spin text-[#f472b6]" />
@@ -180,9 +481,7 @@ export default function DocumentsPage() {
         <div className="flex flex-col items-center justify-center py-20 gap-3">
           <FileText className="w-14 h-14 text-[var(--text-muted)]" />
           <p className="text-[var(--text-muted)] text-sm">
-            {docs.length === 0
-              ? 'ยังไม่มีเอกสาร — เอกสารจะแสดงหลังจากมีการขาย มัดจำ หรือสั่งผลิตวิก'
-              : 'ไม่พบเอกสารที่ค้นหา'}
+            {docs.length === 0 ? 'ยังไม่มีเอกสาร เอกสารจะแสดงหลังจากมีการขาย มัดจำ หรือสั่งผลิตวิก' : 'ไม่พบเอกสารที่ค้นหา'}
           </p>
           {docs.length === 0 && (
             <div className="flex gap-3 mt-2">
@@ -199,6 +498,10 @@ export default function DocumentsPage() {
         <div className="bg-white rounded-2xl border border-[var(--border-light)] divide-y divide-[var(--border-light)]">
           {filtered.map(item => {
             const cfg = docTypeConfig[item.type]
+            const saleStatus = item.sale?.status ? saleStatusConfig[item.sale.status] : null
+            const payStatus = item.sale
+              ? paymentStatusConfig[item.sale.paymentStatus ?? (item.sale.status === 'completed' ? 'confirmed' : 'pending')]
+              : null
             return (
               <div key={`${item.sourceType}-${item.id}`}
                 className="flex items-center gap-4 px-5 py-4 hover:bg-[var(--bg-subtle)] transition-colors">
@@ -209,39 +512,205 @@ export default function DocumentsPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-mono text-sm font-bold text-[var(--pink-600)]">{item.docNo}</p>
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>{cfg.label}</span>
+                    {saleStatus && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${saleStatus.color}`}>{saleStatus.label}</span>}
+                    {payStatus && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${payStatus.color}`}>{payStatus.label}</span>}
                   </div>
                   <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                    {item.customerName} · {formatDate(item.createdAt)}
+                    {item.customerName} · {formatDate(item.createdAt)}{item.branchName ? ` · สาขา ${item.branchName}` : ''}
                   </p>
                 </div>
-                <p className="font-semibold text-sm text-[var(--text-primary)] hidden sm:block shrink-0">
+                <p className={`font-semibold text-sm hidden sm:block shrink-0 ${
+                  item.sale?.status === 'cancelled'
+                    ? 'text-red-500 line-through decoration-red-400 decoration-2'
+                    : 'text-[var(--text-primary)]'
+                }`}>
                   {formatCurrency(item.amount)}
                 </p>
                 <div className="flex gap-1.5 shrink-0">
-                  {item.sourceType === 'receipt' && (
-                    <Link href={`/pos`}
-                      className="p-2 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)] hover:text-[var(--pink-600)] transition-all" title="ดูใบเสร็จ">
+                  {item.sale ? (
+                    <button onClick={() => openSale(item.sale!)}
+                      className="p-2 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)] hover:text-[var(--pink-600)] transition-all" title="ดูบิล">
+                      <Eye className="w-4 h-4" />
+                    </button>
+                  ) : (
+                    <Link href={item.sourceType === 'work_order' ? '/production' : '/deposits'}
+                      className="p-2 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)] hover:text-[var(--pink-600)] transition-all" title="ดูรายละเอียด">
                       <Eye className="w-4 h-4" />
                     </Link>
                   )}
-                  {item.sourceType === 'work_order' && (
-                    <Link href={`/production`}
-                      className="p-2 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)] hover:text-[var(--pink-600)] transition-all" title="ดูใบสั่งผลิต">
-                      <Eye className="w-4 h-4" />
-                    </Link>
+                  {item.sale && (
+                    <button onClick={() => printSale(item.sale!)}
+                      className="p-2 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)] hover:text-blue-600 transition-all" title="พิมพ์">
+                      <Printer className="w-4 h-4" />
+                    </button>
                   )}
-                  <button onClick={() => handlePrint(item)}
-                    className="p-2 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)] hover:text-blue-600 transition-all" title="พิมพ์">
-                    <Printer className="w-4 h-4" />
-                  </button>
-                  <button
-                    className="p-2 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)] hover:text-green-600 transition-all" title="ดาวน์โหลด PDF (เร็วๆ นี้)">
+                  <button disabled
+                    className="p-2 rounded-lg text-[var(--text-muted)] opacity-40" title="ดาวน์โหลด PDF (กำลังเตรียม)">
                     <Download className="w-4 h-4" />
                   </button>
                 </div>
               </div>
             )
           })}
+        </div>
+      )}
+
+      {activeSale && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[92vh] overflow-hidden flex flex-col">
+            <div className="px-5 py-4 border-b border-[var(--border-light)] flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-[var(--text-primary)]">ใบเสร็จ {activeSale.receiptNo}</h3>
+                <p className="text-xs text-[var(--text-muted)]">{formatDate(activeSale.createdAt)}</p>
+              </div>
+              <button onClick={() => setSelectedSale(null)} className="p-2 rounded-xl hover:bg-[var(--bg-base)] text-[var(--text-muted)]">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto p-5 space-y-5">
+              {message && (
+                <div className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+                  {message}
+                </div>
+              )}
+
+              <div className="grid md:grid-cols-3 gap-3">
+                <div className="rounded-2xl bg-[var(--bg-base)] border border-[var(--border-light)] p-4">
+                  <p className="text-xs text-[var(--text-muted)]">ยอดสุทธิ</p>
+                  <p className={`text-xl font-bold ${activeSale.status === 'cancelled' ? 'text-red-500 line-through decoration-red-400 decoration-2' : 'text-[var(--pink-600)]'}`}>
+                    {formatCurrency(activeSale.totalAmount)}
+                  </p>
+                  {activeSale.status === 'cancelled' && (
+                    <p className="mt-1 text-[11px] font-medium text-red-600">ไม่ถูกนับเป็นยอดขาย</p>
+                  )}
+                </div>
+                <div className="rounded-2xl bg-[var(--bg-base)] border border-[var(--border-light)] p-4">
+                  <p className="text-xs text-[var(--text-muted)]">สถานะบิล</p>
+                  <span className={`inline-flex mt-1 text-xs px-2 py-1 rounded-full font-semibold ${saleStatusConfig[activeSale.status].color}`}>
+                    {saleStatusConfig[activeSale.status].label}
+                  </span>
+                </div>
+                <div className="rounded-2xl bg-[var(--bg-base)] border border-[var(--border-light)] p-4">
+                  <p className="text-xs text-[var(--text-muted)]">ชำระเงิน</p>
+                  <span className={`inline-flex mt-1 text-xs px-2 py-1 rounded-full font-semibold ${paymentCfg.color}`}>
+                    {paymentCfg.label}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="space-y-3">
+                  <h4 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2">
+                    <Pencil className="w-4 h-4" /> ข้อมูลบิล
+                  </h4>
+                  <input value={editForm.customerName} onChange={e => setEditForm(v => ({ ...v, customerName: e.target.value }))}
+                    placeholder="ชื่อลูกค้า"
+                    className="w-full px-3 py-2.5 bg-[var(--bg-base)] rounded-xl text-sm focus:outline-none border border-[var(--border-light)]" />
+                  <textarea value={editForm.notes} onChange={e => setEditForm(v => ({ ...v, notes: e.target.value }))}
+                    placeholder="หมายเหตุบิล"
+                    rows={3}
+                    className="w-full px-3 py-2.5 bg-[var(--bg-base)] rounded-xl text-sm focus:outline-none border border-[var(--border-light)] resize-none" />
+                  <button onClick={saveSaleText} disabled={saving || activeSale.status === 'cancelled'} title={canEditBill ? 'บันทึกข้อมูลบิล' : 'ต้องขอสิทธิ์แก้ไขบิลย้อนหลัง'}
+                    className="px-4 py-2 rounded-xl bg-[var(--pink-600)] text-white text-sm font-semibold disabled:opacity-50 flex items-center gap-2">
+                    {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />} บันทึกข้อมูลบิล
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  <h4 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4" /> การชำระเงิน
+                  </h4>
+                  <div className="rounded-2xl border border-[var(--border-light)] p-4 text-sm space-y-2">
+                    <div className="flex justify-between"><span className="text-[var(--text-muted)]">วิธีชำระ</span><span className="font-semibold">{paymentLabels[firstPayment?.method ?? 'cash']}</span></div>
+                    <div className="flex justify-between"><span className="text-[var(--text-muted)]">ยอดรับ</span><span className="font-semibold">{formatCurrency(firstPayment?.amount ?? activeSale.paidAmount ?? 0)}</span></div>
+                    {firstPayment?.slipUrl ? (
+                      <a href={firstPayment.slipUrl} target="_blank" className="block text-xs text-[var(--pink-600)] underline">เปิดดูสลิปที่แนบไว้</a>
+                    ) : (
+                      <p className="text-xs text-amber-600">ยังไม่มีสลิป สามารถแนบย้อนหลังได้</p>
+                    )}
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <label title={canAttachSlip ? 'แนบหรือเปลี่ยนสลิป' : 'ต้องขอสิทธิ์แนบ/เปลี่ยนสลิปย้อนหลัง'} className="flex-1 cursor-pointer px-4 py-2 rounded-xl border border-dashed border-[var(--border-light)] text-sm text-center text-[var(--text-secondary)] hover:bg-[var(--pink-50)]">
+                      {uploading ? 'กำลังอัปโหลด...' : 'แนบ/เปลี่ยนสลิป'}
+                      <input type="file" accept="image/*" className="hidden" onChange={e => uploadSlip(e.target.files?.[0])} />
+                    </label>
+                    <button onClick={confirmPayment} disabled={saving || activeSale.status === 'cancelled'} title={canConfirmPayment ? 'ยืนยันชำระเงิน' : 'ต้องขอสิทธิ์ยืนยันการชำระเงิน'}
+                      className="flex-1 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2">
+                      {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} ยืนยันชำระ
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-[var(--border-light)] overflow-hidden">
+                <div className="grid grid-cols-[1fr_64px_96px] gap-2 px-4 py-2 text-xs font-semibold text-[var(--text-muted)] bg-[var(--bg-base)]">
+                  <span>รายการ</span><span className="text-center">จำนวน</span><span className="text-right">รวม</span>
+                </div>
+                {activeSale.items.map((item, index) => (
+                  <div key={`${item.name}-${index}`} className="grid grid-cols-[1fr_64px_96px] gap-2 px-4 py-3 text-sm border-t border-[var(--border-light)]">
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{item.name}</p>
+                      <p className="text-xs text-[var(--text-muted)]">{formatCurrency(item.unitPrice)}</p>
+                      {(activeSale.showVatOnReceipt ?? ((activeSale.taxAmount ?? 0) > 0)) && item.taxType === 'non_vat' && <p className="text-[11px] text-amber-600">ไม่นับ VAT</p>}
+                      {item.note && <p className="text-[11px] text-purple-700 whitespace-pre-line">หมายเหตุ: {item.note}</p>}
+                    </div>
+                    <span className="text-center">{item.quantity}</span>
+                    <span className="text-right font-semibold">{formatCurrency(item.total)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-2xl border border-red-100 bg-red-50 p-4 space-y-3">
+                <h4 className="text-sm font-bold text-red-700 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" /> ยกเลิกบิล
+                </h4>
+                {activeSale.status === 'cancelled' ? (
+                  <div className="space-y-2 text-sm text-red-700">
+                    <p>บิลนี้ถูกยกเลิกแล้ว: {activeSale.cancelReason || '-'}</p>
+                    {(activeSale.cancelledByName || activeSale.cancelledBy || activeSale.cancelledAt) && (
+                      <p className="rounded-xl border border-red-100 bg-white px-3 py-2 text-xs font-semibold">
+                        ยกเลิกโดย {activeSale.cancelledByName || activeSale.cancelledBy || '-'}
+                        {activeSale.cancelledAt ? ` · ${formatDate(activeSale.cancelledAt)}` : ''}
+                      </p>
+                    )}
+                    {activeSale.stockRestoredOnCancel && (
+                      <p className="rounded-xl border border-red-100 bg-white px-3 py-2 text-xs font-semibold">
+                        คืนสต๊อกอัตโนมัติแล้ว {activeSaleRestoredQty} ชิ้น
+                        {activeSale.stockRestoredByName ? ` โดย ${activeSale.stockRestoredByName}` : ''}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {activeSaleRestoreQty > 0 && (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                        เมื่อยกเลิกบิล ระบบจะคืนสต๊อกกลับสาขาเดิมอัตโนมัติ {activeSaleRestoreQty} ชิ้น
+                      </div>
+                    )}
+                    <input value={cancelReason} onChange={e => setCancelReason(e.target.value)}
+                      placeholder="เหตุผลการยกเลิก เช่น ลูกค้าชำระผิด/ออกบิลผิด"
+                      className="w-full px-3 py-2.5 bg-white rounded-xl text-sm focus:outline-none border border-red-100" />
+                    <button onClick={cancelBill} disabled={saving} title={canCancelBill ? 'ยกเลิกบิล' : 'ต้องขอสิทธิ์ยกเลิกบิล'}
+                      className="px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-semibold disabled:opacity-50">
+                      ยกเลิกบิลนี้
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-[var(--border-light)] flex gap-3">
+              <button onClick={() => printSale(activeSale)}
+                className="flex-1 py-2.5 rounded-2xl border border-[var(--border-light)] text-sm font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-base)] flex items-center justify-center gap-2">
+                <Printer className="w-4 h-4" /> พิมพ์ใบเสร็จ
+              </button>
+              <button onClick={() => setSelectedSale(null)}
+                className="flex-1 py-2.5 rounded-2xl bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-sm font-bold text-white">
+                ปิด
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

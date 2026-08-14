@@ -5,6 +5,7 @@ import { Download, Check, Loader2 } from 'lucide-react'
 import { collection, onSnapshot, query, where, Timestamp, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
+import { isCountableSale } from '@/lib/sales'
 import { Employee, Sale, CommissionRecord } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -63,7 +64,10 @@ export default function CommissionsPage() {
   }, [selectedMonth, companyId])
 
   // รวมคอมจาก commission_records จริง (ต่อรายการ/ต่อพนักงาน) ในเดือนที่เลือก
-  const monthRecords = records.filter(r => r.month === selectedMonth)
+  // แต่ไม่นับรายการจากบิลที่ถูกยกเลิกหรือชำระเงินไม่ผ่าน
+  const countableSales = sales.filter(isCountableSale)
+  const countableSaleIds = new Set(countableSales.map(s => s.id))
+  const monthRecords = records.filter(r => r.month === selectedMonth && countableSaleIds.has(r.saleId))
   const summaryData = employees.map(emp => {
     const empRecs = monthRecords.filter(r => r.employeeId === emp.id)
     const totalSales = empRecs.reduce((a, r) => a + (r.saleAmount ?? 0), 0)
@@ -172,9 +176,9 @@ export default function CommissionsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border-light)]">
-                {sales.length === 0 ? (
+                {countableSales.length === 0 ? (
                   <tr><td colSpan={4} className="py-12 text-center text-sm text-[var(--text-muted)]">ไม่มีรายการขายเดือนนี้</td></tr>
-                ) : sales.map(s => (
+                ) : countableSales.map(s => (
                   <tr key={s.id} className="hover:bg-[var(--pink-50)]/30">
                     <td className="px-5 py-3 text-sm font-medium">{s.receiptNo}</td>
                     <td className="px-4 py-3 text-sm text-[var(--text-secondary)]">{s.createdBy}</td>

@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 import { formatCurrency } from '@/lib/utils'
 import {
   Search, Plus, AlertTriangle, Package, Warehouse, BarChart3,
@@ -7,12 +8,14 @@ import {
 } from 'lucide-react'
 import {
   collection, onSnapshot, query, where, doc,
-  updateDoc, addDoc, serverTimestamp, limit,
+  updateDoc, serverTimestamp, limit,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
-import { Product, StockMovement } from '@/types'
+import { Inventory, Product, StockMovement } from '@/types'
+import { adjustBranchStock } from '@/lib/stock'
 import { useAuth } from '@/hooks/useAuth'
+import { usePermissionAction } from '@/hooks/usePermissionAction'
 
 /* ─── Types ─── */
 type ProductWithStock = Product & { stockQty?: number }
@@ -39,6 +42,7 @@ function ReceiveModal({
   branchId: string
   userId: string
 }) {
+  const { ensurePermission } = usePermissionAction()
   const [supplier, setSupplier] = useState('')
   const [note, setNote]         = useState('')
   const [items, setItems]       = useState<ReceiveItem[]>([])
@@ -70,33 +74,25 @@ function ReceiveModal({
 
   const handleSave = async () => {
     if (items.length === 0) { alert('กรุณาเลือกสินค้าอย่างน้อย 1 รายการ'); return }
+    if (!await ensurePermission('action.inventory.adjust', 'ปรับสต๊อก')) return
     setSaving(true)
     try {
       for (const item of items) {
-        const newQty = item.currentStock + item.qty
-        // Update product stock
+        await adjustBranchStock({
+          companyId,
+          branchId,
+          productId: item.productId,
+          productName: item.productName,
+          delta: item.qty,
+          type: 'in',
+          costPrice: item.costPrice,
+          referenceType: 'purchase',
+          performedBy: userId,
+          notes: [supplier, note].filter(Boolean).join(' · ') || undefined,
+        })
         await updateDoc(doc(db, COLLECTIONS.PRODUCTS, item.productId), {
-          stockQty: newQty,
           costPrice: item.costPrice,
           updatedAt: serverTimestamp(),
-        })
-        // Write stock movement
-        await addDoc(collection(db, COLLECTIONS.STOCK_MOVEMENTS), {
-          companyId:    companyId,
-          branchId:     branchId,
-          productId:    item.productId,
-          productName:  item.productName,
-          sku:          item.sku,
-          type:         'in',
-          quantity:     item.qty,
-          previousQty:  item.currentStock,
-          newQty,
-          costPrice:    item.costPrice,
-          supplier:     supplier || null,
-          notes:        note || null,
-          referenceType: 'purchase',
-          performedBy:  userId,
-          createdAt:    serverTimestamp(),
         })
       }
       onDone()
@@ -251,6 +247,7 @@ function MoveBadge({ type }: { type: string }) {
     transfer_in:  { label: 'รับโอน',     cls: 'bg-purple-50 text-purple-700 border border-purple-200' },
     transfer_out: { label: 'โอนออก',    cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
     return:       { label: 'คืนสินค้า',  cls: 'bg-teal-50 text-teal-700 border border-teal-200' },
+    cancel_return:{ label: 'ยกเลิกบิล',  cls: 'bg-red-50 text-red-700 border border-red-200' },
   }
   const m = map[type] ?? { label: type, cls: 'bg-[var(--bg-base)] text-[var(--text-muted)]' }
   return <span className={`px-2 py-0.5 rounded-lg text-xs font-semibold ${m.cls}`}>{m.label}</span>
@@ -259,13 +256,16 @@ function MoveBadge({ type }: { type: string }) {
 /* ─── Main Page ─── */
 export default function InventoryPage() {
   const { companyId, branchId, userId } = useAuth()
+  const { ensurePermission, hasPermission } = usePermissionAction()
   const [products, setProducts]     = useState<ProductWithStock[]>([])
+  const [branchStock, setBranchStock] = useState<Record<string, number>>({})
   const [movements, setMovements]   = useState<(StockMovement & { productName?: string; sku?: string; supplier?: string })[]>([])
   const [loading, setLoading]       = useState(true)
   const [tab, setTab]               = useState<'stock' | 'history'>('stock')
   const [search, setSearch]         = useState('')
   const [filterCategory, setFilterCategory] = useState('')
   const [showLowStock, setShowLowStock]     = useState(false)
+  const [showNegativeStock, setShowNegativeStock] = useState(false)
   const [showReceive, setShowReceive]       = useState(false)
   const [adjustItem, setAdjustItem]         = useState<ProductWithStock | null>(null)
   const [adjustQty, setAdjustQty]           = useState('')
@@ -284,13 +284,34 @@ export default function InventoryPage() {
     }, () => setLoading(false))
   }, [companyId])
 
+  useEffect(() => {
+    if (!companyId || !branchId) {
+      setBranchStock({})
+      return
+    }
+    const q = query(
+      collection(db, COLLECTIONS.INVENTORY),
+      where('companyId', '==', companyId),
+      where('branchId', '==', branchId),
+    )
+    return onSnapshot(q, snap => {
+      const next: Record<string, number> = {}
+      snap.docs.forEach(d => {
+        const data = d.data() as Inventory
+        if (data.productId) next[data.productId] = Number(data.quantity ?? 0)
+      })
+      setBranchStock(next)
+    }, () => setBranchStock({}))
+  }, [branchId, companyId])
+
   /* Load movements */
   useEffect(() => {
-    if (!companyId) return
+    if (!companyId || !branchId) return
     // No orderBy — sort client-side to avoid composite index
     const q = query(
       collection(db, COLLECTIONS.STOCK_MOVEMENTS),
       where('companyId', '==', companyId),
+      where('branchId', '==', branchId),
       limit(100),
     )
     return onSnapshot(q, snap => {
@@ -302,49 +323,50 @@ export default function InventoryPage() {
       })
       setMovements(list)
     }, () => {})
-  }, [companyId])
+  }, [branchId, companyId])
 
-  const categories = Array.from(new Set(products.map(p => p.category).filter(Boolean)))
+  const productsForBranch = products.map(p => ({
+    ...p,
+    stockQty: branchStock[p.id] ?? p.stockQty ?? 0,
+  }))
 
-  const filtered = products.filter(p => {
+  const categories = Array.from(new Set(productsForBranch.map(p => p.category).filter(Boolean)))
+
+  const filtered = productsForBranch.filter(p => {
     const q       = search.toLowerCase()
     const matchQ  = !q || p.name.toLowerCase().includes(q) || p.sku?.toLowerCase().includes(q)
     const matchC  = !filterCategory || p.category === filterCategory
     const stock   = p.stockQty ?? 0
     const minStock = p.minStockAlert ?? 0
     const matchLow = !showLowStock || stock <= minStock
-    return matchQ && matchC && matchLow
+    const matchNegative = !showNegativeStock || stock < 0
+    return matchQ && matchC && matchLow && matchNegative
   })
 
-  const totalValue = products.reduce((s, p) => s + (p.stockQty ?? 0) * (p.costPrice ?? 0), 0)
-  const lowCount   = products.filter(p => (p.stockQty ?? 0) <= (p.minStockAlert ?? 0)).length
-  const totalQty   = products.reduce((s, p) => s + (p.stockQty ?? 0), 0)
+  const totalValue = productsForBranch.reduce((s, p) => s + (p.stockQty ?? 0) * (p.costPrice ?? 0), 0)
+  const lowCount   = productsForBranch.filter(p => (p.stockQty ?? 0) <= (p.minStockAlert ?? 0)).length
+  const totalQty   = productsForBranch.reduce((s, p) => s + (p.stockQty ?? 0), 0)
+  const negativeCount = productsForBranch.filter(p => (p.stockQty ?? 0) < 0).length
 
   /* Adjust stock (set exact number) */
   const handleAdjust = async () => {
     if (!adjustItem) return
+    if (!await ensurePermission('action.inventory.adjust', 'ปรับสต๊อก')) return
     setSaving(true)
     try {
       const newQty    = parseInt(adjustQty) || 0
       const prevQty   = adjustItem.stockQty ?? 0
-      await updateDoc(doc(db, COLLECTIONS.PRODUCTS, adjustItem.id), {
-        stockQty: newQty, updatedAt: serverTimestamp(),
-      })
-      await addDoc(collection(db, COLLECTIONS.STOCK_MOVEMENTS), {
-        companyId:    companyId,
-        branchId:     branchId,
-        productId:    adjustItem.id,
-        productName:  adjustItem.name,
-        sku:          adjustItem.sku,
-        type:         'adjust',
-        quantity:     newQty - prevQty,
-        previousQty:  prevQty,
-        newQty,
-        costPrice:    adjustItem.costPrice ?? 0,
-        notes:        adjustNote || null,
+      await adjustBranchStock({
+        companyId,
+        branchId,
+        productId: adjustItem.id,
+        productName: adjustItem.name,
+        delta: newQty - prevQty,
+        type: 'adjust',
+        costPrice: adjustItem.costPrice ?? 0,
         referenceType: 'manual_adjust',
-        performedBy:  userId,
-        createdAt:    serverTimestamp(),
+        performedBy: userId,
+        notes: adjustNote || undefined,
       })
       setAdjustItem(null); setAdjustQty(''); setAdjustNote('')
     } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
@@ -363,7 +385,7 @@ export default function InventoryPage() {
           <h1 className="text-2xl font-bold text-[var(--text-primary)]">สต๊อกสินค้า</h1>
           <p className="text-sm text-[var(--text-muted)]">จัดการสินค้าคงคลัง</p>
         </div>
-        <button onClick={() => setShowReceive(true)}
+        <button onClick={() => setShowReceive(true)} title={hasPermission('action.inventory.adjust') ? 'รับสินค้าเข้า' : 'ต้องขอสิทธิ์ปรับสต๊อก'}
           className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-2xl text-sm font-bold shadow-md shadow-pink-200 hover:shadow-lg transition-all">
           <ArrowDownToLine className="w-4 h-4" />
           รับสินค้าเข้า
@@ -371,11 +393,12 @@ export default function InventoryPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {[
           { label:'SKU ทั้งหมด',   value: products.length,          icon: Package,       color:'text-blue-600'             },
           { label:'มูลค่าสต๊อก',  value: formatCurrency(totalValue), icon: BarChart3,    color:'text-[var(--pink-500)]'    },
           { label:'สินค้าใกล้หมด', value: lowCount,                  icon: AlertTriangle, color:'text-amber-600'            },
+          { label:'สต๊อกติดลบ',    value: negativeCount,              icon: AlertTriangle, color:'text-red-600'              },
           { label:'จำนวนรวม',     value: totalQty,                   icon: Warehouse,    color:'text-purple-600'           },
         ].map(s => (
           <div key={s.label} className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-4">
@@ -425,6 +448,10 @@ export default function InventoryPage() {
               <input type="checkbox" checked={showLowStock} onChange={e => setShowLowStock(e.target.checked)} className="accent-[var(--pink-500)]" />
               <span className="text-sm text-[var(--text-secondary)] whitespace-nowrap">ใกล้หมดเท่านั้น</span>
             </label>
+            <label className="flex items-center gap-2 px-4 py-2.5 bg-red-50 border border-red-100 rounded-xl cursor-pointer hover:bg-red-100/70 transition-all">
+              <input type="checkbox" checked={showNegativeStock} onChange={e => setShowNegativeStock(e.target.checked)} className="accent-red-500" />
+              <span className="text-sm text-red-700 whitespace-nowrap">ติดลบเท่านั้น</span>
+            </label>
           </div>
 
           {/* Table */}
@@ -447,14 +474,15 @@ export default function InventoryPage() {
                   <tbody className="divide-y divide-[var(--border-light)]">
                     {filtered.length === 0 ? (
                       <tr><td colSpan={6} className="py-16 text-center text-sm text-[var(--text-muted)]">
-                        ไม่พบสินค้า — <a href="/products" className="text-[var(--pink-500)] hover:underline">เพิ่มสินค้าที่หน้าสินค้า</a>
+                        ไม่พบสินค้า — <Link href="/products" className="text-[var(--pink-500)] hover:underline">เพิ่มสินค้าที่หน้าสินค้า</Link>
                       </td></tr>
                     ) : filtered.map(item => {
                       const stock    = item.stockQty ?? 0
                       const minStock = item.minStockAlert ?? 0
+                      const isNegative = stock < 0
                       const isLow    = stock <= minStock
                       return (
-                        <tr key={item.id} className={`hover:bg-[var(--pink-50)]/30 transition-colors ${isLow ? 'bg-amber-50/40' : ''}`}>
+                        <tr key={item.id} className={`hover:bg-[var(--pink-50)]/30 transition-colors ${isNegative ? 'bg-red-50/60' : isLow ? 'bg-amber-50/40' : ''}`}>
                           <td className="px-5 py-3.5">
                             <div className="flex items-center gap-3">
                               <div className="w-8 h-8 rounded-lg bg-[var(--pink-50)] flex items-center justify-center shrink-0">
@@ -464,11 +492,15 @@ export default function InventoryPage() {
                                 <p className="font-medium text-sm text-[var(--text-primary)]">{item.name}</p>
                                 <p className="text-xs text-[var(--text-muted)]">{item.sku} · {item.category}</p>
                               </div>
-                              {isLow && <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />}
+                              {isNegative ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-600">
+                                  <AlertTriangle className="h-3 w-3" />ติดลบ
+                                </span>
+                              ) : isLow && <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />}
                             </div>
                           </td>
                           <td className="px-4 py-3.5 text-center">
-                            <span className={`text-lg font-bold ${isLow ? 'text-amber-600' : 'text-[var(--text-primary)]'}`}>{stock}</span>
+                            <span className={`text-lg font-bold ${isNegative ? 'text-red-600' : isLow ? 'text-amber-600' : 'text-[var(--text-primary)]'}`}>{stock}</span>
                           </td>
                           <td className="px-4 py-3.5 text-center">
                             <span className="text-sm text-[var(--text-muted)]">{minStock}</span>
@@ -480,7 +512,7 @@ export default function InventoryPage() {
                             <span className="font-semibold text-sm text-[var(--pink-500)]">{formatCurrency(item.sellingPrice ?? 0)}</span>
                           </td>
                           <td className="px-5 py-3.5 text-right">
-                            <button onClick={() => { setAdjustItem(item); setAdjustQty(String(stock)) }}
+                            <button onClick={() => { setAdjustItem(item); setAdjustQty(String(stock)) }} title={hasPermission('action.inventory.adjust') ? 'ปรับสต๊อก' : 'ต้องขอสิทธิ์ปรับสต๊อก'}
                               className="px-3 py-1.5 bg-[var(--pink-50)] text-[var(--pink-600)] border border-[var(--pink-200)] rounded-xl text-xs font-semibold hover:bg-[var(--pink-100)] transition-all">
                               ปรับสต๊อก
                             </button>
@@ -532,12 +564,17 @@ export default function InventoryPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center hidden sm:table-cell">
-                      <span className="text-xs text-[var(--text-muted)]">{m.previousQty} → {m.newQty}</span>
+                      <span className="text-xs text-[var(--text-muted)]">
+                        {typeof m.previousQty === 'number' && typeof m.newQty === 'number'
+                          ? `${m.previousQty} → ${m.newQty}`
+                          : m.type === 'cancel_return' ? 'คืนอัตโนมัติ' : '-'}
+                      </span>
                     </td>
                     <td className="px-5 py-3 hidden md:table-cell">
                       <p className="text-xs text-[var(--text-muted)]">
                         {(m as { supplier?: string }).supplier ? `${(m as { supplier?: string }).supplier} · ` : ''}
                         {m.notes ?? '—'}
+                        {m.isNegativeStock ? ' · ทำให้สต๊อกติดลบ' : ''}
                       </p>
                     </td>
                   </tr>
@@ -591,7 +628,7 @@ export default function InventoryPage() {
       {/* Receive Modal */}
       {showReceive && (
         <ReceiveModal
-          products={products}
+          products={productsForBranch}
           onClose={() => setShowReceive(false)}
           onDone={() => setTab('history')}
           companyId={companyId}

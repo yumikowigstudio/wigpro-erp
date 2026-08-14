@@ -1,7 +1,9 @@
 'use client'
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { formatDate, formatCurrency } from '@/lib/utils'
-import { Plus, Search, CreditCard, CheckCircle, Clock, XCircle, Loader2, X } from 'lucide-react'
+import { Plus, Search, CreditCard, CheckCircle, Clock, XCircle, Loader2, X, AlertTriangle, CalendarDays, UserRound } from 'lucide-react'
 import { collection, onSnapshot, query, where, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
@@ -25,6 +27,33 @@ const PAY_METHODS = [
   { id: 'promptpay', label: 'พร้อมเพย์', icon: '📱' },
   { id: 'card', label: 'บัตร', icon: '💳' },
 ]
+
+const parsePickupDate = (value?: string) => {
+  if (!value) return null
+  const date = new Date(`${value}T00:00:00`)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+const isOutstandingDeposit = (deposit: Deposit) =>
+  !['paid_full', 'cancelled'].includes(deposit.status ?? '') && (deposit.remainingAmount ?? 0) > 0
+
+const isOverdueDeposit = (deposit: Deposit) => {
+  const date = parsePickupDate(deposit.pickupDate)
+  if (!date || !isOutstandingDeposit(deposit)) return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return date < today
+}
+
+const isDueSoonDeposit = (deposit: Deposit) => {
+  const date = parsePickupDate(deposit.pickupDate)
+  if (!date || !isOutstandingDeposit(deposit)) return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const nextWeek = new Date(today)
+  nextWeek.setDate(nextWeek.getDate() + 7)
+  return date >= today && date <= nextWeek
+}
 
 function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, saving, onClose, onConfirm }:
   { deposit: Deposit; payAmount: string; setPayAmount: (v:string)=>void; payMethod: string; setPayMethod: (v:string)=>void; saving: boolean; onClose: ()=>void; onConfirm: ()=>void }) {
@@ -65,10 +94,10 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
                 <span className="text-right text-xs text-[var(--text-secondary)]">{deposit.notes}</span>
               </div>
             )}
-            {(deposit as any).pickupDate && (
+            {deposit.pickupDate && (
               <div className="flex justify-between">
                 <span className="text-[var(--text-muted)]">วันนัดรับ</span>
-                <span className="font-medium text-emerald-600">{(deposit as any).pickupDate}</span>
+                <span className="font-medium text-emerald-600">{deposit.pickupDate}</span>
               </div>
             )}
             <hr className="border-[var(--border-light)]" />
@@ -156,7 +185,8 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
 }
 
 export default function DepositsPage() {
-  const { companyId, branchId, userId } = useAuth()
+  const searchParams = useSearchParams()
+  const { companyId, branchId, userId, currentBranch } = useAuth()
   const [deposits, setDeposits]         = useState<Deposit[]>([])
   const [loading, setLoading]           = useState(true)
   const [search, setSearch]             = useState('')
@@ -167,6 +197,11 @@ export default function DepositsPage() {
   const [form, setForm] = useState({ customerName: '', itemName: '', totalAmount: '', depositAmount: '', notes: '' })
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('cash')
+
+  useEffect(() => {
+    const requestedStatus = searchParams?.get('status')
+    if (requestedStatus) setFilterStatus(requestedStatus)
+  }, [searchParams])
 
   useEffect(() => {
     if (!companyId) return
@@ -184,13 +219,29 @@ export default function DepositsPage() {
     }, () => setLoading(false))
   }, [companyId])
 
+  const matchesStatus = (deposit: Deposit) => {
+    if (!filterStatus) return true
+    if (filterStatus === 'outstanding') return isOutstandingDeposit(deposit)
+    if (filterStatus === 'overdue') return isOverdueDeposit(deposit)
+    return deposit.status === filterStatus
+  }
+
   const filtered = deposits.filter(d => {
     const q = search.toLowerCase()
     return (!q || [d.depositNo, d.customerName].some(v => v?.toLowerCase().includes(q)))
-      && (!filterStatus || d.status === filterStatus)
+      && matchesStatus(d)
   })
 
-  const pendingTotal = deposits.filter(d => d.status === 'deposited').reduce((s, d) => s + d.remainingAmount, 0)
+  const outstandingDeposits = deposits.filter(isOutstandingDeposit)
+  const overdueDeposits = deposits.filter(isOverdueDeposit)
+  const dueSoonDeposits = deposits.filter(isDueSoonDeposit)
+  const pendingTotal = outstandingDeposits.reduce((s, d) => s + (d.remainingAmount ?? 0), 0)
+  const overdueTotal = overdueDeposits.reduce((s, d) => s + (d.remainingAmount ?? 0), 0)
+  const dueSoonTotal = dueSoonDeposits.reduce((s, d) => s + (d.remainingAmount ?? 0), 0)
+  const followupDeposits = [
+    ...overdueDeposits,
+    ...dueSoonDeposits.filter(dep => !overdueDeposits.some(overdue => overdue.id === dep.id)),
+  ].slice(0, 5)
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault(); setSaving(true)
@@ -201,6 +252,8 @@ export default function DepositsPage() {
       const depositNo = `DEP-${String(now.getMonth()+1).padStart(2,'0')}${String(now.getFullYear()).slice(-2)}-${String(deposits.length+1).padStart(3,'0')}`
       await addDocument<Deposit>(COLLECTIONS.DEPOSITS, {
         companyId, branchId,
+        branchName: currentBranch?.name ?? '',
+        branchCode: currentBranch?.code ?? '',
         depositNo, customerId: '', customerName: form.customerName,
         items: [{ name: form.itemName, quantity: 1, unitPrice: total, total }],
         totalAmount: total, depositAmount: deposit, paidAmount: deposit,
@@ -237,6 +290,9 @@ export default function DepositsPage() {
   const printPickupReceipt = (dep: Deposit, paid: number, method: string) => {
     const methodLabel: Record<string,string> = { cash:'เงินสด', transfer:'โอนเงิน', card:'บัตรเครดิต/เดบิต', promptpay:'พร้อมเพย์' }
     const change = Math.max(paid - dep.remainingAmount, 0)
+    const receiptInfo = dep.receiptInfo
+    const branchName = receiptInfo?.branchName || dep.branchName || ''
+    const branchCode = receiptInfo?.branchCode || dep.branchCode || ''
     const win = window.open('', '_blank', 'width=400,height=600')
     if (!win) return
     win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>ใบเสร็จรับเงิน</title>
@@ -244,7 +300,7 @@ export default function DepositsPage() {
       @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
       *{margin:0;padding:0;box-sizing:border-box}
       body{font-family:'Sarabun',sans-serif;font-size:13px;color:#111;padding:24px;max-width:320px;margin:0 auto}
-      .center{text-align:center}.bold{font-weight:700}.muted{color:#666;font-size:11px}
+      .center{text-align:center}.bold{font-weight:700}.muted{color:#666;font-size:11px}.shop{margin-bottom:10px}.shop-name{font-size:16px;font-weight:700}.shop-sub{font-size:11px;color:#666;white-space:pre-line}.logo{height:44px;max-width:120px;object-fit:contain;margin:0 auto 6px;display:block}
       .divider{border:none;border-top:1px dashed #ccc;margin:10px 0}
       .row{display:flex;justify-content:space-between;padding:3px 0}
       .badge{display:inline-block;background:#d1fae5;color:#065f46;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
@@ -252,6 +308,15 @@ export default function DepositsPage() {
       .total-row{font-size:15px;font-weight:700}
       @media print{body{padding:8px}}
     </style></head><body>
+    ${receiptInfo ? `<div class="center shop">
+      ${receiptInfo.logoUrl ? `<img class="logo" src="${receiptInfo.logoUrl}" alt="logo"/>` : ''}
+      ${receiptInfo.nameTh ? `<div class="shop-name">${receiptInfo.nameTh}</div>` : ''}
+      ${branchName ? `<div class="shop-sub">สาขา ${branchName}${branchCode ? ` (${branchCode})` : ''}</div>` : ''}
+      ${receiptInfo.address ? `<div class="shop-sub">${receiptInfo.address}</div>` : ''}
+      ${receiptInfo.phone ? `<div class="shop-sub">โทร. ${receiptInfo.phone}</div>` : ''}
+      ${receiptInfo.email ? `<div class="shop-sub">${receiptInfo.email}</div>` : ''}
+      ${receiptInfo.taxId ? `<div class="shop-sub">เลขผู้เสียภาษี ${receiptInfo.taxId}</div>` : ''}
+    </div>` : branchName ? `<div class="center shop"><div class="shop-sub">สาขา ${branchName}${branchCode ? ` (${branchCode})` : ''}</div></div>` : ''}
     <div class="center" style="margin-bottom:12px">
       <div style="font-size:18px;font-weight:700;color:#059669">✅ ใบเสร็จรับวิก</div>
       <div class="muted">รับวิกและชำระเงินครบแล้ว</div>
@@ -272,7 +337,7 @@ export default function DepositsPage() {
     ${change > 0 ? `<div class="row"><span class="muted">เงินทอน</span><span class="bold" style="color:#059669">${change.toLocaleString('th-TH',{minimumFractionDigits:2})} ฿</span></div>` : ''}
     <div class="row"><span class="muted">ช่องทาง</span><span>${methodLabel[method]||method}</span></div>
     <hr class="divider">
-    <div class="center muted" style="margin-top:8px">ขอบคุณที่ใช้บริการค่ะ 🙏</div>
+    <div class="center muted" style="margin-top:8px">${receiptInfo?.receiptFooter || 'ขอบคุณที่ใช้บริการค่ะ 🙏'}</div>
     <script>window.onload=()=>{window.print();window.onafterprint=()=>window.close()}<\/script>
     </body></html>`)
     win.document.close()
@@ -305,6 +370,71 @@ export default function DepositsPage() {
         })}
       </div>
 
+      <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-4 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-[var(--text-primary)]">รายงานมัดจำค้างชำระ</p>
+            <p className="text-xs text-[var(--text-muted)]">ใช้ดูยอดที่ต้องตาม ลูกค้าใกล้นัดรับ และรายการที่ควรเก็บเงินเพิ่ม</p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <button type="button" onClick={() => setFilterStatus('outstanding')} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-left hover:bg-amber-100 transition-all">
+              <p className="text-[10px] font-semibold text-amber-700">ค้างทั้งหมด</p>
+              <p className="text-sm font-bold text-amber-800">{formatCurrency(pendingTotal)}</p>
+            </button>
+            <button type="button" onClick={() => setFilterStatus('overdue')} className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-left hover:bg-red-100 transition-all">
+              <p className="text-[10px] font-semibold text-red-700">เกินกำหนด</p>
+              <p className="text-sm font-bold text-red-700">{overdueDeposits.length} ใบ</p>
+              <p className="text-[10px] text-red-600">{formatCurrency(overdueTotal)}</p>
+            </button>
+            <button type="button" onClick={() => setFilterStatus('outstanding')} className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-left hover:bg-blue-100 transition-all">
+              <p className="text-[10px] font-semibold text-blue-700">ใกล้ถึงนัด</p>
+              <p className="text-sm font-bold text-blue-700">{formatCurrency(dueSoonTotal)}</p>
+            </button>
+          </div>
+        </div>
+
+        {followupDeposits.length > 0 ? (
+          <div className="divide-y divide-[var(--border-light)] rounded-2xl border border-[var(--border-light)] overflow-hidden">
+            {followupDeposits.map(dep => {
+              const overdue = isOverdueDeposit(dep)
+              return (
+                <div key={dep.id} className="p-3 flex flex-col sm:flex-row sm:items-center gap-3 bg-[var(--bg-base)]">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${overdue ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
+                    {overdue ? <AlertTriangle className="w-4 h-4" /> : <CalendarDays className="w-4 h-4" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{dep.customerName} · {dep.depositNo}</p>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      ค้าง {formatCurrency(dep.remainingAmount ?? 0)}
+                      {dep.pickupDate ? ` · นัดรับ ${dep.pickupDate}` : ' · ยังไม่ระบุวันนัดรับ'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {dep.customerId && (
+                      <Link href={`/customers/${dep.customerId}?tab=timeline`} className="px-2.5 py-1 rounded-lg bg-white border border-[var(--border-light)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--pink-50)] flex items-center gap-1">
+                        <UserRound className="w-3 h-3" /> ลูกค้า
+                      </Link>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => { setShowPayModal(dep); setPayAmount(String(dep.remainingAmount ?? 0)) }}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                    >
+                      รับชำระ
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 flex items-center gap-2">
+            <CheckCircle className="w-4 h-4" />
+            ยังไม่มีมัดจำค้างที่ต้องติดตามในช่วงนี้
+          </div>
+        )}
+      </div>
+
       {/* Search */}
       <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-4 flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
@@ -315,6 +445,8 @@ export default function DepositsPage() {
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
           className="px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm focus:outline-none">
           <option value="">สถานะทั้งหมด</option>
+          <option value="outstanding">ค้างชำระทั้งหมด</option>
+          <option value="overdue">เกินกำหนดรับ/ชำระ</option>
           {Object.entries(statusConfig).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
       </div>

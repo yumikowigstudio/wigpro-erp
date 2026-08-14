@@ -11,12 +11,20 @@ const sarabun = Sarabun({
 })
 
 export const metadata: Metadata = {
-  title: 'WigPro ERP - ระบบบริหารร้านวิกผมและร้านตัดผม',
+  applicationName: 'Lunexa',
+  title: 'ระบบบริหารร้านวิกผมและร้านตัดผม',
   description: 'ระบบบริหารจัดการร้านวิกผมและร้านตัดผมครบวงจร รองรับหลายสาขา',
-  icons: { icon: '/favicon.ico' },
+  icons: {
+    icon: [
+      { url: '/favicon.ico' },
+      { url: '/icon.svg', type: 'image/svg+xml' },
+    ],
+    apple: '/apple-touch-icon.png',
+  },
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
+    title: 'Lunexa',
     statusBarStyle: 'default',
   },
 }

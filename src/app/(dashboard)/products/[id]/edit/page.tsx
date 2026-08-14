@@ -1,4 +1,5 @@
 'use client'
+/* eslint-disable @next/next/no-img-element */
 import { useState, useEffect, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -34,7 +35,6 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
   const { companyId } = useAuth()
 
   const [loading,    setLoading]    = useState(true)
-  const [saving,     setSaving]     = useState(false)
   const [done,       setDone]       = useState(false)
   const [uploading,  setUploading]  = useState(false)
   const [categories, setCategories] = useState<Category[]>([])
@@ -91,7 +91,7 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (done || !form.name.trim() || !form.sku.trim() || !form.sellingPrice) return
-    setSaving(true); setDone(true)
+    setDone(true)
 
     try {
       let finalUrl = imageUrl
@@ -122,7 +122,7 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
       router.push(`/products/${id}`)
     } catch (err) {
       console.error(err)
-      setSaving(false); setDone(false)
+      setDone(false)
       alert('เกิดข้อผิดพลาด กรุณาลองใหม่')
     }
   }

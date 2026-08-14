@@ -1,14 +1,15 @@
-'use client'
+﻿'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { cn } from '@/lib/utils'
+import { PermissionKey } from '@/lib/permissions'
 import {
   LayoutDashboard, Users, CalendarDays, ShoppingCart, Package,
-  Warehouse, Scissors, CreditCard, BarChart3, Settings,
-  ChevronLeft, ChevronRight, UserCog, BookOpen,
-  Bell, FileText, Star, LogOut, Building2,
+  Warehouse, CreditCard, BarChart3, Settings,
+  ChevronLeft, ChevronRight, UserCog,
+  FileText, Star, LogOut, Building2,
   ChevronDown, ChevronUp, Factory, Receipt, TrendingUp, Undo2, ShieldCheck, ArrowLeftRight,
 } from 'lucide-react'
 
@@ -20,34 +21,34 @@ interface NavItem {
   children?: NavItem[]
   roles?:    string[]
   group?:    string
+  permission?: PermissionKey
 }
-
 const navItems: NavItem[] = [
-  { href: '/pos',          label: 'POS ขาย',        icon: ShoppingCart,    group: 'หลัก' },
-  { href: '/dashboard',    label: 'แดชบอร์ด',      icon: LayoutDashboard, group: 'หลัก' },
-  { href: '/customers',    label: 'ลูกค้า',          icon: Users,           group: 'หลัก' },
-  { href: '/appointments', label: 'นัดหมาย',         icon: CalendarDays,    group: 'หลัก' },
-  { href: '/members',      label: 'สมาชิก',          icon: Star,            group: 'หลัก' },
+  { href: '/pos', label: 'POS ขาย', icon: ShoppingCart, group: 'หลัก', permission: 'page.pos' },
+  { href: '/dashboard', label: 'แดชบอร์ด', icon: LayoutDashboard, group: 'หลัก', permission: 'page.dashboard' },
+  { href: '/customers', label: 'ลูกค้า', icon: Users, group: 'หลัก', permission: 'page.customers' },
+  { href: '/appointments', label: 'นัดหมาย', icon: CalendarDays, group: 'หลัก', permission: 'page.appointments' },
+  { href: '/members', label: 'สมาชิก', icon: Star, group: 'หลัก', permission: 'page.members' },
   {
     label: 'สินค้าและสต๊อก', icon: Package, group: 'คลัง',
     children: [
-      { href: '/products',  label: 'รายการสินค้า', icon: Package },
-      { href: '/inventory', label: 'สต๊อกสินค้า',  icon: Warehouse },
+      { href: '/products', label: 'รายการสินค้า', icon: Package, permission: 'page.products' },
+      { href: '/inventory', label: 'สต๊อกสินค้า', icon: Warehouse, permission: 'page.inventory' },
     ],
   },
-  { href: '/production',  label: 'งานผลิตวิก',   icon: Factory,   group: 'คลัง' },
-  { href: '/returns',     label: 'คืน/เปลี่ยนสินค้า', icon: Undo2,  group: 'คลัง' },
-  { href: '/transfers',   label: 'โอนสินค้า',     icon: ArrowLeftRight, group: 'คลัง' },
-  { href: '/deposits',    label: 'มัดจำ',         icon: CreditCard, group: 'การเงิน' },
-  { href: '/quotations',  label: 'ใบเสนอราคา',    icon: FileText,   group: 'การเงิน' },
-  { href: '/accounting',  label: 'บัญชี',         icon: Receipt,    group: 'การเงิน' },
-  { href: '/commissions', label: 'คอมมิชชั่น',    icon: TrendingUp, group: 'การเงิน' },
-  { href: '/reports',     label: 'รายงาน',        icon: BarChart3,  group: 'การเงิน' },
-  { href: '/staff',       label: 'พนักงาน',       icon: UserCog,    group: 'จัดการ', roles: ['super_admin','owner','branch_manager'] },
-  { href: '/settings',    label: 'ตั้งค่า',       icon: Settings,   group: 'จัดการ', roles: ['super_admin','owner','branch_manager'] },
-  { href: '/admin',       label: 'หลังบ้าน (Admin)', icon: ShieldCheck, group: 'จัดการ', roles: ['super_admin'] },
+  { href: '/production', label: 'งานผลิตวิก', icon: Factory, group: 'คลัง', permission: 'page.production' },
+  { href: '/returns', label: 'คืน/เปลี่ยนสินค้า', icon: Undo2, group: 'คลัง', permission: 'page.returns' },
+  { href: '/transfers', label: 'โอนสินค้า', icon: ArrowLeftRight, group: 'คลัง', permission: 'page.transfers' },
+  { href: '/deposits', label: 'มัดจำ', icon: CreditCard, group: 'การเงิน', permission: 'page.deposits' },
+  { href: '/quotations', label: 'ใบเสนอราคา', icon: FileText, group: 'การเงิน', permission: 'page.quotations' },
+  { href: '/documents', label: 'ประวัติบิล', icon: FileText, group: 'การเงิน', permission: 'page.documents' },
+  { href: '/accounting', label: 'บัญชี', icon: Receipt, group: 'การเงิน', permission: 'page.accounting' },
+  { href: '/commissions', label: 'คอมมิชชั่น', icon: TrendingUp, group: 'การเงิน', permission: 'page.commissions' },
+  { href: '/reports', label: 'รายงาน', icon: BarChart3, group: 'การเงิน', permission: 'page.reports' },
+  { href: '/staff', label: 'พนักงาน', icon: UserCog, group: 'จัดการ', roles: ['super_admin','owner','branch_manager'], permission: 'page.staff' },
+  { href: '/settings', label: 'ตั้งค่า', icon: Settings, group: 'จัดการ', roles: ['super_admin','owner','branch_manager'], permission: 'page.settings' },
+  { href: '/admin', label: 'หลังบ้าน (Admin)', icon: ShieldCheck, group: 'จัดการ', roles: ['super_admin'] },
 ]
-
 function NavGroup({ label, collapsed }: { label: string; collapsed: boolean }) {
   if (collapsed) return <div className="my-2 border-t border-[var(--border-light)]" />
   return (
@@ -56,14 +57,15 @@ function NavGroup({ label, collapsed }: { label: string; collapsed: boolean }) {
     </p>
   )
 }
-
 function NavItemComponent({ item, collapsed, depth = 0 }: { item: NavItem; collapsed: boolean; depth?: number }) {
   const pathname = usePathname()
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
   const [open, setOpen] = useState(false)
 
-  // ซ่อนเมนูที่จำกัด role ถ้ายังไม่มี user หรือ role ไม่อยู่ในรายการ (กันเมนูโผล่ตอนโหลด)
+  // ซ่อนเมนูที่จำกัด role ถ้ายังไม่มี user หรือ role ไม่อยู่ในรายการ
   if (item.roles && (!user || !item.roles.includes(user.role))) return null
+  if (item.permission && !hasPermission(item.permission)) return null
+  if (item.children?.length && !item.children.some(child => !child.permission || hasPermission(child.permission))) return null
 
   const isActive = item.href
     ? pathname === item.href || pathname.startsWith(item.href + '/')
@@ -134,7 +136,8 @@ function NavItemComponent({ item, collapsed, depth = 0 }: { item: NavItem; colla
 }
 
 export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
-  const { user, currentBranch, logout } = useAuth()
+  const { user, currentBranch, branches, canSwitchBranch, switchBranch, logout, hasPermission } = useAuth()
+  const canOpenSettings = !!user && ['super_admin', 'owner', 'branch_manager'].includes(user.role) && hasPermission('page.settings')
 
   // Group nav items
   const groups = navItems.reduce<Record<string, NavItem[]>>((acc, item) => {
@@ -149,29 +152,31 @@ export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; o
       style={{ width: collapsed ? '70px' : '240px' }}
       className="fixed left-0 top-0 h-full flex flex-col transition-all duration-300 z-40"
     >
-      {/* Sidebar card — floating glass */}
+      {/* Sidebar card - floating glass */}
       <div className="m-3 flex-1 flex flex-col bg-white rounded-3xl shadow-[var(--shadow-md)] border border-[var(--border-light)] overflow-hidden">
 
         {/* Logo */}
         <div className={cn('flex items-center h-16 px-4 border-b border-[var(--border-light)]', collapsed ? 'justify-center' : 'justify-between')}>
-          {!collapsed && (
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-2xl luxury-gradient flex items-center justify-center shadow-md shadow-pink-200">
-                <span className="text-white text-base font-bold">W</span>
+            {!collapsed && (
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl overflow-hidden shadow-md shadow-pink-200">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/icon.svg" alt="" className="w-full h-full" />
+                </div>
+                <div>
+                  <p className="font-bold text-[var(--text-primary)] text-sm leading-tight">
+                    ระบบจัดการร้าน
+                  </p>
+                  <p className="text-[var(--text-light)] text-[10px]">Wig & Hair ERP</p>
+                </div>
               </div>
-              <div>
-                <p className="font-bold text-[var(--text-primary)] text-sm leading-tight">
-                  Wig<span className="text-[var(--pink-500)]">Pro</span>
-                </p>
-                <p className="text-[var(--text-light)] text-[10px]">ERP System</p>
+            )}
+            {collapsed && (
+              <div className="w-9 h-9 rounded-2xl overflow-hidden shadow-md shadow-pink-200">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/icon.svg" alt="" className="w-full h-full" />
               </div>
-            </div>
-          )}
-          {collapsed && (
-            <div className="w-9 h-9 rounded-2xl luxury-gradient flex items-center justify-center shadow-md shadow-pink-200">
-              <span className="text-white text-base font-bold">W</span>
-            </div>
-          )}
+            )}
           <button
             onClick={onToggle}
             className="w-7 h-7 rounded-xl bg-[var(--bg-subtle)] hover:bg-[var(--pink-100)] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--pink-500)] transition-all shrink-0"
@@ -187,7 +192,20 @@ export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; o
               <Building2 className="w-3.5 h-3.5 text-[var(--pink-400)] shrink-0" />
               <div className="min-w-0">
                 <p className="text-[9px] text-[var(--text-light)] uppercase tracking-widest">สาขา</p>
-                <p className="text-[var(--text-secondary)] text-xs font-semibold truncate">{currentBranch.name}</p>
+                {canSwitchBranch && branches.length > 1 ? (
+                  <select
+                    value={currentBranch.id}
+                    onChange={e => switchBranch(e.target.value)}
+                    className="w-full min-w-0 bg-transparent text-[var(--text-secondary)] text-xs font-semibold focus:outline-none cursor-pointer"
+                    title="เลือกสาขาที่ต้องการดู"
+                  >
+                    {branches.map(branch => (
+                      <option key={branch.id} value={branch.id}>{branch.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="text-[var(--text-secondary)] text-xs font-semibold truncate">{currentBranch.name}</p>
+                )}
               </div>
             </div>
           </div>
@@ -219,6 +237,15 @@ export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; o
                   <p className="text-[var(--text-secondary)] text-xs font-semibold truncate">{user?.displayName}</p>
                   <p className="text-[var(--text-light)] text-[10px] capitalize">{user?.role?.replace('_', ' ')}</p>
                 </div>
+                {canOpenSettings && (
+                  <Link
+                    href="/settings"
+                    title="ตั้งค่า"
+                    className="w-7 h-7 rounded-xl hover:bg-[var(--pink-50)] flex items-center justify-center text-[var(--text-light)] hover:text-[var(--pink-500)] transition-all"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                  </Link>
+                )}
                 <button
                   onClick={logout}
                   title="ออกจากระบบ"
