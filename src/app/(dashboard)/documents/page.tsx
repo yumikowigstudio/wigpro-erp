@@ -389,40 +389,67 @@ export default function DocumentsPage() {
     const shopName = receiptInfo?.nameTh || ''
     const branchName = receiptInfo?.branchName || sale.branchName || ''
     const branchCode = receiptInfo?.branchCode || sale.branchCode || ''
+    const saleDate = sale.createdAt instanceof Date ? sale.createdAt : new Date(sale.createdAt)
+    const receiptTitle = showVat ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี' : 'ใบเสร็จรับเงิน'
+    const paymentMethod = paymentLabels[sale.payments?.[0]?.method ?? 'cash'] ?? sale.payments?.[0]?.method ?? '-'
+    const depositDeducted = sale.depositDeducted ?? 0
+    const amountDue = Math.max((sale.totalAmount ?? 0) - depositDeducted, 0)
+    const paidAmount = sale.paidAmount ?? sale.payments?.[0]?.amount ?? amountDue
+    const changeAmount = sale.changeAmount ?? 0
+    const footerText = receiptInfo?.receiptFooter || 'ขอบคุณที่ใช้บริการ'
     win.document.write(`<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"/>
       <title>ใบเสร็จ ${sale.receiptNo}</title>
       <style>
-        body{font-family:'Sarabun','Noto Sans Thai',sans-serif;color:#321333;padding:18px;max-width:360px;margin:auto;font-size:13px}
-        h1{text-align:center;font-size:18px;margin:0 0 8px}.shop{text-align:center;margin-bottom:10px}.shop-name{font-weight:700;font-size:16px}.shop-sub{font-size:11px;color:#777;white-space:pre-line}.logo{height:44px;max-width:120px;object-fit:contain;margin:0 auto 6px;display:block}
-        .muted{color:#777}.row{display:flex;justify-content:space-between;margin:4px 0}.total{font-weight:700;font-size:16px;border-top:1px dashed #aaa;padding-top:8px;margin-top:8px}
-        table{width:100%;border-collapse:collapse;margin-top:12px}td,th{border-bottom:1px solid #eee;padding:6px 2px;text-align:left}.right{text-align:right}.center{text-align:center}
-        .cancel{color:#b91c1c;text-align:center;font-weight:700;margin:8px 0}
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:'Sarabun','Noto Sans Thai','Tahoma',sans-serif;color:#181018;padding:16px;max-width:320px;margin:auto;font-size:12px;line-height:1.35}
+        .shop{text-align:center;padding-bottom:8px;border-bottom:1px dashed #9b8c9b}
+        .shop-name{font-weight:800;font-size:18px;color:#181018}.shop-sub{font-size:10.5px;color:#4f4350;white-space:pre-line}.logo{height:40px;max-width:92px;object-fit:contain;margin:0 auto 5px;display:block}
+        h1{text-align:center;font-size:13px;font-weight:800;margin:8px 0 0;padding:4px 8px;border-top:1px solid #181018;border-bottom:1px solid #181018;color:#181018}
+        .meta-box{border:1px solid #181018;border-radius:2px;margin:9px 0 10px;padding:6px 8px}
+        .muted{color:#4f4350}.row{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:1px 0}.right{text-align:right}.center{text-align:center}
+        .total{font-weight:900;font-size:16px;border-top:1px solid #181018;padding-top:7px;margin-top:5px;color:#181018}
+        table{width:100%;border-collapse:collapse;margin-top:8px}th{border-bottom:1px solid #181018;padding:0 2px 4px;text-align:left;font-size:10.5px;color:#4f4350}td{border-bottom:1px solid #eee;padding:5px 2px;text-align:left;vertical-align:top;font-size:11.5px}
+        .cancel{color:#b91c1c;text-align:center;font-weight:800;margin:8px 0;border:1px solid #b91c1c;padding:4px}
         .line-note{font-size:10px;color:#7c4a7c;margin-top:2px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+        .summary-box{border-top:1px dashed #9b8c9b;border-bottom:1px dashed #9b8c9b;margin-top:8px;padding:7px 0}
+        .note-box{border:1px solid #181018;border-radius:2px;margin-top:10px;padding:7px 8px;font-size:10.5px;color:#181018;text-align:left;white-space:pre-wrap}
+        .signature{margin-top:22px;text-align:center;font-size:10.5px;color:#181018}.signature-line{border-top:1px solid #181018;width:150px;margin:0 auto 4px}
+        @media print{@page{margin:5mm 8mm}body{padding:0}}
       </style></head><body>
       ${receiptInfo ? `<div class="shop">
         ${receiptInfo.logoUrl ? `<img class="logo" src="${receiptInfo.logoUrl}" alt="logo"/>` : ''}
-        ${shopName ? `<div class="shop-name">${shopName}</div>` : ''}
-        ${branchName ? `<div class="shop-sub">สาขา ${branchName}${branchCode ? ` (${branchCode})` : ''}</div>` : ''}
-        ${receiptInfo.address ? `<div class="shop-sub">${receiptInfo.address}</div>` : ''}
-        ${receiptInfo.phone ? `<div class="shop-sub">โทร. ${receiptInfo.phone}</div>` : ''}
-        ${receiptInfo.email ? `<div class="shop-sub">${receiptInfo.email}</div>` : ''}
-        ${receiptInfo.taxId ? `<div class="shop-sub">เลขผู้เสียภาษี ${receiptInfo.taxId}</div>` : ''}
+        ${shopName ? `<div class="shop-name">${escapeHtml(shopName)}</div>` : ''}
+        ${branchName ? `<div class="shop-sub">สาขา ${escapeHtml(branchName)}${branchCode ? ` (${escapeHtml(branchCode)})` : ''}</div>` : ''}
+        ${receiptInfo.address ? `<div class="shop-sub">${escapeHtml(receiptInfo.address)}</div>` : ''}
+        ${receiptInfo.phone ? `<div class="shop-sub">โทร. ${escapeHtml(receiptInfo.phone)}</div>` : ''}
+        ${receiptInfo.email ? `<div class="shop-sub">${escapeHtml(receiptInfo.email)}</div>` : ''}
+        ${receiptInfo.taxId ? `<div class="shop-sub">เลขผู้เสียภาษี ${escapeHtml(receiptInfo.taxId)}</div>` : ''}
       </div>` : ''}
-      <h1>ใบเสร็จรับเงิน</h1>
+      <h1>${receiptTitle}</h1>
       ${sale.status === 'cancelled' ? '<div class="cancel">บิลถูกยกเลิก</div>' : ''}
       ${!receiptInfo && branchName ? `<div class="row"><span class="muted">สาขา</span><span>${branchName}${branchCode ? ` (${branchCode})` : ''}</span></div>` : ''}
-      <div class="row"><span class="muted">เลขที่</span><strong>${sale.receiptNo}</strong></div>
-      <div class="row"><span class="muted">วันที่</span><span>${formatDate(sale.createdAt)}</span></div>
-      <div class="row"><span class="muted">ลูกค้า</span><span>${sale.customerName ?? 'ลูกค้าทั่วไป'}</span></div>
+      <div class="meta-box">
+        <div class="row"><span class="muted">เลขที่ใบเสร็จ</span><strong>${escapeHtml(sale.receiptNo)}</strong></div>
+        <div class="row"><span class="muted">วันที่</span><span>${saleDate.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</span></div>
+        <div class="row"><span class="muted">เวลา</span><span>${saleDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</span></div>
+        <div class="row"><span class="muted">ลูกค้า</span><span>${escapeHtml(sale.customerName ?? 'ลูกค้าทั่วไป')}</span></div>
+        <div class="row"><span class="muted">การชำระ</span><strong>${escapeHtml(paymentMethod)}</strong></div>
+      </div>
       <table><thead><tr><th>รายการ</th><th>จำนวน</th><th class="right">ราคา</th><th class="right">รวม</th></tr></thead><tbody>${rows}</tbody></table>
-      <div class="row"><span class="muted">ก่อนส่วนลด</span><span>${formatCurrency(sale.subtotal)}</span></div>
-      <div class="row"><span class="muted">ส่วนลด</span><span>${formatCurrency(sale.discountAmount)}</span></div>
-      ${showVat ? `
-        <div class="row"><span class="muted">มูลค่าก่อน VAT</span><span>${formatCurrency(preVatAmount)}</span></div>
-        <div class="row"><span class="muted">VAT 7% (รวมอยู่ในราคา)</span><span>${formatCurrency(sale.taxAmount)}</span></div>
-      ` : ''}
-      <div class="row total"><span>ยอดสุทธิ</span><span>${formatCurrency(sale.totalAmount)}</span></div>
-      ${receiptInfo?.receiptFooter ? `<div class="shop-sub" style="text-align:center;margin-top:12px">${receiptInfo.receiptFooter}</div>` : ''}
+      <div class="summary-box">
+        <div class="row"><span class="muted">ก่อนส่วนลด</span><span>${formatCurrency(sale.subtotal)}</span></div>
+        ${sale.discountAmount > 0 ? `<div class="row"><span class="muted">ส่วนลด</span><span>-${formatCurrency(sale.discountAmount)}</span></div>` : ''}
+        ${showVat ? `
+          <div class="row"><span class="muted">มูลค่าก่อน VAT</span><span>${formatCurrency(preVatAmount)}</span></div>
+          <div class="row"><span class="muted">VAT 7% (รวมอยู่ในราคา)</span><span>${formatCurrency(sale.taxAmount)}</span></div>
+        ` : ''}
+        ${depositDeducted > 0 ? `<div class="row"><span class="muted">หักมัดจำเดิม</span><span>-${formatCurrency(depositDeducted)}</span></div>` : ''}
+        <div class="row total"><span>ยอดสุทธิ</span><span>${formatCurrency(amountDue)}</span></div>
+        <div class="row"><span class="muted">รับเงิน</span><span>${formatCurrency(paidAmount)}</span></div>
+        ${(sale.payments?.[0]?.method ?? '') === 'cash' ? `<div class="row"><span class="muted">เงินทอน</span><span>${formatCurrency(changeAmount)}</span></div>` : ''}
+      </div>
+      <div class="note-box">${escapeHtml(footerText)}</div>
+      <div class="signature"><div class="signature-line"></div><div>ผู้รับเงิน / Receiver</div></div>
       <script>window.onload=()=>window.print()</script>
       </body></html>`)
     win.document.close()

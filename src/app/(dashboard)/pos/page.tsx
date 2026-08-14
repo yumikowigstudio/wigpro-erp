@@ -1743,7 +1743,12 @@ function PaymentConfirmModal({
 function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: ShopInfo; onClose: () => void }) {
   const isDeposit = receipt.mode === 'deposit'
   const receiptShop = receipt.shopInfo ?? shop
-  const footerText = receiptShop.receiptFooter || (isDeposit ? '📌 กรุณาเก็บใบนี้ไว้เป็นหลักฐาน' : 'ขอบคุณที่ใช้บริการ 💗')
+  const receiptTitle = isDeposit
+    ? 'ใบรับมัดจำ'
+    : receipt.showVatOnReceipt
+      ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี'
+      : 'ใบเสร็จรับเงิน'
+  const footerText = receiptShop.receiptFooter || (isDeposit ? 'กรุณาเก็บใบนี้ไว้เป็นหลักฐาน' : 'ขอบคุณที่ใช้บริการ')
   const nextActions = [
     { href: '/pos', label: 'ขาย/รับมัดจำต่อ', icon: ShoppingCart, show: true },
     { href: receipt.customerId ? `/customers/${receipt.customerId}?tab=timeline` : '', label: 'ดูประวัติลูกค้า', icon: UserRound, show: Boolean(receipt.customerId) },
@@ -1762,28 +1767,35 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
       <title>${isDeposit ? 'ใบมัดจำ' : 'ใบเสร็จ'} ${receipt.receiptNo}</title>
       <style>
         *{box-sizing:border-box;margin:0;padding:0}
-        body{font-family:'Sarabun','Noto Sans Thai',sans-serif;font-size:13px;color:#3a1a3a;padding:20px;max-width:300px;margin:0 auto}
+        body{font-family:'Sarabun','Noto Sans Thai','Tahoma',sans-serif;font-size:12px;color:#181018;padding:16px;max-width:320px;margin:0 auto;line-height:1.35}
         .center{text-align:center}
-        .logo{display:block;margin:0 auto 6px;height:48px;object-fit:contain}
-        .shop-name{font-size:20px;font-weight:700}
-        .sub{font-size:11px;color:#888;margin-bottom:2px;white-space:pre-line}
-        .doc-type{display:inline-block;margin:6px 0;padding:3px 12px;border-radius:99px;font-size:11px;font-weight:700;${isDeposit ? 'background:#fff3cd;color:#856404;border:1px solid #ffc107' : 'background:#fce4ee;color:#cc2d65;border:1px solid #f9c8dd'}}
-        .divider{border:none;border-top:1px dashed #ccc;margin:10px 0}
-        .row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0}
-        .label{color:#888}
-        .item-row{display:flex;font-size:12px;padding:4px 0;border-bottom:1px solid #f0e8f0}
+        .receipt-paper{width:100%}
+        .receipt-head{padding-bottom:8px;border-bottom:1px dashed #9b8c9b}
+        .logo{display:block;margin:0 auto 5px;height:40px;max-width:92px;object-fit:contain}
+        .shop-name{font-size:18px;font-weight:800;letter-spacing:0;color:#181018}
+        .sub{font-size:10.5px;color:#4f4350;margin-bottom:1px;white-space:pre-line}
+        .doc-type{display:block;margin:8px auto 0;padding:4px 8px;border-top:1px solid #181018;border-bottom:1px solid #181018;font-size:13px;font-weight:800;color:#181018;text-align:center}
+        .meta-box{border:1px solid #181018;border-radius:2px;margin:9px 0 10px;padding:6px 8px}
+        .row{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:1px 0}
+        .label{color:#4f4350}
+        .table-head{display:flex;font-size:10.5px;color:#4f4350;font-weight:700;border-bottom:1px solid #181018;padding:0 0 4px;margin-bottom:2px}
+        .item-row{display:flex;font-size:11.5px;padding:5px 0;border-bottom:1px solid #eee}
         .item-name{flex:1;min-width:0;overflow:visible;white-space:normal;padding-right:6px}
         .item-name p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important}
-                .item-qty{width:30px;text-align:center;color:#555}
-                .item-price{width:60px;text-align:right;color:#555}
-                .item-total{width:65px;text-align:right;font-weight:600}
-        .item-note{font-size:10px;color:#7c4a7c;margin-top:2px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
-        .tax-note{font-size:10px;color:#777;margin-top:1px;white-space:normal}
-        .total-row{display:flex;justify-content:space-between;font-size:14px;font-weight:700;padding:6px 0;border-top:1px solid #ccc;margin-top:4px}
-        .deposit-row{display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:4px 0;color:#856404}
-        .remain-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;color:#dc3545;font-weight:600}
-        .change-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;color:#16803d;font-weight:600}
-        .footer{text-align:center;margin-top:12px;font-size:11px;color:#aaa}
+        .item-qty{width:28px;text-align:center;color:#333}
+        .item-price{width:62px;text-align:right;color:#333}
+        .item-total{width:64px;text-align:right;font-weight:700;color:#181018}
+        .item-note{font-size:10px;color:#4f4350;margin-top:2px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+        .tax-note{font-size:10px;color:#555;margin-top:1px;white-space:normal}
+        .summary-box{border-top:1px dashed #9b8c9b;border-bottom:1px dashed #9b8c9b;margin-top:8px;padding:7px 0}
+        .total-row{display:flex;justify-content:space-between;font-size:16px;font-weight:900;padding:7px 0;border-top:1px solid #181018;margin-top:5px}
+        .deposit-row{display:flex;justify-content:space-between;font-size:12px;font-weight:800;padding:3px 0;color:#181018}
+        .remain-row{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;color:#181018;font-weight:800}
+        .change-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;color:#181018;font-weight:700}
+        .note-box{border:1px solid #181018;border-radius:2px;margin-top:10px;padding:7px 8px;font-size:10.5px;color:#181018;text-align:left;white-space:pre-wrap}
+        .signature{margin-top:22px;text-align:center;font-size:10.5px;color:#181018}
+        .signature-line{border-top:1px solid #181018;width:150px;margin:0 auto 4px}
+        .footer{text-align:center;margin-top:10px;font-size:10.5px;color:#555}
         @media print{@page{margin:5mm 8mm}body{padding:0}}
       </style>
     </head><body>${el.innerHTML}
@@ -1804,26 +1816,24 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
         </div>
 
         <div className="overflow-y-auto flex-1 px-5 py-4">
-          <div id="receipt-content" className="font-['Sarabun'] text-[var(--text-primary)]">
-            <div className="center text-center mb-4 pb-3 border-b border-dashed border-gray-300">
+          <div id="receipt-content" className="receipt-paper font-['Sarabun'] text-[var(--text-primary)]">
+            <div className="receipt-head center text-center mb-3 pb-3 border-b border-dashed border-gray-300">
               {receiptShop.logoUrl && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={receiptShop.logoUrl} alt="logo" className="logo mx-auto mb-2 h-12 object-contain" />
+                <img src={receiptShop.logoUrl} alt="logo" className="logo mx-auto mb-2 h-10 max-w-[92px] object-contain" />
               )}
-              <p className="shop-name text-lg font-bold">{receiptShop.nameTh}</p>
+              <p className="shop-name text-lg font-black tracking-normal">{receiptShop.nameTh}</p>
               {receipt.branchName && <p className="sub text-xs text-[var(--text-muted)]">สาขา {receipt.branchName}{receipt.branchCode ? ` (${receipt.branchCode})` : ''}</p>}
               {receiptShop.address && <p className="sub text-xs text-[var(--text-muted)] whitespace-pre-line">{receiptShop.address}</p>}
               {receiptShop.phone && <p className="sub text-xs text-[var(--text-muted)]">โทร. {receiptShop.phone}</p>}
               {receiptShop.email && <p className="sub text-xs text-[var(--text-muted)]">{receiptShop.email}</p>}
               {receiptShop.taxId && <p className="sub text-xs text-[var(--text-muted)]">เลขผู้เสียภาษี {receiptShop.taxId}</p>}
-              {isDeposit && (
-                <span className="doc-type inline-block mt-2 px-3 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700 border border-amber-200">
-                  💰 ใบรับมัดจำ
-                </span>
-              )}
+              <span className="doc-type block mt-2 border-y border-gray-900 py-1 text-sm font-black text-gray-950">
+                {receiptTitle}
+              </span>
             </div>
 
-            <div className="mb-3 space-y-0.5">
+            <div className="meta-box mb-3 rounded-lg border border-gray-900/80 px-3 py-2 space-y-0.5">
               {[
                 [isDeposit ? 'เลขที่ใบมัดจำ' : 'เลขที่ใบเสร็จ', receipt.receiptNo],
                 ['วันที่', receipt.date.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })],
@@ -1833,13 +1843,13 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
               ].map(([k, v]) => (
                 <div key={k} className="row flex justify-between text-xs">
                   <span className="label text-[var(--text-muted)]">{k}</span>
-                  <span className="font-medium">{v}</span>
+                  <span className="font-bold text-right">{v}</span>
                 </div>
               ))}
             </div>
 
-            <div className="border-t border-dashed border-gray-300 pt-3">
-              <div className="flex text-[10px] text-[var(--text-muted)] mb-1 px-0.5">
+            <div>
+              <div className="table-head flex text-[10px] text-[var(--text-muted)] font-bold mb-1 px-0.5 border-b border-gray-900 pb-1">
                 <span className="flex-1">รายการ</span>
                 <span className="w-8 text-center">จำนวน</span>
                 <span className="w-16 text-right">ราคา</span>
@@ -1860,7 +1870,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
               ))}
             </div>
 
-            <div className="space-y-1.5 text-xs border-t border-dashed border-gray-300 pt-3 mt-3">
+            <div className="summary-box space-y-1.5 text-xs border-y border-dashed border-gray-300 py-2 mt-3">
               <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">ก่อนส่วนลด</span><span>{formatCurrency(receipt.subtotal)}</span></div>
               {receipt.discountAmt > 0 && <div className="row flex justify-between text-emerald-600"><span>ส่วนลด</span><span>-{formatCurrency(receipt.discountAmt)}</span></div>}
               {receipt.showVatOnReceipt && (
@@ -1869,8 +1879,11 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                   <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">VAT 7% (รวมอยู่ในราคา)</span><span>{formatCurrency(receipt.vatAmt)}</span></div>
                 </>
               )}
+              {!isDeposit && receipt.depositAmt > 0 && (
+                <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">หักมัดจำเดิม</span><span>-{formatCurrency(receipt.depositAmt)}</span></div>
+              )}
               <div className="total-row flex justify-between font-bold text-base pt-2 border-t border-gray-300 mt-1">
-                <span>ยอดรวม</span><span className="text-[var(--pink-600)]">{formatCurrency(receipt.total)}</span>
+                <span>ยอดสุทธิ</span><span className="text-[var(--pink-600)]">{formatCurrency(isDeposit ? receipt.total : receipt.remaining)}</span>
               </div>
 
               {isDeposit && (
@@ -1879,7 +1892,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                     <span>ยอดเต็ม</span><span className="font-semibold">{formatCurrency(receipt.total)}</span>
                   </div>
                   <div className="deposit-row flex justify-between font-bold text-amber-700">
-                    <span>💰 มัดจำ</span><span>{formatCurrency(receipt.depositAmt)}</span>
+                    <span>รับมัดจำ</span><span>{formatCurrency(receipt.depositAmt)}</span>
                   </div>
                   <div className="remain-row flex justify-between font-bold text-red-500 pb-1 border-b border-dashed border-amber-200">
                     <span>ยอดคงเหลือ</span><span>{formatCurrency(receipt.remaining)}</span>
@@ -1887,33 +1900,36 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                 </div>
               )}
 
+              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รับเงิน</span><span>{formatCurrency(receipt.paidAmount)}</span></div>
               {receipt.payMethod === 'cash' && (
-                <>
-                  <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รับเงิน</span><span>{formatCurrency(receipt.paidAmount)}</span></div>
-                  <div className="change-row flex justify-between font-semibold text-emerald-600"><span>เงินทอน</span><span>{formatCurrency(receipt.change)}</span></div>
-                </>
+                <div className="change-row flex justify-between font-semibold text-emerald-600"><span>เงินทอน</span><span>{formatCurrency(receipt.change)}</span></div>
               )}
             </div>
 
             {/* วันนัดรับ + หมายเหตุ */}
             {isDeposit && (receipt.pickupDate || receipt.depositNote) && (
-              <div className="mt-3 p-3 rounded-xl border border-dashed border-amber-300 bg-amber-50 space-y-1.5 text-xs">
+              <div className="note-box mt-3 p-3 rounded-lg border border-gray-900/80 bg-white space-y-1.5 text-xs">
                 {receipt.pickupDate && (
-                  <p className="font-bold text-amber-800">
-                    📅 นัดรับวิก: {new Date(receipt.pickupDate).toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })}
+                  <p className="font-bold text-gray-950">
+                    นัดรับวิก: {new Date(receipt.pickupDate).toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })}
                   </p>
                 )}
                 {receipt.depositNote && (
-                  <p className="text-amber-700">📝 {receipt.depositNote}</p>
+                  <p className="text-gray-800">หมายเหตุ: {receipt.depositNote}</p>
                 )}
               </div>
             )}
 
-            <div className="text-center pt-4 mt-3 border-t border-dashed border-gray-300">
-              <p className="text-xs text-[var(--text-muted)]">{footerText}</p>
+            <div className="note-box mt-3 rounded-lg border border-gray-900/80 p-2 text-xs text-gray-800">
+              {footerText}
               {isDeposit && receipt.remaining > 0 && (
-                <p className="text-[10px] text-amber-600 mt-1 font-medium">ยอดคงเหลือ {formatCurrency(receipt.remaining)} ชำระเมื่อรับวิก</p>
+                <p className="mt-1 font-semibold">ยอดคงเหลือ {formatCurrency(receipt.remaining)} ชำระเมื่อรับวิก</p>
               )}
+            </div>
+
+            <div className="signature mt-8 text-center text-[11px] text-gray-900">
+              <div className="signature-line mx-auto mb-1 w-40 border-t border-gray-900" />
+              <p>ผู้รับเงิน / Receiver</p>
             </div>
           </div>
 
