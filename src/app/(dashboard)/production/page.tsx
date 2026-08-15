@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import {
   Plus, Search, Clock, AlertTriangle, Factory, Package,
-  Loader2, X, ChevronRight, Edit2, Check, Building2,
+  Loader2, X, Edit2, Check, Building2,
   ImagePlus, ZoomIn, Trash2, ChevronDown,
 } from 'lucide-react'
 import { collection, onSnapshot, query, where, doc, updateDoc, serverTimestamp, arrayUnion, arrayRemove } from 'firebase/firestore'
@@ -12,20 +12,25 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, generateWigOrderNo, convertTimestamps } from '@/lib/firestore'
 import { WorkOrder } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
+import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
 
-type ProdStatus = 'waiting' | 'in_production' | 'qc' | 'ready_to_ship' | 'shipped' | 'at_branch' | 'ready_to_pickup' | 'delivered'
+type ProdStatus = 'waiting' | 'in_production' | 'qc' | 'ready_to_ship' | 'shipped' | 'at_branch' | 'ready_to_pickup' | 'delivered' | 'cancelled'
 
-const statusCfg: Record<ProdStatus, { label: string; color: string; next?: ProdStatus }> = {
-  waiting:         { label: 'รอผลิต',      color: 'bg-gray-100 text-gray-700',       next: 'in_production'  },
-  in_production:   { label: 'กำลังผลิต',  color: 'bg-purple-100 text-purple-700',   next: 'qc'             },
-  qc:              { label: 'QC',          color: 'bg-blue-100 text-blue-700',        next: 'ready_to_ship'  },
-  ready_to_ship:   { label: 'พร้อมส่ง',   color: 'bg-emerald-100 text-emerald-700',  next: 'shipped'        },
-  shipped:         { label: 'ส่งแล้ว',    color: 'bg-amber-100 text-amber-700',     next: 'at_branch'      },
-  at_branch:       { label: 'ถึงสาขา',    color: 'bg-teal-100 text-teal-700',       next: 'ready_to_pickup' },
-  ready_to_pickup: { label: 'พร้อมรับ',   color: 'bg-green-100 text-green-700',     next: 'delivered'      },
-  delivered:       { label: 'ส่งมอบแล้ว', color: 'bg-gray-100 text-gray-500'                               },
+const statusCfg: Record<ProdStatus, { label: string; color: string }> = {
+  waiting:         { label: 'รอผลิต',      color: 'bg-gray-100 text-gray-700'      },
+  in_production:   { label: 'กำลังผลิต',  color: 'bg-purple-100 text-purple-700'  },
+  qc:              { label: 'QC',          color: 'bg-blue-100 text-blue-700'      },
+  ready_to_ship:   { label: 'พร้อมส่ง',   color: 'bg-emerald-100 text-emerald-700' },
+  shipped:         { label: 'ส่งแล้ว',    color: 'bg-amber-100 text-amber-700'    },
+  at_branch:       { label: 'ถึงสาขา',    color: 'bg-teal-100 text-teal-700'      },
+  ready_to_pickup: { label: 'พร้อมรับ',   color: 'bg-green-100 text-green-700'    },
+  delivered:       { label: 'ส่งมอบแล้ว', color: 'bg-gray-100 text-gray-500'      },
+  cancelled:       { label: 'ยกเลิก',      color: 'bg-red-100 text-red-700'        },
 }
+
+const statusFlow = Object.keys(statusCfg) as ProdStatus[]
+const editableStatusFlow = statusFlow.filter(status => status !== 'cancelled')
 
 const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
 
@@ -90,13 +95,16 @@ function InlineEdit({
 }
 
 export default function ProductionPage() {
-  const { companyId, branchId, userId, currentBranch } = useAuth()
+  const { companyId, branchId, userId, userName, currentBranch } = useAuth()
+  const { ensurePermission } = usePermissionAction()
   const [orders, setOrders]             = useState<WorkOrder[]>([])
   const [loading, setLoading]           = useState(true)
   const [search, setSearch]             = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [showModal, setShowModal]       = useState(false)
   const [saving, setSaving]             = useState(false)
+  const [message, setMessage]           = useState('')
+  const [statusDrafts, setStatusDrafts] = useState<Record<string, ProdStatus>>({})
   const [selectedCustomerId, setSelectedCustomerId] = useState('')
   /* Progress images */
   const [expandedId, setExpandedId]   = useState<string | null>(null)
@@ -128,17 +136,75 @@ export default function ProductionPage() {
       && (!filterStatus || o.status === filterStatus)
   })
 
-  const advance = async (id: string, next: ProdStatus) => {
-    const order = orders.find(o => o.id === id)
+  const updateStatus = async (order: WorkOrder, next: ProdStatus) => {
+    if (order.status === next) return
+    if (order.status === 'cancelled') {
+      setMessage('งานผลิตนี้ถูกยกเลิกแล้ว')
+      return
+    }
+    if (next === 'cancelled') {
+      await cancelWorkOrder(order)
+      return
+    }
+    if (next === 'shipped' && !order.manufacturer && !confirm('ยังไม่ได้ระบุโรงงาน/ผู้ผลิต ต้องการบันทึกเป็นส่งแล้วต่อหรือไม่?')) return
+    if (next === 'ready_to_pickup' && (order.completedImages?.length ?? 0) === 0 && !confirm('ยังไม่มีรูปงานเสร็จ/QC ต้องการบันทึกเป็นพร้อมรับต่อหรือไม่?')) return
+    if (next === 'delivered' && (order.remainingAmount ?? 0) > 0 && !confirm(`ยังมียอดค้าง ${formatCurrency(order.remainingAmount ?? 0)} ต้องการบันทึกเป็นส่งมอบแล้วต่อหรือไม่?`)) return
+    if (!confirm(`ยืนยันเปลี่ยนสถานะ ${order.orderNo} เป็น "${statusCfg[next].label}"?`)) return
+    setSaving(true)
+    setMessage('')
+    try {
+      const extra: Record<string, unknown> = {}
+      if (next === 'shipped')         extra.shippedDate              = serverTimestamp()
+      if (next === 'at_branch')       extra.receivedAtBranchDate     = serverTimestamp()
+      if (next === 'delivered')       extra.deliveredDate            = serverTimestamp()
+      await updateDoc(doc(db, COLLECTIONS.WORK_ORDERS, order.id), { status: next, ...extra, updatedAt: serverTimestamp() })
+      setStatusDrafts(prev => {
+        const nextDrafts = { ...prev }
+        delete nextDrafts[order.id]
+        return nextDrafts
+      })
+      setMessage(`เปลี่ยนสถานะ ${order.orderNo} เป็น ${statusCfg[next].label} แล้ว`)
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'เปลี่ยนสถานะงานผลิตไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const cancelWorkOrder = async (order: WorkOrder) => {
     if (!order) return
-    if (next === 'shipped' && !order.manufacturer && !confirm('ยังไม่ได้ระบุโรงงาน/ผู้ผลิต ต้องการเปลี่ยนเป็นส่งแล้วต่อหรือไม่?')) return
-    if (next === 'ready_to_pickup' && (order.completedImages?.length ?? 0) === 0 && !confirm('ยังไม่มีรูปงานเสร็จ/QC ต้องการเปลี่ยนเป็นพร้อมรับต่อหรือไม่?')) return
-    if (next === 'delivered' && (order.remainingAmount ?? 0) > 0 && !confirm(`ยังมียอดค้าง ${formatCurrency(order.remainingAmount ?? 0)} ต้องการส่งมอบต่อหรือไม่?`)) return
-    const extra: Record<string, unknown> = {}
-    if (next === 'shipped')         extra.shippedDate              = serverTimestamp()
-    if (next === 'at_branch')       extra.receivedAtBranchDate     = serverTimestamp()
-    if (next === 'delivered')       extra.deliveredDate            = serverTimestamp()
-    await updateDoc(doc(db, COLLECTIONS.WORK_ORDERS, id), { status: next, ...extra, updatedAt: serverTimestamp() })
+    if (order.status === 'cancelled') {
+      setMessage('งานผลิตนี้ถูกยกเลิกแล้ว')
+      return
+    }
+    const reason = window.prompt(`ระบุเหตุผลการยกเลิกงานผลิต ${order.orderNo}`)?.trim()
+    if (!reason) {
+      setMessage('กรุณาระบุเหตุผลการยกเลิกงานผลิต')
+      return
+    }
+    if (!await ensurePermission('action.sales.cancelBill', 'ยกเลิกงานผลิต')) return
+    setSaving(true)
+    setMessage('')
+    try {
+      await updateDoc(doc(db, COLLECTIONS.WORK_ORDERS, order.id), {
+        status: 'cancelled',
+        cancelReason: reason,
+        cancelledBy: userId,
+        cancelledByName: userName || null,
+        cancelledAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      setStatusDrafts(prev => {
+        const nextDrafts = { ...prev }
+        delete nextDrafts[order.id]
+        return nextDrafts
+      })
+      setMessage(`ยกเลิกงานผลิต ${order.orderNo} แล้ว`)
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'ยกเลิกงานผลิตไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const saveField = async (id: string, field: string, value: string) => {
@@ -207,8 +273,9 @@ export default function ProductionPage() {
     finally { setSaving(false) }
   }
 
-  const activeCount  = orders.filter(o => !['delivered','cancelled'].includes(o.status ?? '')).length
-  const overdueCount = orders.filter(o => o.expectedDate && new Date(o.expectedDate) < new Date() && o.status !== 'delivered').length
+  const inactiveStatuses = ['delivered', 'cancelled']
+  const activeCount  = orders.filter(o => !inactiveStatuses.includes(o.status ?? '')).length
+  const overdueCount = orders.filter(o => o.expectedDate && new Date(o.expectedDate) < new Date() && !inactiveStatuses.includes(o.status ?? '')).length
   const readyCount   = orders.filter(o => o.status === 'ready_to_pickup').length
 
   return (
@@ -239,6 +306,12 @@ export default function ProductionPage() {
           </div>
         ))}
       </div>
+
+      {message && (
+        <div className="rounded-2xl border border-[var(--pink-200)] bg-[var(--pink-50)] px-4 py-3 text-sm font-medium text-[var(--pink-700)]">
+          {message}
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
@@ -301,15 +374,23 @@ export default function ProductionPage() {
       ) : (
         <div className="space-y-3">
           {filtered.map(order => {
-            const cfg       = statusCfg[order.status as ProdStatus]
-            const isOverdue = order.expectedDate && new Date(order.expectedDate) < new Date() && order.status !== 'delivered'
+            const currentStatus = (order.status as ProdStatus) || 'waiting'
+            const cfg = statusCfg[currentStatus] ?? statusCfg.waiting
+            const selectedStatus = statusDrafts[order.id] ?? currentStatus
+            const statusChanged = selectedStatus !== currentStatus
+            const isCancelled = currentStatus === 'cancelled'
+            const isOverdue = order.expectedDate && new Date(order.expectedDate) < new Date() && !inactiveStatuses.includes(currentStatus)
             const isExpanded = expandedId === order.id
             const progImgs   = order.progressImages ?? []
             const compImgs   = order.completedImages ?? []
             const totalImgs  = progImgs.length + compImgs.length
 
             return (
-              <div key={order.id} className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] hover:border-[var(--pink-200)] transition-all overflow-hidden">
+              <div key={order.id} className={`bg-white rounded-2xl border shadow-[var(--shadow-card)] transition-all overflow-hidden ${
+                isCancelled
+                  ? 'border-red-100 opacity-90'
+                  : 'border-[var(--border-light)] hover:border-[var(--pink-200)]'
+              }`}>
                 <div className="p-4">
                   <div className="flex items-start gap-4">
                     <div className="flex-1 min-w-0">
@@ -368,13 +449,6 @@ export default function ProductionPage() {
                     </div>
 
                     <div className="flex flex-col items-end gap-2 shrink-0">
-                      {/* Advance button */}
-                      {cfg?.next && (
-                        <button onClick={() => advance(order.id, cfg.next!)}
-                          className="flex items-center gap-1 px-3 py-1.5 bg-[var(--pink-50)] text-[var(--pink-600)] border border-[var(--pink-200)] rounded-xl text-xs font-semibold hover:bg-[var(--pink-100)] transition-all whitespace-nowrap">
-                          {statusCfg[cfg.next].label} <ChevronRight className="w-3 h-3" />
-                        </button>
-                      )}
                       {/* Toggle images */}
                       <button onClick={() => setExpandedId(isExpanded ? null : order.id)}
                         className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all
@@ -385,6 +459,93 @@ export default function ProductionPage() {
                       </button>
                     </div>
                   </div>
+
+                  {!isCancelled ? (
+                    <div className="mt-4 rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-3">
+                      <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-xs font-bold text-[var(--text-primary)]">เปลี่ยนสถานะงานผลิต</p>
+                        <p className="text-[11px] text-[var(--text-muted)]">
+                          เลือกสถานะบนแถบก่อน แล้วกดบันทึกเพื่อยืนยัน
+                        </p>
+                      </div>
+
+                      <div className="flex gap-1.5 overflow-x-auto pb-1">
+                        {editableStatusFlow.map((status, index) => {
+                          const active = selectedStatus === status
+                          const passed = editableStatusFlow.indexOf(currentStatus) >= index
+                          const itemCfg = statusCfg[status]
+
+                          return (
+                            <button
+                              key={status}
+                              type="button"
+                              onClick={() => setStatusDrafts(prev => ({ ...prev, [order.id]: status }))}
+                              className={`shrink-0 rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${
+                                active
+                                  ? 'border-[var(--pink-300)] bg-white text-[var(--pink-600)] shadow-sm'
+                                  : passed
+                                    ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
+                                    : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:text-[var(--pink-600)]'
+                              }`}
+                            >
+                              {index + 1}. {itemCfg.label}
+                            </button>
+                          )
+                        })}
+                      </div>
+
+                      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-[11px] text-[var(--text-muted)]">
+                          ปัจจุบัน: <span className="font-semibold text-[var(--text-primary)]">{cfg.label}</span>
+                          {statusChanged && (
+                            <span className="ml-2 font-semibold text-amber-600">
+                              เลือกไว้: {statusCfg[selectedStatus].label}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 sm:justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setStatusDrafts(prev => {
+                              const nextDrafts = { ...prev }
+                              delete nextDrafts[order.id]
+                              return nextDrafts
+                            })}
+                            disabled={!statusChanged || saving}
+                            className="rounded-xl border border-[var(--border-light)] bg-white px-3 py-2 text-xs font-semibold text-[var(--text-secondary)] disabled:opacity-40"
+                          >
+                            ย้อนกลับค่าเดิม
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => cancelWorkOrder(order)}
+                            disabled={saving}
+                            className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-100 disabled:opacity-40"
+                          >
+                            ยกเลิกงานผลิต
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateStatus(order, selectedStatus)}
+                            disabled={!statusChanged || saving}
+                            className="rounded-xl bg-[var(--pink-600)] px-4 py-2 text-xs font-bold text-white shadow-sm shadow-pink-100 disabled:opacity-40"
+                          >
+                            {saving && statusChanged ? 'กำลังบันทึก...' : 'บันทึกสถานะ'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-3 text-xs text-red-700">
+                      <p className="font-bold">งานผลิตนี้ถูกยกเลิกแล้ว</p>
+                      <p className="mt-1">เหตุผล: {order.cancelReason || '-'}</p>
+                      <p className="mt-1 text-red-600">
+                        ยกเลิกโดย {order.cancelledByName || order.cancelledBy || '-'}
+                        {order.cancelledAt ? ` · ${formatDate(order.cancelledAt)}` : ''}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* ─── Progress Images Section ─── */}

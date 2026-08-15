@@ -424,6 +424,7 @@ export type ProductionStatus =
   | 'at_branch'
   | 'ready_to_pickup'
   | 'delivered'
+  | 'cancelled'
 
 export interface WorkOrder {
   id: string
@@ -459,6 +460,10 @@ export interface WorkOrder {
   deliveredDate?: Date
   // Status
   status: ProductionStatus
+  cancelReason?: string
+  cancelledBy?: string
+  cancelledByName?: string
+  cancelledAt?: Date
   progressImages: string[]
   completedImages: string[]
   notes?: string
