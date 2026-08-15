@@ -24,10 +24,10 @@ const docTypeConfig = {
 }
 
 const paymentLabels: Record<PaymentMethod | string, string> = {
-  cash: 'เงินสด',
-  transfer: 'โอนเงิน',
+  cash: 'เงินสด / Cash',
+  transfer: 'โอนเงิน / Transfer',
   qr: 'QR Code',
-  credit_card: 'บัตรเครดิต',
+  credit_card: 'บัตรเครดิต / Credit Card',
 }
 
 const paymentStatusConfig: Record<PaymentStatus | 'unknown', { label: string; color: string }> = {
@@ -43,6 +43,9 @@ const saleStatusConfig: Record<SaleStatus, { label: string; color: string }> = {
   returned:  { label: 'คืนสินค้า', color: 'bg-blue-50 text-blue-700' },
   cancelled: { label: 'ยกเลิก', color: 'bg-red-50 text-red-700' },
 }
+
+const uniqReceiptTexts = (values: string[]) =>
+  Array.from(new Set(values.map(v => v.trim()).filter(Boolean)))
 
 const restorableSaleItems = (sale: Sale) =>
   (sale.items ?? [])
@@ -83,7 +86,7 @@ export default function DocumentsPage() {
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState('')
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null)
-  const [editForm, setEditForm] = useState({ customerName: '', notes: '' })
+  const [editForm, setEditForm] = useState({ customerName: '', customerPhone: '', receiptNote: '', notes: '' })
   const [cancelReason, setCancelReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -174,7 +177,12 @@ export default function DocumentsPage() {
 
   const openSale = (sale: Sale) => {
     setSelectedSale(sale)
-    setEditForm({ customerName: sale.customerName ?? '', notes: sale.notes ?? '' })
+    setEditForm({
+      customerName: sale.customerName ?? '',
+      customerPhone: sale.customerPhone ?? '',
+      receiptNote: sale.receiptNote ?? '',
+      notes: sale.notes ?? '',
+    })
     setCancelReason('')
     setMessage('')
   }
@@ -199,6 +207,8 @@ export default function DocumentsPage() {
     try {
       await updateDoc(doc(db, COLLECTIONS.SALES, activeSale.id), {
         customerName: editForm.customerName.trim() || 'ลูกค้าทั่วไป',
+        customerPhone: editForm.customerPhone.trim(),
+        receiptNote: editForm.receiptNote.trim(),
         notes: editForm.notes.trim(),
         updatedAt: serverTimestamp(),
       })
@@ -378,8 +388,8 @@ export default function DocumentsPage() {
       <tr>
         <td>
           <div>${escapeHtml(item.name)}</div>
-          ${showVat && item.taxType === 'non_vat' ? '<div class="line-note">ไม่นับ VAT</div>' : ''}
-          ${item.note ? `<div class="line-note">หมายเหตุ: ${escapeHtml(item.note)}</div>` : ''}
+          ${showVat && item.taxType === 'non_vat' ? '<div class="line-note">ไม่นับ VAT / Non-VAT</div>' : ''}
+          ${item.note ? `<div class="line-note">หมายเหตุ / Note: ${escapeHtml(item.note)}</div>` : ''}
         </td>
         <td class="center">${item.quantity}</td>
         <td class="right">${formatCurrency(item.unitPrice)}</td>
@@ -390,14 +400,14 @@ export default function DocumentsPage() {
     const branchName = receiptInfo?.branchName || sale.branchName || ''
     const branchCode = receiptInfo?.branchCode || sale.branchCode || ''
     const saleDate = sale.createdAt instanceof Date ? sale.createdAt : new Date(sale.createdAt)
-    const receiptTitle = showVat ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี' : 'ใบเสร็จรับเงิน'
+    const receiptTitle = showVat ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี / Receipt / Tax Invoice' : 'ใบเสร็จรับเงิน / Receipt'
     const paymentMethod = paymentLabels[sale.payments?.[0]?.method ?? 'cash'] ?? sale.payments?.[0]?.method ?? '-'
     const depositDeducted = sale.depositDeducted ?? 0
     const amountDue = Math.max((sale.totalAmount ?? 0) - depositDeducted, 0)
     const paidAmount = sale.paidAmount ?? sale.payments?.[0]?.amount ?? amountDue
     const changeAmount = sale.changeAmount ?? 0
-    const footerText = receiptInfo?.receiptFooter || 'ขอบคุณที่ใช้บริการ'
-    const payerName = sale.customerName?.trim() || 'ลูกค้าทั่วไป'
+    const footerText = uniqReceiptTexts([sale.receiptNote ?? '', receiptInfo?.receiptFooter || 'ขอบคุณที่ใช้บริการ / Thank you.']).join('\n')
+    const payerName = sale.customerName?.trim() || 'ลูกค้าทั่วไป / Walk-in customer'
     const receiverName = sale.receivedByName?.trim()
       || sale.createdByName?.trim()
       || sale.paymentConfirmedByName?.trim()
@@ -436,24 +446,25 @@ export default function DocumentsPage() {
       ${sale.status === 'cancelled' ? '<div class="cancel">บิลถูกยกเลิก</div>' : ''}
       ${!receiptInfo && branchName ? `<div class="row"><span class="muted">สาขา</span><span>${branchName}${branchCode ? ` (${branchCode})` : ''}</span></div>` : ''}
       <div class="meta-box">
-        <div class="row"><span class="muted">เลขที่ใบเสร็จ</span><strong>${escapeHtml(sale.receiptNo)}</strong></div>
-        <div class="row"><span class="muted">วันที่</span><span>${saleDate.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</span></div>
-        <div class="row"><span class="muted">เวลา</span><span>${saleDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</span></div>
-        <div class="row"><span class="muted">ลูกค้า</span><span>${escapeHtml(sale.customerName ?? 'ลูกค้าทั่วไป')}</span></div>
-        <div class="row"><span class="muted">การชำระ</span><strong>${escapeHtml(paymentMethod)}</strong></div>
+        <div class="row"><span class="muted">เลขที่ใบเสร็จ / Receipt No.</span><strong>${escapeHtml(sale.receiptNo)}</strong></div>
+        <div class="row"><span class="muted">วันที่ / Date</span><span>${saleDate.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</span></div>
+        <div class="row"><span class="muted">เวลา / Time</span><span>${saleDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</span></div>
+        <div class="row"><span class="muted">ลูกค้า / Customer</span><span>${escapeHtml(sale.customerName ?? 'ลูกค้าทั่วไป / Walk-in customer')}</span></div>
+        ${sale.customerPhone ? `<div class="row"><span class="muted">เบอร์โทร / Phone</span><span>${escapeHtml(sale.customerPhone)}</span></div>` : ''}
+        <div class="row"><span class="muted">การชำระ / Payment</span><strong>${escapeHtml(paymentMethod)}</strong></div>
       </div>
-      <table><thead><tr><th>รายการ</th><th>จำนวน</th><th class="right">ราคา</th><th class="right">รวม</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>รายการ / Item</th><th>จำนวน / Qty</th><th class="right">ราคา / Price</th><th class="right">รวม / Total</th></tr></thead><tbody>${rows}</tbody></table>
       <div class="summary-box">
-        <div class="row"><span class="muted">ก่อนส่วนลด</span><span>${formatCurrency(sale.subtotal)}</span></div>
-        ${sale.discountAmount > 0 ? `<div class="row"><span class="muted">ส่วนลด</span><span>-${formatCurrency(sale.discountAmount)}</span></div>` : ''}
+        <div class="row"><span class="muted">รวมเป็นเงิน / Subtotal</span><span>${formatCurrency(sale.subtotal)}</span></div>
+        ${sale.discountAmount > 0 ? `<div class="row"><span class="muted">ส่วนลด / Discount</span><span>-${formatCurrency(sale.discountAmount)}</span></div>` : ''}
         ${showVat ? `
-          <div class="row"><span class="muted">มูลค่าก่อน VAT</span><span>${formatCurrency(preVatAmount)}</span></div>
-          <div class="row"><span class="muted">VAT 7% (รวมอยู่ในราคา)</span><span>${formatCurrency(sale.taxAmount)}</span></div>
+          <div class="row"><span class="muted">มูลค่าก่อน VAT / Before VAT</span><span>${formatCurrency(preVatAmount)}</span></div>
+          <div class="row"><span class="muted">VAT 7%</span><span>${formatCurrency(sale.taxAmount)}</span></div>
         ` : ''}
-        ${depositDeducted > 0 ? `<div class="row"><span class="muted">หักมัดจำเดิม</span><span>-${formatCurrency(depositDeducted)}</span></div>` : ''}
-        <div class="row total"><span>ยอดสุทธิ</span><span>${formatCurrency(amountDue)}</span></div>
-        <div class="row"><span class="muted">รับเงิน</span><span>${formatCurrency(paidAmount)}</span></div>
-        ${(sale.payments?.[0]?.method ?? '') === 'cash' ? `<div class="row"><span class="muted">เงินทอน</span><span>${formatCurrency(changeAmount)}</span></div>` : ''}
+        ${depositDeducted > 0 ? `<div class="row"><span class="muted">หักมัดจำ / Deposit deducted</span><span>-${formatCurrency(depositDeducted)}</span></div>` : ''}
+        <div class="row total"><span>รวมทั้งสิ้น / Grand Total</span><span>${formatCurrency(amountDue)}</span></div>
+        <div class="row"><span class="muted">รับเงิน / Paid</span><span>${formatCurrency(paidAmount)}</span></div>
+        ${(sale.payments?.[0]?.method ?? '') === 'cash' ? `<div class="row"><span class="muted">เงินทอน / Change</span><span>${formatCurrency(changeAmount)}</span></div>` : ''}
       </div>
       <div class="note-box">${escapeHtml(footerText)}</div>
       <div class="signature-grid">
@@ -644,6 +655,13 @@ export default function DocumentsPage() {
                   <input value={editForm.customerName} onChange={e => setEditForm(v => ({ ...v, customerName: e.target.value }))}
                     placeholder="ชื่อลูกค้า"
                     className="w-full px-3 py-2.5 bg-[var(--bg-base)] rounded-xl text-sm focus:outline-none border border-[var(--border-light)]" />
+                  <input value={editForm.customerPhone} onChange={e => setEditForm(v => ({ ...v, customerPhone: e.target.value }))}
+                    placeholder="เบอร์โทรลูกค้า"
+                    className="w-full px-3 py-2.5 bg-[var(--bg-base)] rounded-xl text-sm focus:outline-none border border-[var(--border-light)]" />
+                  <textarea value={editForm.receiptNote} onChange={e => setEditForm(v => ({ ...v, receiptNote: e.target.value }))}
+                    placeholder="หมายเหตุท้ายบิล เช่น รับประกัน / เงื่อนไขท้ายใบเสร็จ"
+                    rows={3}
+                    className="w-full px-3 py-2.5 bg-[var(--bg-base)] rounded-xl text-sm focus:outline-none border border-[var(--border-light)] resize-none" />
                   <textarea value={editForm.notes} onChange={e => setEditForm(v => ({ ...v, notes: e.target.value }))}
                     placeholder="หมายเหตุบิล"
                     rows={3}

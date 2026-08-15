@@ -10,7 +10,7 @@ import {
 import { formatCurrency } from '@/lib/utils'
 import { addDocument, COLLECTIONS, convertTimestamps, generateBranchDocumentNo, generateWigOrderNo } from '@/lib/firestore'
 import { Sale, Product, Service, Deposit, WorkOrder, Employee, Branch, ReceiptShopSnapshot } from '@/types'
-import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, updateDoc, serverTimestamp, setDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { uploadToCloudinary } from '@/lib/cloudinary'
 import { useAuth } from '@/hooks/useAuth'
@@ -57,6 +57,7 @@ interface ReceiptData {
   mode:         PosMode
   receiptNo:    string
   customerName: string
+  customerPhone?: string
   items:        CartItem[]
   subtotal:     number
   discountAmt:  number
@@ -69,6 +70,7 @@ interface ReceiptData {
   remaining:    number
   pickupDate:   string   // วันนัดรับวิก
   depositNote:  string
+  receiptNote?: string
   payMethod:    string
   paidAmount:   number
   change:       number
@@ -117,6 +119,14 @@ const payMethods = [
 
 const WIG_TYPE_OPTIONS = ['ฮาฟวิก', 'ฟูวิก', 'วิกกึ่งฟู', 'ฟูวิกญี่ปุ่น', 'อื่นๆ']
 const VAT_RATE = 0.07
+const DEFAULT_RECEIPT_NOTE_TEMPLATES = [
+  'กรุณาเก็บใบเสร็จนี้ไว้เป็นหลักฐาน / Please keep this receipt as proof of purchase.',
+  'รับประกันสินค้า 7 วัน ตามเงื่อนไขของร้าน / 7-day warranty under store policy.',
+  'สินค้าสั่งผลิตไม่รับคืนหรือเปลี่ยนหลังเริ่มผลิต / Custom-made items are non-refundable after production starts.',
+]
+
+const uniqTexts = (values: string[]) =>
+  Array.from(new Set(values.map(v => v.trim()).filter(Boolean)))
 
 export default function POSPage() {
   const { companyId, branchId, userId, currentBranch, user } = useAuth()
@@ -136,11 +146,16 @@ export default function POSPage() {
   const [cash, setCash]               = useState('')
   const [customerName, setCustomerName] = useState('')
   const [customerId,   setCustomerId]   = useState('')
+  const [customerPhone, setCustomerPhone] = useState('')
   const [mode, setMode]               = useState<PosMode>('sale')
   const [showVatOnReceipt, setShowVatOnReceipt] = useState(false)
   const [depositInput, setDepositInput] = useState('')
   const [pickupDate, setPickupDate]   = useState('')
   const [depositNote, setDepositNote] = useState('')
+  const [receiptNote, setReceiptNote] = useState('')
+  const [receiptNoteTemplates, setReceiptNoteTemplates] = useState(DEFAULT_RECEIPT_NOTE_TEMPLATES)
+  const [newReceiptNoteTemplate, setNewReceiptNoteTemplate] = useState('')
+  const [receiptNoteTemplateSaving, setReceiptNoteTemplateSaving] = useState(false)
   const [saving, setSaving]           = useState(false)
   const [posMsg, setPosMsg]           = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [receipt, setReceipt]         = useState<ReceiptData | null>(null)
@@ -250,6 +265,10 @@ export default function POSPage() {
         branchManager: Number(t.discountManager ?? DEFAULT_DISCOUNT_POLICY.branchManager),
         owner: Number(t.discountOwner ?? DEFAULT_DISCOUNT_POLICY.owner),
       })
+      const savedReceiptNoteTemplates = Array.isArray(c.receiptNoteTemplates)
+        ? c.receiptNoteTemplates.map((value: unknown) => String(value))
+        : []
+      setReceiptNoteTemplates(uniqTexts([...DEFAULT_RECEIPT_NOTE_TEMPLATES, ...savedReceiptNoteTemplates]))
     }).catch(console.error)
     return () => { active = false }
   }, [branchId, companyId, currentBranch?.code, currentBranch?.name])
@@ -369,6 +388,36 @@ export default function POSPage() {
     } catch { alert('ตรวจสอบคูปองไม่สำเร็จ') }
   }
   const clearCoupon = () => { setAppliedCoupon(''); setCouponCode(''); setDiscount(0) }
+
+  const saveReceiptNoteTemplate = async () => {
+    const text = newReceiptNoteTemplate.trim()
+    if (!text || receiptNoteTemplateSaving) return
+    setReceiptNote(text)
+    if (!companyId) {
+      setPosMsg({ type: 'err', text: 'ระบบยังโหลดข้อมูลร้านไม่เสร็จ กรุณาลองใหม่อีกครั้ง' })
+      return
+    }
+    const nextTemplates = uniqTexts([...receiptNoteTemplates, text])
+    setReceiptNoteTemplateSaving(true)
+    setPosMsg(null)
+    try {
+      await setDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId), {
+        receiptNoteTemplates: nextTemplates,
+        updatedAt: serverTimestamp(),
+      }, { merge: true })
+      setReceiptNoteTemplates(nextTemplates)
+      setNewReceiptNoteTemplate('')
+      setPosMsg({ type: 'ok', text: 'บันทึกตัวเลือกหมายเหตุท้ายบิลแล้ว' })
+    } catch (err) {
+      setPosMsg({
+        type: 'err',
+        text: 'บันทึกตัวเลือกไม่สำเร็จ แต่ยังใช้ข้อความนี้กับบิลปัจจุบันได้: '
+          + (err instanceof Error ? err.message : 'กรุณาลองใหม่'),
+      })
+    } finally {
+      setReceiptNoteTemplateSaving(false)
+    }
+  }
 
   /* ─── Totals ─── */
   const subtotal    = cart.reduce((s, c) => s + c.price * c.quantity, 0)
@@ -507,6 +556,7 @@ export default function POSPage() {
       branchName: shopInfo.branchName || currentBranch?.name || '',
       branchCode: shopInfo.branchCode || currentBranch?.code || '',
     }
+    const receiptNoteText = receiptNote.trim()
 
     const saleData: Record<string, unknown> = {
       companyId, branchId, receiptNo,
@@ -555,6 +605,8 @@ export default function POSPage() {
     }
     if (customerId)     saleData.customerId     = customerId
     if (customerName)   saleData.customerName   = customerName
+    if (customerPhone)  saleData.customerPhone  = customerPhone.trim()
+    if (receiptNoteText) saleData.receiptNote = receiptNoteText
     if (depositDeduct > 0) saleData.depositDeducted = depositDeduct
     if (hasNegativeStockSale) {
       saleData.hasNegativeStockSale = true
@@ -668,8 +720,8 @@ export default function POSPage() {
     }
 
     // Show receipt after confirmed save
-    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || netDue) : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
-    setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId('')
+    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', customerPhone: customerPhone.trim() || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || netDue) : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
+    setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setCustomerPhone(''); setReceiptNote('')
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     setSlipUrl(''); setAppliedDepositId(''); setCouponCode(''); setAppliedCoupon('')
     setShowVatOnReceipt(false)
@@ -706,6 +758,8 @@ export default function POSPage() {
     const notesStr = [depositNote, pickupDate ? `นัดรับ: ${pickupDate}` : ''].filter(Boolean).join(' | ')
     const custName = customerName || 'ลูกค้าทั่วไป'
     const custId   = customerId   || ''
+    const custPhone = customerPhone.trim()
+    const receiptNoteText = receiptNote.trim()
     const receiptInfo: ReceiptShopSnapshot = {
       ...shopInfo,
       branchId,
@@ -720,6 +774,7 @@ export default function POSPage() {
       branchCode: receiptInfo.branchCode ?? '',
       receiptInfo,
       customerId: custId, customerName: custName,
+      ...(custPhone ? { customerPhone: custPhone } : {}),
       items: cart.map(c => ({ productId: c.type === 'product' ? c.id : undefined, serviceId: c.type === 'service' ? c.id : undefined, name: c.name, isWigProduct: c.isWigProduct ?? false, wigType: c.wigType, quantity: c.quantity, unitPrice: c.price, originalUnitPrice: c.originalPrice ?? c.price, isPriceEdited: (c.originalPrice ?? c.price) !== c.price, discountAmount: lineDiscount(c), taxType: 'vat', taxAmount: lineTax(c), taxIncluded: true, total: lineSubtotal(c), note: c.note?.trim() || undefined })),
       preVatAmount,
       taxAmount: vatAmt,
@@ -740,6 +795,7 @@ export default function POSPage() {
       depData.paymentConfirmedAt = now
     }
     if (notesStr) depData.notes = notesStr
+    if (receiptNoteText) depData.receiptNote = receiptNoteText
     if (slipUrl)  depData.slipUrl = slipUrl
     // รอผลบันทึกมัดจำจริง (ยอดเงิน) ก่อนออกใบ
     let depositId: string
@@ -785,8 +841,8 @@ export default function POSPage() {
     }
 
     // Show receipt immediately — ไม่ต้องรอ
-    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: createdDepositWorkOrder ? 1 : 0, receiverName: cashierName })
-    setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setDepositInput(''); setPickupDate(''); setDepositNote('')
+    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, customerPhone: custPhone || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: createdDepositWorkOrder ? 1 : 0, receiverName: cashierName })
+    setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setCustomerPhone(''); setDepositInput(''); setPickupDate(''); setDepositNote(''); setReceiptNote('')
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     setSlipUrl(''); setCouponCode(''); setAppliedCoupon('')
     setShowVatOnReceipt(false)
@@ -964,8 +1020,8 @@ export default function POSPage() {
             companyId={companyId}
             selectedId={customerId}
             selectedName={customerName}
-            onSelect={(id, name) => { setCustomerId(id); setCustomerName(name) }}
-            onClear={() => { setCustomerId(''); setCustomerName('') }}
+            onSelect={(id, name, customer) => { setCustomerId(id); setCustomerName(name); setCustomerPhone(customer?.phone ?? '') }}
+            onClear={() => { setCustomerId(''); setCustomerName(''); setCustomerPhone('') }}
             placeholder={mode === 'deposit' ? 'ค้นหาลูกค้า (แนะนำสำหรับมัดจำ)' : 'ค้นหาลูกค้า (ไม่บังคับ)'}
           />
         </div>
@@ -1090,7 +1146,7 @@ export default function POSPage() {
         <div className="shrink-0 p-4 border-t border-[var(--border-light)] space-y-3 bg-white shadow-[0_-8px_24px_rgba(244,114,182,0.08)]">
           <div className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-3 space-y-2">
             <div className="flex justify-between text-sm text-[var(--text-secondary)]">
-              <span>ก่อนส่วนลด</span><span>{formatCurrency(subtotal)}</span>
+              <span>รวมเป็นเงิน</span><span>{formatCurrency(subtotal)}</span>
             </div>
             {discountAmt > 0 && (
               <div className="flex justify-between text-sm font-semibold text-emerald-600">
@@ -1119,7 +1175,7 @@ export default function POSPage() {
             )}
             <div className="flex items-end justify-between gap-3 border-t border-[var(--border-light)] pt-2">
               <div>
-                <p className="text-xs text-[var(--text-muted)]">{mode === 'sale' ? 'ยอดที่ต้องชำระ' : 'ยอดรวมรายการ'}</p>
+                <p className="text-xs text-[var(--text-muted)]">{mode === 'sale' ? 'รวมทั้งสิ้น' : 'รวมเป็นเงิน'}</p>
                 <p className="text-[11px] text-[var(--text-light)]">กดปุ่มด้านล่างเพื่อเลือกวิธีชำระและบันทึก</p>
               </div>
               <p className="text-xl font-black text-[var(--pink-600)] whitespace-nowrap">
@@ -1241,7 +1297,7 @@ export default function POSPage() {
           {/* Totals */}
           <div className="bg-white rounded-xl border border-[var(--border-light)] p-3 space-y-1.5 text-sm">
             <div className="flex justify-between text-[var(--text-secondary)]">
-              <span>ก่อนส่วนลด</span><span>{formatCurrency(subtotal)}</span>
+              <span>รวมเป็นเงิน</span><span>{formatCurrency(subtotal)}</span>
             </div>
             {discountAmt > 0 && (
               <div className="flex justify-between text-emerald-500 font-medium">
@@ -1259,7 +1315,7 @@ export default function POSPage() {
               </>
             )}
             <div className="flex justify-between font-bold text-base pt-1.5 border-t border-[var(--border-light)]">
-              <span className="text-[var(--text-primary)]">ยอดรวม</span>
+              <span className="text-[var(--text-primary)]">รวมทั้งสิ้น</span>
               <span className="text-[var(--pink-500)]">{formatCurrency(total)}</span>
             </div>
             {depositDeduct > 0 && (
@@ -1295,7 +1351,7 @@ export default function POSPage() {
 
                 <div className="bg-[var(--pink-50)] rounded-xl border border-[var(--pink-100)] p-3 space-y-1.5">
                   <div className="flex justify-between text-xs text-[var(--text-secondary)]">
-                    <span>ยอดเต็ม</span>
+                    <span>รวมเป็นเงิน</span>
                     <span className="font-semibold">{formatCurrency(subtotal)}</span>
                   </div>
                   {discountAmt > 0 && (
@@ -1323,7 +1379,7 @@ export default function POSPage() {
                     </>
                   )}
                   <div className="flex justify-between text-sm font-black text-[var(--pink-600)] border-t border-[var(--pink-100)] pt-1.5">
-                    <span>ยอดที่ต้องรับชำระ</span>
+                    <span>ยอดรับชำระ</span>
                     <span>{formatCurrency(payNow)}</span>
                   </div>
                 </div>
@@ -1364,7 +1420,7 @@ export default function POSPage() {
                 {depositAmt > 0 && (
                   <div className="bg-amber-50 rounded-xl border border-amber-200 p-3 space-y-1.5">
                     <div className="flex justify-between text-xs text-amber-700">
-                      <span>ยอดเต็ม</span>
+                      <span>รวมทั้งสิ้น</span>
                       <span className="font-semibold">{formatCurrency(total)}</span>
                     </div>
                     <div className="flex justify-between text-xs text-emerald-700 font-bold">
@@ -1480,6 +1536,50 @@ export default function POSPage() {
               <p className="mt-1 text-red-600">ระบบจะให้ยืนยันและบันทึกเหตุผลก่อนออกบิล</p>
             </div>
           )}
+
+          <div className="rounded-xl border border-[var(--border-light)] bg-white p-3 space-y-2">
+            <div className="flex items-start gap-2">
+              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-[var(--pink-500)]" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-[var(--text-primary)]">หมายเหตุท้ายบิล / Receipt note</p>
+                <p className="text-[10px] text-[var(--text-muted)]">ใช้สำหรับเงื่อนไขรับประกัน หรือข้อความที่ต้องการให้แสดงท้ายใบเสร็จ</p>
+              </div>
+            </div>
+            <select
+              value={receiptNoteTemplates.includes(receiptNote.trim()) ? receiptNote.trim() : ''}
+              onChange={e => setReceiptNote(e.target.value)}
+              className="w-full rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]"
+            >
+              <option value="">เลือกข้อความสำเร็จรูป...</option>
+              {receiptNoteTemplates.map(template => (
+                <option key={template} value={template}>{template}</option>
+              ))}
+            </select>
+            <textarea
+              value={receiptNote}
+              onChange={e => setReceiptNote(e.target.value)}
+              rows={3}
+              maxLength={600}
+              placeholder="พิมพ์หมายเหตุท้ายบิล เช่น รับประกัน 7 วัน / Warranty 7 days"
+              className="w-full rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] px-3 py-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]"
+            />
+            <div className="flex gap-2">
+              <input
+                value={newReceiptNoteTemplate}
+                onChange={e => setNewReceiptNoteTemplate(e.target.value)}
+                placeholder="สร้างตัวเลือกใหม่..."
+                className="min-w-0 flex-1 rounded-xl border border-[var(--border-light)] bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]"
+              />
+              <button
+                type="button"
+                onClick={saveReceiptNoteTemplate}
+                disabled={!newReceiptNoteTemplate.trim() || receiptNoteTemplateSaving}
+                className="shrink-0 rounded-xl bg-[var(--pink-100)] px-3 py-2 text-xs font-bold text-[var(--pink-600)] transition-all hover:bg-[var(--pink-200)] disabled:opacity-50"
+              >
+                {receiptNoteTemplateSaving ? 'กำลังบันทึก...' : 'บันทึกตัวเลือก'}
+              </button>
+            </div>
+          </div>
 
           {/* Payment method */}
           <div className="grid grid-cols-4 gap-1.5">
@@ -1610,7 +1710,10 @@ export default function POSPage() {
 
 /* ─── Receipt / Deposit Receipt Modal ─── */
 const PAY_LABELS: Record<string, string> = {
-  cash: 'เงินสด', transfer: 'โอนเงิน', qr: 'QR Code', credit_card: 'บัตรเครดิต',
+  cash: 'เงินสด / Cash',
+  transfer: 'โอนเงิน / Transfer',
+  qr: 'QR Code',
+  credit_card: 'บัตรเครดิต / Credit Card',
 }
 
 function PaymentConfirmModal({
@@ -1729,12 +1832,13 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
   const isDeposit = receipt.mode === 'deposit'
   const receiptShop = receipt.shopInfo ?? shop
   const receiptTitle = isDeposit
-    ? 'ใบรับมัดจำ'
+    ? 'ใบรับมัดจำ / Deposit Receipt'
     : receipt.showVatOnReceipt
-      ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี'
-      : 'ใบเสร็จรับเงิน'
-  const footerText = receiptShop.receiptFooter || (isDeposit ? 'กรุณาเก็บใบนี้ไว้เป็นหลักฐาน' : 'ขอบคุณที่ใช้บริการ')
-  const payerName = receipt.customerName?.trim() || 'ลูกค้าทั่วไป'
+      ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี / Receipt / Tax Invoice'
+      : 'ใบเสร็จรับเงิน / Receipt'
+  const defaultFooterText = isDeposit ? 'กรุณาเก็บใบนี้ไว้เป็นหลักฐาน / Please keep this receipt as proof.' : 'ขอบคุณที่ใช้บริการ / Thank you.'
+  const footerText = uniqTexts([receipt.receiptNote ?? '', receiptShop.receiptFooter || defaultFooterText]).join('\n')
+  const payerName = receipt.customerName?.trim() || 'ลูกค้าทั่วไป / Walk-in customer'
   const receiverName = receipt.receiverName?.trim() || '-'
   const nextActions = [
     { href: '/pos', label: 'ขาย/รับมัดจำต่อ', icon: ShoppingCart, show: true },
@@ -1824,11 +1928,12 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
 
             <div className="meta-box mb-3 rounded-lg border border-gray-900/80 px-3 py-2 space-y-0.5">
               {[
-                [isDeposit ? 'เลขที่ใบมัดจำ' : 'เลขที่ใบเสร็จ', receipt.receiptNo],
-                ['วันที่', receipt.date.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })],
-                ['เวลา', receipt.date.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })],
-                ...(receipt.customerName ? [['ลูกค้า', receipt.customerName]] : []),
-                ['การชำระ', PAY_LABELS[receipt.payMethod] ?? receipt.payMethod],
+                [isDeposit ? 'เลขที่ใบมัดจำ / Deposit No.' : 'เลขที่ใบเสร็จ / Receipt No.', receipt.receiptNo],
+                ['วันที่ / Date', receipt.date.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })],
+                ['เวลา / Time', receipt.date.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })],
+                ['ลูกค้า / Customer', receipt.customerName?.trim() || 'ลูกค้าทั่วไป / Walk-in customer'],
+                ...(receipt.customerPhone ? [['เบอร์โทร / Phone', receipt.customerPhone]] : []),
+                ['การชำระ / Payment', PAY_LABELS[receipt.payMethod] ?? receipt.payMethod],
               ].map(([k, v]) => (
                 <div key={k} className="row flex justify-between text-xs">
                   <span className="label text-[var(--text-muted)]">{k}</span>
@@ -1839,18 +1944,18 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
 
             <div>
               <div className="table-head flex text-[10px] text-[var(--text-muted)] font-bold mb-1 px-0.5 border-b border-gray-900 pb-1">
-                <span className="flex-1">รายการ</span>
-                <span className="w-8 text-center">จำนวน</span>
-                <span className="w-16 text-right">ราคา</span>
-                <span className="w-16 text-right">รวม</span>
+                <span className="flex-1">รายการ / Item</span>
+                <span className="w-8 text-center">จำนวน / Qty</span>
+                <span className="w-16 text-right">ราคา / Price</span>
+                <span className="w-16 text-right">รวม / Total</span>
               </div>
               {receipt.items.map((item, i) => (
                 <div key={i} className="item-row flex text-xs py-1.5 border-b border-[var(--border-light)] last:border-0 px-0.5">
                   <div className="item-name flex-1 min-w-0 pr-1">
                     <p className="font-medium break-words">{item.name}</p>
                     {item.sku && <p className="text-[10px] text-[var(--text-muted)]">{item.sku}</p>}
-                    {receipt.showVatOnReceipt && item.taxType === 'non_vat' && <p className="tax-note text-[10px] text-[var(--text-muted)]">ไม่นับ VAT</p>}
-                    {item.note?.trim() && <p className="item-note text-[10px] text-purple-700 whitespace-pre-wrap break-words">หมายเหตุ: {item.note.trim()}</p>}
+                    {receipt.showVatOnReceipt && item.taxType === 'non_vat' && <p className="tax-note text-[10px] text-[var(--text-muted)]">ไม่นับ VAT / Non-VAT</p>}
+                    {item.note?.trim() && <p className="item-note text-[10px] text-purple-700 whitespace-pre-wrap break-words">หมายเหตุ / Note: {item.note.trim()}</p>}
                   </div>
                   <span className="item-qty w-8 text-center text-[var(--text-secondary)]">{item.quantity}</span>
                   <span className="item-price w-16 text-right text-[var(--text-secondary)]">{formatCurrency(item.price)}</span>
@@ -1860,38 +1965,38 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
             </div>
 
             <div className="summary-box space-y-1.5 text-xs border-y border-dashed border-gray-300 py-2 mt-3">
-              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">ก่อนส่วนลด</span><span>{formatCurrency(receipt.subtotal)}</span></div>
-              {receipt.discountAmt > 0 && <div className="row flex justify-between text-emerald-600"><span>ส่วนลด</span><span>-{formatCurrency(receipt.discountAmt)}</span></div>}
+              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รวมเป็นเงิน / Subtotal</span><span>{formatCurrency(receipt.subtotal)}</span></div>
+              {receipt.discountAmt > 0 && <div className="row flex justify-between text-emerald-600"><span>ส่วนลด / Discount</span><span>-{formatCurrency(receipt.discountAmt)}</span></div>}
               {receipt.showVatOnReceipt && (
                 <>
-                  <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">มูลค่าก่อน VAT</span><span>{formatCurrency(receipt.preVatAmount)}</span></div>
-                  <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">VAT 7% (รวมอยู่ในราคา)</span><span>{formatCurrency(receipt.vatAmt)}</span></div>
+                  <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">มูลค่าก่อน VAT / Before VAT</span><span>{formatCurrency(receipt.preVatAmount)}</span></div>
+                  <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">VAT 7%</span><span>{formatCurrency(receipt.vatAmt)}</span></div>
                 </>
               )}
               {!isDeposit && receipt.depositAmt > 0 && (
-                <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">หักมัดจำเดิม</span><span>-{formatCurrency(receipt.depositAmt)}</span></div>
+                <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">หักมัดจำ / Deposit deducted</span><span>-{formatCurrency(receipt.depositAmt)}</span></div>
               )}
               <div className="total-row flex justify-between font-bold text-base pt-2 border-t border-gray-300 mt-1">
-                <span>ยอดสุทธิ</span><span className="text-[var(--pink-600)]">{formatCurrency(isDeposit ? receipt.total : receipt.remaining)}</span>
+                <span>รวมทั้งสิ้น / Grand Total</span><span className="text-[var(--pink-600)]">{formatCurrency(isDeposit ? receipt.total : receipt.remaining)}</span>
               </div>
 
               {isDeposit && (
                 <div className="pt-2 border-t border-dashed border-amber-200 space-y-1">
                   <div className="flex justify-between text-xs text-[var(--text-secondary)]">
-                    <span>ยอดเต็ม</span><span className="font-semibold">{formatCurrency(receipt.total)}</span>
+                    <span>ยอดเต็ม / Full amount</span><span className="font-semibold">{formatCurrency(receipt.total)}</span>
                   </div>
                   <div className="deposit-row flex justify-between font-bold text-amber-700">
-                    <span>รับมัดจำ</span><span>{formatCurrency(receipt.depositAmt)}</span>
+                    <span>รับมัดจำ / Deposit paid</span><span>{formatCurrency(receipt.depositAmt)}</span>
                   </div>
                   <div className="remain-row flex justify-between font-bold text-red-500 pb-1 border-b border-dashed border-amber-200">
-                    <span>ยอดคงเหลือ</span><span>{formatCurrency(receipt.remaining)}</span>
+                    <span>ยอดคงเหลือ / Balance</span><span>{formatCurrency(receipt.remaining)}</span>
                   </div>
                 </div>
               )}
 
-              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รับเงิน</span><span>{formatCurrency(receipt.paidAmount)}</span></div>
+              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รับเงิน / Paid</span><span>{formatCurrency(receipt.paidAmount)}</span></div>
               {receipt.payMethod === 'cash' && (
-                <div className="change-row flex justify-between font-semibold text-emerald-600"><span>เงินทอน</span><span>{formatCurrency(receipt.change)}</span></div>
+                <div className="change-row flex justify-between font-semibold text-emerald-600"><span>เงินทอน / Change</span><span>{formatCurrency(receipt.change)}</span></div>
               )}
             </div>
 
@@ -1900,11 +2005,11 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
               <div className="note-box mt-3 p-3 rounded-lg border border-gray-900/80 bg-white space-y-1.5 text-xs">
                 {receipt.pickupDate && (
                   <p className="font-bold text-gray-950">
-                    นัดรับวิก: {new Date(receipt.pickupDate).toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })}
+                    นัดรับวิก / Pickup date: {new Date(receipt.pickupDate).toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })}
                   </p>
                 )}
                 {receipt.depositNote && (
-                  <p className="text-gray-800">หมายเหตุ: {receipt.depositNote}</p>
+                  <p className="text-gray-800">หมายเหตุ / Note: {receipt.depositNote}</p>
                 )}
               </div>
             )}
@@ -1912,7 +2017,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
             <div className="note-box mt-3 rounded-lg border border-gray-900/80 p-2 text-xs text-gray-800">
               {footerText}
               {isDeposit && receipt.remaining > 0 && (
-                <p className="mt-1 font-semibold">ยอดคงเหลือ {formatCurrency(receipt.remaining)} ชำระเมื่อรับวิก</p>
+                <p className="mt-1 font-semibold">ยอดคงเหลือ / Balance {formatCurrency(receipt.remaining)} ชำระเมื่อรับวิก / Pay on pickup</p>
               )}
             </div>
 

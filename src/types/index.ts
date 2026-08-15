@@ -480,6 +480,7 @@ export interface Deposit {
   depositNo: string
   customerId: string
   customerName: string
+  customerPhone?: string
   referenceId?: string // work order or sale
   referenceType?: 'work_order' | 'sale'
   items: DepositItem[]
@@ -493,6 +494,7 @@ export interface Deposit {
   remainingAmount: number
   status: DepositStatus
   notes?: string
+  receiptNote?: string
   pickupDate?: string
   slipUrl?: string
   createdByName?: string
@@ -538,6 +540,7 @@ export interface Sale {
   receiptNo: string
   customerId?: string
   customerName?: string
+  customerPhone?: string
   items: SaleItem[]
   subtotal: number
   discountAmount: number
@@ -586,6 +589,7 @@ export interface Sale {
   cancelledByName?: string
   cancelledAt?: Date
   notes?: string
+  receiptNote?: string
   createdBy: string
   createdByName?: string
   receivedBy?: string
