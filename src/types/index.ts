@@ -512,6 +512,8 @@ export interface DepositItem {
   wigType?: string
   quantity: number
   unitPrice: number
+  originalUnitPrice?: number
+  isPriceEdited?: boolean
   discountAmount?: number
   taxType?: 'vat' | 'non_vat'
   taxAmount?: number
@@ -605,6 +607,8 @@ export interface SaleItem {
   wigType?: string
   quantity: number
   unitPrice: number
+  originalUnitPrice?: number
+  isPriceEdited?: boolean
   discountAmount: number
   taxType: 'vat' | 'non_vat'
   taxAmount: number

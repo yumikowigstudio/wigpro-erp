@@ -45,6 +45,7 @@ interface StockShortage {
 interface CartItem {
   id: string; type: 'product' | 'service'; name: string; sku?: string
   price: number; quantity: number; taxType: 'vat' | 'non_vat'; stockQty?: number
+  originalPrice?: number
   note?: string
   costPrice?: number
   isWigProduct?: boolean; wigType?: string
@@ -286,7 +287,7 @@ export default function POSPage() {
       if (!allowOverStock && stock <= 0) return
       setCart([...cart, {
         id: item.id, type, name: item.name, sku: 'sku' in item ? item.sku : undefined,
-        price, quantity: 1, taxType: item.taxType ?? 'vat',
+        price, originalPrice: price, quantity: 1, taxType: 'vat',
         stockQty: type === 'product' ? (item as ProductWithStock).stockQty : undefined,
         costPrice: type === 'product' ? (item as ProductWithStock).costPrice : undefined,
         isWigProduct: type === 'product' ? (item as ProductWithStock).isWigProduct : undefined,
@@ -303,6 +304,10 @@ export default function POSPage() {
     const item = cart.find(c => c.id === id && c.type === type)
     if (item?.stockQty !== undefined && qty > item.stockQty && !(item.type === 'product' && stockPolicy.allowNegativeStock)) return
     setCart(cart.map(c => c.id === id && c.type === type ? { ...c, quantity: qty } : c))
+  }
+  const updatePrice = (id: string, type: string, price: number) => {
+    const nextPrice = Number.isFinite(price) ? Math.max(0, price) : 0
+    setCart(cart.map(c => c.id === id && c.type === type ? { ...c, price: nextPrice } : c))
   }
 
   /* ─── โหลดมัดจำค้างของลูกค้าที่เลือก (สำหรับหักมัดจำในโหมดขาย) ─── */
@@ -332,13 +337,6 @@ export default function POSPage() {
     setCart(cart.map(c => c.id === id && c.type === type
       ? { ...c, staffId: staffId || undefined, staffName: emp ? empLabel(emp) : undefined }
       : c))
-  }
-  const setItemTaxType = (id: string, type: string, taxType: 'vat' | 'non_vat') => {
-    setCart(cart.map(c => c.id === id && c.type === type ? { ...c, taxType } : c))
-  }
-  const setCartTaxType = (taxType: 'vat' | 'non_vat') => {
-    if (cart.length === 0) return
-    setCart(cart.map(c => ({ ...c, taxType })))
   }
   const setItemNote = (id: string, type: string, note: string) => {
     setCart(cart.map(c => c.id === id && c.type === type ? { ...c, note } : c))
@@ -376,7 +374,7 @@ export default function POSPage() {
   const subtotal    = cart.reduce((s, c) => s + c.price * c.quantity, 0)
   const rawDiscountAmt = discountType === 'percent' ? subtotal * (discount / 100) : discount
   const discountAmt = Math.min(Math.max(rawDiscountAmt, 0), subtotal)
-  const taxableSubtotal = cart.reduce((s, c) => s + (c.taxType === 'vat' ? c.price * c.quantity : 0), 0)
+  const taxableSubtotal = subtotal
   const taxableDiscount = subtotal > 0 ? discountAmt * (taxableSubtotal / subtotal) : 0
   const taxableAfterDisc = Math.max(taxableSubtotal - taxableDiscount, 0)
   const nonTaxableAfterDisc = Math.max((subtotal - taxableSubtotal) - (discountAmt - taxableDiscount), 0)
@@ -387,7 +385,7 @@ export default function POSPage() {
   const lineSubtotal = (c: CartItem) => c.price * c.quantity
   const lineDiscount = (c: CartItem) => subtotal > 0 ? Math.min(lineSubtotal(c), discountAmt * (lineSubtotal(c) / subtotal)) : 0
   const lineTax = (c: CartItem) => {
-    if (!showVatOnReceipt || c.taxType !== 'vat') return 0
+    if (!showVatOnReceipt) return 0
     const taxableLineTotal = Math.max(lineSubtotal(c) - lineDiscount(c), 0)
     return taxableLineTotal - (taxableLineTotal / (1 + VAT_RATE))
   }
@@ -412,10 +410,6 @@ export default function POSPage() {
           : 0
   const discountWithinRoleLimit = discountAmt <= 0 || discountPercent <= userDiscountLimit
   const discountNeedsApproval = discountAmt > 0 && !canDiscount && !discountWithinRoleLimit
-  const cartVatCount = cart.filter(c => c.taxType === 'vat').length
-  const cartNonVatCount = cart.length - cartVatCount
-  const cartVatMode =
-    cart.length === 0 ? 'empty' : cartVatCount === cart.length ? 'vat' : cartNonVatCount === cart.length ? 'non_vat' : 'mixed'
   const stockShortages: StockShortage[] = cart
     .filter(c => c.type === 'product' && typeof c.stockQty === 'number' && c.quantity > c.stockQty)
     .map(c => {
@@ -527,7 +521,9 @@ export default function POSPage() {
         return {
           type: c.type, productId: c.type === 'product' ? c.id : null, name: c.name, sku: c.sku ?? null,
           isWigProduct: c.isWigProduct ?? false, wigType: c.wigType ?? null,
-          quantity: c.quantity, unitPrice: c.price, discountAmount: lineDiscount(c), taxType: c.taxType,
+          quantity: c.quantity, unitPrice: c.price, originalUnitPrice: c.originalPrice ?? c.price,
+          isPriceEdited: (c.originalPrice ?? c.price) !== c.price,
+          discountAmount: lineDiscount(c), taxType: 'vat',
           taxAmount: lineTax(c), taxIncluded: true, total: lineSubtotal(c),
           note: itemNote || null,
           staffId: c.staffId ?? null, staffName: c.staffName ?? null, commissionAmount: itemCommission(c),
@@ -724,7 +720,7 @@ export default function POSPage() {
       branchCode: receiptInfo.branchCode ?? '',
       receiptInfo,
       customerId: custId, customerName: custName,
-      items: cart.map(c => ({ productId: c.type === 'product' ? c.id : undefined, serviceId: c.type === 'service' ? c.id : undefined, name: c.name, isWigProduct: c.isWigProduct ?? false, wigType: c.wigType, quantity: c.quantity, unitPrice: c.price, discountAmount: lineDiscount(c), taxType: c.taxType, taxAmount: lineTax(c), taxIncluded: true, total: lineSubtotal(c), note: c.note?.trim() || undefined })),
+      items: cart.map(c => ({ productId: c.type === 'product' ? c.id : undefined, serviceId: c.type === 'service' ? c.id : undefined, name: c.name, isWigProduct: c.isWigProduct ?? false, wigType: c.wigType, quantity: c.quantity, unitPrice: c.price, originalUnitPrice: c.originalPrice ?? c.price, isPriceEdited: (c.originalPrice ?? c.price) !== c.price, discountAmount: lineDiscount(c), taxType: 'vat', taxAmount: lineTax(c), taxIncluded: true, total: lineSubtotal(c), note: c.note?.trim() || undefined })),
       preVatAmount,
       taxAmount: vatAmt,
       taxIncluded: true,
@@ -960,34 +956,6 @@ export default function POSPage() {
                   {showVatOnReceipt ? 'แสดง VAT' : 'ไม่แสดง VAT'}
                 </button>
               </div>
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-[var(--text-muted)]">รายการที่นับเป็น VAT</span>
-                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                  cartVatMode === 'vat'
-                    ? 'bg-blue-50 text-blue-600'
-                    : cartVatMode === 'non_vat'
-                      ? 'bg-amber-50 text-amber-700'
-                      : 'bg-purple-50 text-purple-600'
-                }`}>
-                  {cartVatMode === 'vat' ? 'นับ VAT ทั้งหมด' : cartVatMode === 'non_vat' ? 'ไม่นับ VAT ทั้งหมด' : 'VAT ผสม'}
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setCartTaxType('vat')}
-                  className={`rounded-lg border px-3 py-2 text-xs font-bold transition-all ${cartVatMode === 'vat' ? 'border-blue-200 bg-blue-50 text-blue-600' : 'border-[var(--border-light)] bg-white text-[var(--text-secondary)] hover:bg-blue-50'}`}
-                >
-                  นับ VAT ทั้งหมด
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCartTaxType('non_vat')}
-                  className={`rounded-lg border px-3 py-2 text-xs font-bold transition-all ${cartVatMode === 'non_vat' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-[var(--border-light)] bg-white text-[var(--text-secondary)] hover:bg-amber-50'}`}
-                >
-                  ไม่นับ VAT ทั้งหมด
-                </button>
-              </div>
             </div>
           )}
 
@@ -1016,7 +984,9 @@ export default function POSPage() {
             const itemKey = `${item.id}-${item.type}`
             const isItemDetailOpen = expandedCartItemId === itemKey
             const commission = itemCommission(item)
-            const hasItemConfig = item.taxType === 'non_vat' || Boolean(item.staffId)
+            const originalPrice = item.originalPrice ?? item.price
+            const priceEdited = originalPrice !== item.price
+            const hasItemConfig = Boolean(item.staffId)
             return (
             <div key={itemKey} className="rounded-2xl bg-white border border-[var(--border-light)] p-3 shadow-sm shadow-pink-50">
               <div className="flex gap-3">
@@ -1028,16 +998,33 @@ export default function POSPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="grid min-w-0 flex-1 grid-cols-[minmax(86px,0.8fr)_minmax(120px,1fr)] items-center gap-2">
-                      <p className="truncate text-sm font-bold text-[var(--text-primary)] leading-snug">{item.name}</p>
-                      <input
-                        value={item.note ?? ''}
-                        onChange={e => setItemNote(item.id, item.type, e.target.value)}
-                        maxLength={180}
-                        placeholder="หมายเหตุ..."
-                        aria-label={`หมายเหตุ ${item.name}`}
-                        className="h-8 min-w-0 rounded-lg border border-[var(--border-light)] bg-[var(--bg-base)] px-2 text-xs text-[var(--text-primary)] outline-none transition focus:border-[var(--pink-300)] focus:bg-white focus:ring-2 focus:ring-[var(--pink-100)]"
-                      />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-bold text-[var(--text-primary)] leading-snug break-words">{item.name}</p>
+                      <div className="mt-2 grid grid-cols-[7.5rem_minmax(0,1fr)] gap-2">
+                        <label className="relative block">
+                          <span className="absolute left-2 top-1 text-[9px] font-semibold text-[var(--text-muted)]">ราคา</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={item.price || ''}
+                            onChange={e => updatePrice(item.id, item.type, e.target.value === '' ? 0 : Number(e.target.value))}
+                            aria-label={`ราคาขาย ${item.name}`}
+                            className="h-10 w-full rounded-lg border border-[var(--border-light)] bg-white px-2 pb-1 pt-4 text-sm font-bold text-[var(--pink-600)] outline-none transition focus:border-[var(--pink-300)] focus:ring-2 focus:ring-[var(--pink-100)]"
+                          />
+                        </label>
+                        <label className="relative block min-w-0">
+                          <span className="absolute left-2 top-1 text-[9px] font-semibold text-[var(--text-muted)]">หมายเหตุ</span>
+                          <input
+                            value={item.note ?? ''}
+                            onChange={e => setItemNote(item.id, item.type, e.target.value)}
+                            maxLength={180}
+                            placeholder="เช่น สี, เงื่อนไข, รายละเอียดท้ายบิล"
+                            aria-label={`หมายเหตุ ${item.name}`}
+                            className="h-10 w-full rounded-lg border border-[var(--border-light)] bg-[var(--bg-base)] px-2 pb-1 pt-4 text-xs text-[var(--text-primary)] outline-none transition focus:border-[var(--pink-300)] focus:bg-white focus:ring-2 focus:ring-[var(--pink-100)]"
+                          />
+                        </label>
+                      </div>
                     </div>
                     <button onClick={() => remove(item.id, item.type)} className="h-8 w-8 shrink-0 rounded-xl border border-[var(--border-light)] flex items-center justify-center text-[var(--text-muted)] hover:text-red-500 hover:bg-red-50 transition-colors" aria-label={`ลบ ${item.name}`}>
                       <X className="w-4 h-4" />
@@ -1045,12 +1032,8 @@ export default function POSPage() {
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
                     {item.sku && <span className="max-w-full truncate rounded-full bg-[var(--bg-base)] px-2 py-0.5">{item.sku}</span>}
-                    <span className="rounded-full bg-[var(--bg-base)] px-2 py-0.5">ชิ้นละ {formatCurrency(item.price)}</span>
-                    {showVatOnReceipt && (
-                      <span className={`rounded-full px-2 py-0.5 font-semibold ${item.taxType === 'vat' ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-700'}`}>
-                        {item.taxType === 'vat' ? 'รวม VAT' : 'ไม่นับ VAT'}
-                      </span>
-                    )}
+                    <span className="rounded-full bg-blue-50 px-2 py-0.5 font-semibold text-blue-600">ราคารวม VAT แล้ว</span>
+                    {priceEdited && <span className="rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700">แก้จาก {formatCurrency(originalPrice)}</span>}
                     {item.staffName && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-600">ผู้ขาย {item.staffName}</span>}
                   </div>
                 </div>
@@ -1063,14 +1046,16 @@ export default function POSPage() {
                 </div>
                 <div className="ml-auto flex items-center gap-2">
                   <p className="text-right text-base font-bold text-[var(--pink-500)]">{formatCurrency(item.price * item.quantity)}</p>
-                  <button
-                    type="button"
-                    onClick={() => setExpandedCartItemId(isItemDetailOpen ? '' : itemKey)}
-                    title="ตั้งค่า VAT / ผู้ขาย"
-                    className={`h-9 w-9 rounded-xl border flex items-center justify-center transition-all ${hasItemConfig ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-500)]'}`}
-                  >
-                    <FileText className="h-4 w-4" />
-                  </button>
+                  {employees.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setExpandedCartItemId(isItemDetailOpen ? '' : itemKey)}
+                      title="ตั้งค่าผู้ขาย"
+                      className={`h-9 w-9 rounded-xl border flex items-center justify-center transition-all ${hasItemConfig ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-500)]'}`}
+                    >
+                      <FileText className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               </div>
               {item.type === 'product' && typeof item.stockQty === 'number' && item.quantity > item.stockQty && (
@@ -1079,18 +1064,8 @@ export default function POSPage() {
                   <span>ขายเกินสต๊อก {item.quantity - item.stockQty} ชิ้น · หลังขายจะเหลือ {item.stockQty - item.quantity}</span>
                 </div>
               )}
-              {isItemDetailOpen && (
+              {isItemDetailOpen && employees.length > 0 && (
                 <div className="mt-3 space-y-2 rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-2">
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <button type="button" onClick={() => setItemTaxType(item.id, item.type, 'vat')}
-                      className={`rounded-xl border px-3 py-2 text-xs font-bold transition-all ${item.taxType === 'vat' ? 'border-blue-200 bg-blue-50 text-blue-600' : 'border-[var(--border-light)] bg-white text-[var(--text-secondary)] hover:bg-blue-50'}`}>
-                      นับ VAT
-                    </button>
-                    <button type="button" onClick={() => setItemTaxType(item.id, item.type, 'non_vat')}
-                      className={`rounded-xl border px-3 py-2 text-xs font-bold transition-all ${item.taxType === 'non_vat' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-[var(--border-light)] bg-white text-[var(--text-secondary)] hover:bg-amber-50'}`}>
-                      ไม่นับ VAT
-                    </button>
-                  </div>
                   {employees.length > 0 && (
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-[var(--text-muted)] shrink-0">ผู้ขาย</span>
