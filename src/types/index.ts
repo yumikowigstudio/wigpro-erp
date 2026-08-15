@@ -274,6 +274,10 @@ export interface Service {
   id: string
   companyId: string
   branchId?: string // null = global
+  sourceBranchId?: string
+  catalogScope?: 'shared' | 'branch'
+  visibleBranchIds?: string[]
+  excludedBranchIds?: string[]
   code: string
   name: string
   category: string
@@ -313,6 +317,11 @@ export interface ServiceRecord {
 export interface Product {
   id: string
   companyId: string
+  branchId?: string
+  sourceBranchId?: string
+  catalogScope?: 'shared' | 'branch'
+  visibleBranchIds?: string[]
+  excludedBranchIds?: string[]
   sku: string
   barcode?: string
   name: string

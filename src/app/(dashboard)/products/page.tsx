@@ -11,6 +11,12 @@ import { formatCurrency } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 import { invId } from '@/lib/stock'
 import {
+  buildCatalogScopeFields,
+  findCatalogMainBranch,
+  getActiveBranchIds,
+  isCatalogVisibleInBranch,
+} from '@/lib/catalogScope'
+import {
   parseCsvRows,
   parseProductImportRows,
   productTemplateRowsToSheet,
@@ -213,7 +219,7 @@ function CategoryModal({
 
 /* ─── Main Page ─── */
 export default function ProductsPage() {
-  const { companyId, branchId, userId } = useAuth()
+  const { companyId, branchId, userId, branches } = useAuth()
   const [catalogTab, setCatalogTab] = useState<'products' | 'services'>('products')
   const [products, setProducts]     = useState<Product[]>([])
   const [services, setServices]     = useState<Service[]>([])
@@ -245,6 +251,10 @@ export default function ProductsPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const importFileRef = useRef<HTMLInputElement>(null)
   const serviceImportFileRef = useRef<HTMLInputElement>(null)
+  const mainCatalogBranch = findCatalogMainBranch(branches, branchId)
+  const mainCatalogBranchId = mainCatalogBranch?.id ?? branchId
+  const isMainCatalogBranch = branchId === mainCatalogBranchId
+  const catalogBranchIds = getActiveBranchIds(branches, branchId)
 
   /* Load products */
   useEffect(() => {
@@ -281,19 +291,21 @@ export default function ProductsPage() {
   }, [companyId])
 
   const allCategoryNames = categories.map(c => c.name)
-  const categoriesFromProducts = Array.from(new Set(products.map(p => p.category).filter(Boolean)))
+  const visibleProducts = products.filter(p => isCatalogVisibleInBranch(p, branchId, mainCatalogBranchId))
+  const visibleServices = services.filter(s => isCatalogVisibleInBranch(s, branchId, mainCatalogBranchId))
+  const categoriesFromProducts = Array.from(new Set(visibleProducts.map(p => p.category).filter(Boolean)))
   const allCategories = Array.from(new Set([...allCategoryNames, ...categoriesFromProducts]))
   const serviceCategoryNamesFromData = serviceCategoriesData.map(c => c.name)
-  const serviceCategoriesFromServices = Array.from(new Set(services.map(s => s.category).filter(Boolean)))
+  const serviceCategoriesFromServices = Array.from(new Set(visibleServices.map(s => s.category).filter(Boolean)))
   const serviceCategories = Array.from(new Set([...serviceCategoryNamesFromData, ...serviceCategoriesFromServices]))
 
-  const filtered = products.filter(p => {
+  const filtered = visibleProducts.filter(p => {
     const q = search.toLowerCase()
     return (!q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q))
       && (!filterCategory || p.category === filterCategory)
       && (filterWig === '' || (filterWig === 'wig' ? p.isWigProduct : !p.isWigProduct))
   })
-  const filteredServices = services.filter(s => {
+  const filteredServices = visibleServices.filter(s => {
     const q = search.toLowerCase()
     return (!q || s.name.toLowerCase().includes(q) || s.code?.toLowerCase().includes(q) || s.category?.toLowerCase().includes(q))
       && (!serviceFilterCategory || s.category === serviceFilterCategory)
@@ -409,9 +421,10 @@ export default function ProductsPage() {
 
       for (const row of parsed.rows) {
         const productRef = doc(collection(db, COLLECTIONS.PRODUCTS))
+        const targetBranchIds = isMainCatalogBranch ? catalogBranchIds : [branchId]
         const productData = compactObject({
           companyId,
-          branchId,
+          ...buildCatalogScopeFields(branchId, catalogBranchIds, isMainCatalogBranch),
           name: row.name,
           sku: row.sku,
           code: row.sku,
@@ -438,22 +451,27 @@ export default function ProductsPage() {
           updatedAt: serverTimestamp(),
         })
 
-        const productOps = row.initialStock > 0 ? 3 : 1
+        const productOps = 1 + targetBranchIds.length + (row.initialStock > 0 ? 1 : 0)
         await commitIfNeeded(productOps)
         batch.set(productRef, productData)
         ops += 1
 
-        if (row.initialStock > 0) {
-          batch.set(doc(db, COLLECTIONS.INVENTORY, invId(productRef.id, branchId)), {
+        for (const targetBranchId of targetBranchIds) {
+          const quantity = targetBranchId === branchId ? row.initialStock : 0
+          batch.set(doc(db, COLLECTIONS.INVENTORY, invId(productRef.id, targetBranchId)), {
             companyId,
-            branchId,
+            branchId: targetBranchId,
             productId: productRef.id,
-            quantity: row.initialStock,
+            quantity,
             reservedQty: 0,
-            availableQty: row.initialStock,
+            availableQty: quantity,
             costPrice: row.costPrice,
             updatedAt: serverTimestamp(),
           }, { merge: true })
+          ops += 1
+        }
+
+        if (row.initialStock > 0) {
           batch.set(doc(collection(db, COLLECTIONS.STOCK_MOVEMENTS)), {
             companyId,
             branchId,
@@ -470,7 +488,7 @@ export default function ProductsPage() {
             performedBy: userId || 'system',
             createdAt: serverTimestamp(),
           })
-          ops += 2
+          ops += 1
         }
       }
 
@@ -606,7 +624,7 @@ export default function ProductsPage() {
         const generatedCode = `SVC-${String(Date.now()).slice(-6)}-${String(row.sourceRow).padStart(3, '0')}`
         const serviceData = compactObject({
           companyId,
-          branchId,
+          ...buildCatalogScopeFields(branchId, catalogBranchIds, isMainCatalogBranch),
           code: row.code || generatedCode,
           name: row.name,
           category: row.category,
@@ -676,7 +694,7 @@ export default function ProductsPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!validate()) return
-    if (!companyId || companyId === 'demo_company') {
+    if (!companyId || !branchId || companyId === 'demo_company') {
       alert('ระบบกำลังโหลดข้อมูลผู้ใช้ กรุณารอสักครู่แล้วลองใหม่')
       return
     }
@@ -690,8 +708,13 @@ export default function ProductsPage() {
         setUploadProgress(false)
       }
 
-      await addDocument<Product>(COLLECTIONS.PRODUCTS, {
-        companyId, branchId,
+      const productRef = doc(collection(db, COLLECTIONS.PRODUCTS))
+      const targetBranchIds = isMainCatalogBranch ? catalogBranchIds : [branchId]
+      const batch = writeBatch(db)
+
+      batch.set(productRef, compactObject({
+        companyId,
+        ...buildCatalogScopeFields(branchId, catalogBranchIds, isMainCatalogBranch),
         name: form.name.trim(),
         sku: form.sku.trim(),
         code: form.sku.trim(),
@@ -706,9 +729,24 @@ export default function ProductsPage() {
         isActive: true,
         status: 'active',
         stockQty: 0,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as Omit<Product, 'id'>)
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }))
+
+      for (const targetBranchId of targetBranchIds) {
+        batch.set(doc(db, COLLECTIONS.INVENTORY, invId(productRef.id, targetBranchId)), {
+          companyId,
+          branchId: targetBranchId,
+          productId: productRef.id,
+          quantity: 0,
+          reservedQty: 0,
+          availableQty: 0,
+          costPrice: form.costPrice ? Number(form.costPrice) : 0,
+          updatedAt: serverTimestamp(),
+        }, { merge: true })
+      }
+
+      await batch.commit()
 
       closeModal()
     } catch (err) {
@@ -732,7 +770,7 @@ export default function ProductsPage() {
   const handleSubmitService = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!validateService()) return
-    if (!companyId || companyId === 'demo_company') {
+    if (!companyId || !branchId || companyId === 'demo_company') {
       alert('ระบบกำลังโหลดข้อมูลผู้ใช้ กรุณารอสักครู่แล้วลองใหม่')
       return
     }
@@ -741,7 +779,7 @@ export default function ProductsPage() {
       const code = serviceForm.code.trim() || `SVC-${String(Date.now()).slice(-6)}`
       await addDocument<Service>(COLLECTIONS.SERVICES, {
         companyId,
-        branchId,
+        ...buildCatalogScopeFields(branchId, catalogBranchIds, isMainCatalogBranch),
         code,
         name: serviceForm.name.trim(),
         category: serviceForm.category.trim() || 'บริการทั่วไป',
@@ -790,7 +828,7 @@ export default function ProductsPage() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--text-primary)]">สินค้าและบริการ</h1>
           <p className="text-sm text-[var(--text-muted)]">
-            สินค้า {products.length} รายการ · บริการ {services.filter(s => s.status !== 'deleted' && s.isActive !== false).length} รายการ
+            สินค้า {visibleProducts.length} รายการ · บริการ {visibleServices.length} รายการ
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -862,7 +900,7 @@ export default function ProductsPage() {
               : 'text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'
           }`}
         >
-          <Package className="h-4 w-4" /> รายการสินค้า ({products.length})
+          <Package className="h-4 w-4" /> รายการสินค้า ({visibleProducts.length})
         </button>
         <button
           type="button"
@@ -873,7 +911,7 @@ export default function ProductsPage() {
               : 'text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'
           }`}
         >
-          <Scissors className="h-4 w-4" /> รายการบริการ ({services.filter(s => s.status !== 'deleted' && s.isActive !== false).length})
+          <Scissors className="h-4 w-4" /> รายการบริการ ({visibleServices.length})
         </button>
       </div>
 
@@ -1030,10 +1068,10 @@ export default function ProductsPage() {
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => setFilterCategory('')}
             className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${!filterCategory ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white border-transparent' : 'bg-white border-[var(--border-light)] text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'}`}>
-            ทั้งหมด ({products.length})
+            ทั้งหมด ({visibleProducts.length})
           </button>
           {categories.map(cat => {
-            const count = products.filter(p => p.category === cat.name).length
+            const count = visibleProducts.filter(p => p.category === cat.name).length
             return (
               <button key={cat.id} onClick={() => setFilterCategory(cat.name)}
                 className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${filterCategory === cat.name ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white border-transparent' : 'bg-white border-[var(--border-light)] text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'}`}>
@@ -1048,10 +1086,10 @@ export default function ProductsPage() {
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => setServiceFilterCategory('')}
             className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${!serviceFilterCategory ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white border-transparent' : 'bg-white border-[var(--border-light)] text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'}`}>
-            ทั้งหมด ({services.filter(s => s.status !== 'deleted' && s.isActive !== false).length})
+            ทั้งหมด ({visibleServices.length})
           </button>
           {serviceCategories.map(cat => {
-            const count = services.filter(s => s.category === cat && s.status !== 'deleted' && s.isActive !== false).length
+            const count = visibleServices.filter(s => s.category === cat).length
             return (
               <button key={cat} onClick={() => setServiceFilterCategory(cat)}
                 className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${serviceFilterCategory === cat ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white border-transparent' : 'bg-white border-[var(--border-light)] text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'}`}>

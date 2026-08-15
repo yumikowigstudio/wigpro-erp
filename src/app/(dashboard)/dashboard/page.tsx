@@ -16,7 +16,8 @@ import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { isCountableSale } from '@/lib/sales'
-import { Appointment, Sale, WorkOrder } from '@/types'
+import { getLegacyBranchStockFallback, findCatalogMainBranch, isCatalogVisibleInBranch } from '@/lib/catalogScope'
+import { Appointment, Inventory, Product, Sale, WorkOrder } from '@/types'
 
 const PROD_COLORS: Record<string, string> = {
   pending: '#fbbf24', in_progress: '#c084fc', qc: '#60a5fa', ready: '#4ade80'
@@ -203,20 +204,42 @@ export default function DashboardPage() {
       )
     }, () => {})
 
-    // Low stock (no orderBy — sort client-side)
-    const u4 = onSnapshot(query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId)), snap => {
-      const all = snap.docs.map(d => ({ id: d.id, ...d.data() })) as { id: string; name: string; sku: string; stockQty: number; minStockQty: number; costPrice?: number }[]
+    // Low stock for the currently selected branch.
+    const mainCatalogBranch = findCatalogMainBranch(branches, branchId)
+    const mainCatalogBranchId = mainCatalogBranch?.id ?? branchId
+    let stockProducts: (Product & { stockQty?: number; minStockQty?: number })[] = []
+    let branchStock: Record<string, number> = {}
+    const updateStockSummary = () => {
+      const visibleProducts = stockProducts.filter(p => isCatalogVisibleInBranch(p, branchId, mainCatalogBranchId))
+      const all = visibleProducts.map(p => ({
+        ...p,
+        stockQty: branchStock[p.id] ?? getLegacyBranchStockFallback(p, branchId, mainCatalogBranchId),
+      }))
+      const minStock = (p: Product & { minStockQty?: number }) => p.minStockAlert ?? p.minStockQty ?? 5
       const sorted = [...all].sort((a, b) => (a.stockQty ?? 0) - (b.stockQty ?? 0))
-      const low = sorted.filter(p => (p.stockQty ?? 0) <= (p.minStockQty || 5)).slice(0, 5)
-      setLowStockItems(low.map(p => ({ name: p.name, sku: p.sku, qty: p.stockQty ?? 0, min: p.minStockQty || 5 })))
+      const low = sorted.filter(p => (p.stockQty ?? 0) <= minStock(p)).slice(0, 5)
+      setLowStockItems(low.map(p => ({ name: p.name, sku: p.sku, qty: p.stockQty ?? 0, min: minStock(p) })))
       setStockStats({
         skuCount: all.length,
         totalValue: all.reduce((s, p) => s + ((p.stockQty ?? 0) * (p.costPrice ?? 0)), 0),
       })
+    }
+    const u4 = onSnapshot(query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId)), snap => {
+      stockProducts = snap.docs.map(d => ({ id: d.id, ...d.data() })) as (Product & { stockQty?: number; minStockQty?: number })[]
+      updateStockSummary()
+    }, () => {})
+    const u5 = onSnapshot(query(collection(db, COLLECTIONS.INVENTORY), where('companyId', '==', companyId), where('branchId', '==', branchId)), snap => {
+      const next: Record<string, number> = {}
+      snap.docs.forEach(d => {
+        const data = d.data() as Inventory
+        if (data.productId) next[data.productId] = Number(data.quantity ?? 0)
+      })
+      branchStock = next
+      updateStockSummary()
     }, () => {})
 
-    return () => { u1(); u2(); u3(); u4() }
-  }, [branchId, companyId])
+    return () => { u1(); u2(); u3(); u4(); u5() }
+  }, [branchId, branches, companyId])
 
   useEffect(() => {
     if (!companyId || !user || !['owner', 'super_admin'].includes(user.role)) return

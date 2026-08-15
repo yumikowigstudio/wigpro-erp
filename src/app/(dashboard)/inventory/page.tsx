@@ -16,6 +16,7 @@ import { Inventory, Product, StockMovement } from '@/types'
 import { adjustBranchStock } from '@/lib/stock'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
+import { findCatalogMainBranch, getLegacyBranchStockFallback, isCatalogVisibleInBranch } from '@/lib/catalogScope'
 
 /* ─── Types ─── */
 type ProductWithStock = Product & { stockQty?: number }
@@ -255,7 +256,7 @@ function MoveBadge({ type }: { type: string }) {
 
 /* ─── Main Page ─── */
 export default function InventoryPage() {
-  const { companyId, branchId, userId } = useAuth()
+  const { companyId, branchId, userId, branches } = useAuth()
   const { ensurePermission, hasPermission } = usePermissionAction()
   const [products, setProducts]     = useState<ProductWithStock[]>([])
   const [branchStock, setBranchStock] = useState<Record<string, number>>({})
@@ -325,9 +326,12 @@ export default function InventoryPage() {
     }, () => {})
   }, [branchId, companyId])
 
-  const productsForBranch = products.map(p => ({
+  const mainCatalogBranch = findCatalogMainBranch(branches, branchId)
+  const mainCatalogBranchId = mainCatalogBranch?.id ?? branchId
+  const visibleProducts = products.filter(p => isCatalogVisibleInBranch(p, branchId, mainCatalogBranchId))
+  const productsForBranch = visibleProducts.map(p => ({
     ...p,
-    stockQty: branchStock[p.id] ?? p.stockQty ?? 0,
+    stockQty: branchStock[p.id] ?? getLegacyBranchStockFallback(p, branchId, mainCatalogBranchId),
   }))
 
   const categories = Array.from(new Set(productsForBranch.map(p => p.category).filter(Boolean)))
@@ -395,7 +399,7 @@ export default function InventoryPage() {
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {[
-          { label:'SKU ทั้งหมด',   value: products.length,          icon: Package,       color:'text-blue-600'             },
+          { label:'SKU ทั้งหมด',   value: productsForBranch.length, icon: Package,       color:'text-blue-600'             },
           { label:'มูลค่าสต๊อก',  value: formatCurrency(totalValue), icon: BarChart3,    color:'text-[var(--pink-500)]'    },
           { label:'สินค้าใกล้หมด', value: lowCount,                  icon: AlertTriangle, color:'text-amber-600'            },
           { label:'สต๊อกติดลบ',    value: negativeCount,              icon: AlertTriangle, color:'text-red-600'              },

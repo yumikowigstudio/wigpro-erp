@@ -9,7 +9,7 @@ import {
   ImagePlus, Package,
 } from 'lucide-react'
 import { doc, getDoc, getDocs, setDoc, serverTimestamp, collection, onSnapshot,
-  query, where, addDoc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore'
+  query, where, addDoc, updateDoc, deleteDoc, writeBatch, arrayUnion } from 'firebase/firestore'
 import { sendPasswordResetEmail } from 'firebase/auth'
 import { db, auth } from '@/lib/firebase'
 import { createAuthUser } from '@/lib/adminUser'
@@ -19,6 +19,7 @@ import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { ALL_PERMISSION_KEYS, DEFAULT_ROLE_PERMISSIONS, PERMISSION_GROUPS, PermissionKey } from '@/lib/permissions'
 import { UserRole } from '@/types'
 import { invId } from '@/lib/stock'
+import { findCatalogMainBranch, isMainCatalogSource } from '@/lib/catalogScope'
 
 /* ─── Shared ─── */
 const inputCls = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
@@ -370,10 +371,26 @@ function BranchSection({ companyId }: { companyId: string }) {
           updatedAt: serverTimestamp(),
           permissions: DEFAULT_ROLE_PERMISSIONS.branch_manager,
         })
-        const productSnap = await getDocs(query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId)))
-        const batch = writeBatch(db)
-        productSnap.docs.forEach(productDoc => {
+        const mainCatalogBranch = findCatalogMainBranch(branches, branchRef.id)
+        const mainCatalogBranchId = mainCatalogBranch?.id ?? branches.find(b => b.isMainBranch)?.id ?? branchRef.id
+        const [productSnap, serviceSnap] = await Promise.all([
+          getDocs(query(collection(db, COLLECTIONS.PRODUCTS), where('companyId', '==', companyId))),
+          getDocs(query(collection(db, COLLECTIONS.SERVICES), where('companyId', '==', companyId))),
+        ])
+        let batch = writeBatch(db)
+        let ops = 0
+        const commitIfNeeded = async (nextOps: number) => {
+          if (ops > 0 && ops + nextOps > 450) {
+            await batch.commit()
+            batch = writeBatch(db)
+            ops = 0
+          }
+        }
+        for (const productDoc of productSnap.docs) {
           const product = productDoc.data()
+          if (!isMainCatalogSource(product, mainCatalogBranchId)) continue
+          const sourceBranchId = product.sourceBranchId || product.branchId || mainCatalogBranchId
+          await commitIfNeeded(2)
           batch.set(doc(db, COLLECTIONS.INVENTORY, invId(productDoc.id, branchRef.id)), {
             companyId,
             branchId: branchRef.id,
@@ -384,8 +401,28 @@ function BranchSection({ companyId }: { companyId: string }) {
             costPrice: product.costPrice ?? 0,
             updatedAt: serverTimestamp(),
           }, { merge: true })
-        })
-        await batch.commit()
+          batch.set(productDoc.ref, {
+            catalogScope: 'shared',
+            sourceBranchId,
+            visibleBranchIds: arrayUnion(branchRef.id),
+            updatedAt: serverTimestamp(),
+          }, { merge: true })
+          ops += 2
+        }
+        for (const serviceDoc of serviceSnap.docs) {
+          const service = serviceDoc.data()
+          if (!isMainCatalogSource(service, mainCatalogBranchId)) continue
+          const sourceBranchId = service.sourceBranchId || service.branchId || mainCatalogBranchId
+          await commitIfNeeded(1)
+          batch.set(serviceDoc.ref, {
+            catalogScope: 'shared',
+            sourceBranchId,
+            visibleBranchIds: arrayUnion(branchRef.id),
+            updatedAt: serverTimestamp(),
+          }, { merge: true })
+          ops += 1
+        }
+        if (ops > 0) await batch.commit()
       }
       setMsg({ type: 'ok', text: editItem ? 'บันทึกสาขาสำเร็จ' : 'สร้างสาขาและบัญชีผู้จัดการสำเร็จ' })
       setShowModal(false)

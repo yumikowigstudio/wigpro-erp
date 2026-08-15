@@ -11,6 +11,7 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { useAuth } from '@/hooks/useAuth'
 import { Appointment, Deposit, Inventory, Product, Sale, TransferOrder, WorkOrder } from '@/types'
+import { findCatalogMainBranch, getLegacyBranchStockFallback, isCatalogVisibleInBranch } from '@/lib/catalogScope'
 
 type AlertKind = 'payment' | 'deposit' | 'appointment' | 'stock' | 'transfer' | 'production' | 'permission' | 'system'
 
@@ -48,7 +49,7 @@ function startOfToday() {
 }
 
 export default function NotificationsPage() {
-  const { companyId, branchId, currentBranch, user } = useAuth()
+  const { companyId, branchId, currentBranch, user, branches } = useAuth()
   const [sales, setSales] = useState<Sale[]>([])
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -173,10 +174,16 @@ export default function NotificationsPage() {
         }
       })
 
-    const stockAlerts = products
-      .filter(p => p.status !== 'deleted' && (branchStock[p.id] ?? (p as Product & { stockQty?: number }).stockQty ?? 0) <= (p.minStockAlert ?? 0))
+    const mainCatalogBranch = findCatalogMainBranch(branches, branchId)
+    const mainCatalogBranchId = mainCatalogBranch?.id ?? branchId
+    const visibleProducts = products.filter(p => isCatalogVisibleInBranch(p, branchId, mainCatalogBranchId))
+    const stockAlerts = visibleProducts
+      .filter(p => {
+        const stockQty = branchStock[p.id] ?? getLegacyBranchStockFallback(p as Product & { stockQty?: number }, branchId, mainCatalogBranchId)
+        return stockQty <= (p.minStockAlert ?? 0)
+      })
       .map(p => {
-        const stockQty = branchStock[p.id] ?? (p as Product & { stockQty?: number }).stockQty ?? 0
+        const stockQty = branchStock[p.id] ?? getLegacyBranchStockFallback(p as Product & { stockQty?: number }, branchId, mainCatalogBranchId)
         return {
           id: `stock-${p.id}`,
           kind: 'stock' as const,
@@ -230,7 +237,7 @@ export default function NotificationsPage() {
         const weight = { high: 3, medium: 2, low: 1 }
         return weight[b.priority] - weight[a.priority] || b.createdAt.getTime() - a.createdAt.getTime()
       })
-  }, [appointments, branchId, branchStock, deposits, products, requests, sales, transfers, user, workOrders])
+  }, [appointments, branchId, branchStock, branches, deposits, products, requests, sales, transfers, user, workOrders])
 
   const filtered = filter === 'all' ? alerts : alerts.filter(a => a.kind === filter)
   const highCount = alerts.filter(a => a.priority === 'high').length

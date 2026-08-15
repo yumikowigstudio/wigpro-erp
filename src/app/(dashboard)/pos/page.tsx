@@ -17,6 +17,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
 import { adjustBranchStock } from '@/lib/stock'
+import { findCatalogMainBranch, getLegacyBranchStockFallback, isCatalogVisibleInBranch } from '@/lib/catalogScope'
 
 type ProductWithStock = Product & { stockQty?: number }
 type PosMode = 'sale' | 'deposit'
@@ -129,7 +130,7 @@ const uniqTexts = (values: string[]) =>
   Array.from(new Set(values.map(v => v.trim()).filter(Boolean)))
 
 export default function POSPage() {
-  const { companyId, branchId, userId, currentBranch, user } = useAuth()
+  const { companyId, branchId, userId, currentBranch, user, branches } = useAuth()
   const cashierName = user?.displayName?.trim() || user?.email?.trim() || userId
   const { ensurePermission, hasPermission } = usePermissionAction()
   const [products, setProducts]       = useState<ProductWithStock[]>([])
@@ -273,12 +274,17 @@ export default function POSPage() {
     return () => { active = false }
   }, [branchId, companyId, currentBranch?.code, currentBranch?.name])
 
-  const productsForBranch = products.map(p => ({
+  const mainCatalogBranch = findCatalogMainBranch(branches, branchId)
+  const mainCatalogBranchId = mainCatalogBranch?.id ?? branchId
+  const visibleProducts = products.filter(p => isCatalogVisibleInBranch(p, branchId, mainCatalogBranchId))
+  const visibleServices = services.filter(s => isCatalogVisibleInBranch(s, branchId, mainCatalogBranchId))
+
+  const productsForBranch = visibleProducts.map(p => ({
     ...p,
-    stockQty: branchStock[p.id] ?? p.stockQty ?? 0,
+    stockQty: branchStock[p.id] ?? getLegacyBranchStockFallback(p, branchId, mainCatalogBranchId),
   }))
   const productCats = ['ทั้งหมด', ...Array.from(new Set(productsForBranch.map(p => p.category).filter(Boolean)))]
-  const serviceCats = ['ทั้งหมด', ...Array.from(new Set(services.map(s => s.category).filter(Boolean)))]
+  const serviceCats = ['ทั้งหมด', ...Array.from(new Set(visibleServices.map(s => s.category).filter(Boolean)))]
   const cats  = tab === 'products' ? productCats : serviceCats
 
   const q = search.toLowerCase()
@@ -287,7 +293,7 @@ export default function POSPage() {
     (filterCat === 'ทั้งหมด' || p.category === filterCat) &&
     p.status !== 'deleted' && p.status !== 'archived'
   )
-  const filteredServices = services.filter(s =>
+  const filteredServices = visibleServices.filter(s =>
     (!q || s.name.toLowerCase().includes(q)) &&
     (filterCat === 'ทั้งหมด' || s.category === filterCat) &&
     s.isActive !== false && s.status !== 'deleted'
