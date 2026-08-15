@@ -385,22 +385,24 @@ export default function DocumentsPage() {
     const showVat = sale.showVatOnReceipt ?? ((sale.taxAmount ?? 0) > 0)
     const preVatAmount = sale.preVatAmount ?? Math.max((sale.totalAmount ?? 0) - (sale.taxAmount ?? 0), 0)
     const rows = sale.items.map(item => `
-      <tr>
-        <td>
-          <div>${escapeHtml(item.name)}</div>
-          ${showVat && item.taxType === 'non_vat' ? '<div class="line-note">ไม่นับ VAT / Non-VAT</div>' : ''}
-          ${item.note ? `<div class="line-note">หมายเหตุ / Note: ${escapeHtml(item.note)}</div>` : ''}
-        </td>
-        <td class="center">${item.quantity}</td>
-        <td class="right">${formatCurrency(item.unitPrice)}</td>
-        <td class="right">${formatCurrency(item.total)}</td>
-      </tr>`).join('')
+      <div class="item-row">
+        <div class="item-main">
+          <div class="item-name">
+            <div class="item-title">${escapeHtml(item.name)}</div>
+            ${item.sku ? `<div class="item-meta">${escapeHtml(item.sku)}</div>` : ''}
+            <div class="item-meta">${item.quantity} x ${formatCurrency(item.unitPrice)}</div>
+            ${showVat && item.taxType === 'non_vat' ? '<div class="line-note">ไม่นับ VAT / Non-VAT</div>' : ''}
+            ${item.note ? `<div class="line-note">หมายเหตุ / Note: ${escapeHtml(item.note)}</div>` : ''}
+          </div>
+          <div class="item-total">${formatCurrency(item.total)}</div>
+        </div>
+      </div>`).join('')
     const receiptInfo = sale.receiptInfo
     const shopName = receiptInfo?.nameTh || ''
     const branchName = receiptInfo?.branchName || sale.branchName || ''
     const branchCode = receiptInfo?.branchCode || sale.branchCode || ''
     const saleDate = sale.createdAt instanceof Date ? sale.createdAt : new Date(sale.createdAt)
-    const receiptTitle = showVat ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี / Receipt / Tax Invoice' : 'ใบเสร็จรับเงิน / Receipt'
+    const receiptTitle = showVat ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี\nReceipt / Tax Invoice' : 'ใบเสร็จรับเงิน\nReceipt'
     const paymentMethod = paymentLabels[sale.payments?.[0]?.method ?? 'cash'] ?? sale.payments?.[0]?.method ?? '-'
     const depositDeducted = sale.depositDeducted ?? 0
     const amountDue = Math.max((sale.totalAmount ?? 0) - depositDeducted, 0)
@@ -420,11 +422,12 @@ export default function DocumentsPage() {
         body{font-family:'Sarabun','Noto Sans Thai','Tahoma',sans-serif;color:#181018;padding:16px;max-width:320px;margin:auto;font-size:12px;line-height:1.35}
         .shop{text-align:center;padding-bottom:8px;border-bottom:1px dashed #9b8c9b}
         .shop-name{font-weight:800;font-size:18px;color:#181018}.shop-sub{font-size:10.5px;color:#4f4350;white-space:pre-line}.logo{height:40px;max-width:92px;object-fit:contain;margin:0 auto 5px;display:block}
-        h1{text-align:center;font-size:13px;font-weight:800;margin:8px 0 0;padding:4px 8px;border-top:1px solid #181018;border-bottom:1px solid #181018;color:#181018}
+        h1{text-align:center;font-size:13px;font-weight:800;margin:8px 0 0;padding:4px 8px;border-top:1px solid #181018;border-bottom:1px solid #181018;color:#181018;line-height:1.25;white-space:pre-line}
         .meta-box{border:1px solid #181018;border-radius:2px;margin:9px 0 10px;padding:6px 8px}
         .muted{color:#4f4350}.row{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:1px 0}.right{text-align:right}.center{text-align:center}
         .total{font-weight:900;font-size:16px;border-top:1px solid #181018;padding-top:7px;margin-top:5px;color:#181018}
-        table{width:100%;border-collapse:collapse;margin-top:8px}th{border-bottom:1px solid #181018;padding:0 2px 4px;text-align:left;font-size:10.5px;color:#4f4350}td{border-bottom:1px solid #eee;padding:5px 2px;text-align:left;vertical-align:top;font-size:11.5px}
+        .items{margin-top:8px}.table-head{display:grid;grid-template-columns:1fr 86px;gap:8px;border-bottom:1px solid #181018;padding:0 2px 4px;text-align:left;font-size:10.5px;color:#4f4350;font-weight:700}.table-head span:last-child{text-align:right}
+        .item-row{font-size:11.5px;padding:7px 2px;border-bottom:1px solid #eee}.item-main{display:grid;grid-template-columns:minmax(0,1fr) 86px;gap:8px;align-items:start}.item-title{font-weight:700;overflow-wrap:anywhere}.item-name{min-width:0}.item-meta{font-size:10px;color:#4f4350;margin-top:2px;line-height:1.35}.item-total{text-align:right;font-weight:800;white-space:nowrap;color:#181018}
         .cancel{color:#b91c1c;text-align:center;font-weight:800;margin:8px 0;border:1px solid #b91c1c;padding:4px}
         .line-note{font-size:10px;color:#7c4a7c;margin-top:2px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
         .summary-box{border-top:1px dashed #9b8c9b;border-bottom:1px dashed #9b8c9b;margin-top:8px;padding:7px 0}
@@ -453,17 +456,20 @@ export default function DocumentsPage() {
         ${sale.customerPhone ? `<div class="row"><span class="muted">เบอร์โทร / Phone</span><span>${escapeHtml(sale.customerPhone)}</span></div>` : ''}
         <div class="row"><span class="muted">การชำระ / Payment</span><strong>${escapeHtml(paymentMethod)}</strong></div>
       </div>
-      <table><thead><tr><th>รายการ / Item</th><th>จำนวน / Qty</th><th class="right">ราคา / Price</th><th class="right">รวม / Total</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="items">
+        <div class="table-head"><span>รายการ / Item</span><span>จำนวน x ราคา / Amount</span></div>
+        ${rows}
+      </div>
       <div class="summary-box">
-        <div class="row"><span class="muted">รวมเป็นเงิน / Subtotal</span><span>${formatCurrency(sale.subtotal)}</span></div>
+        <div class="row"><span class="muted">${showVat ? 'รวมเป็นเงิน / Subtotal' : 'รวมเป็นเงิน / Total'}</span><span>${formatCurrency(sale.subtotal)}</span></div>
         ${sale.discountAmount > 0 ? `<div class="row"><span class="muted">ส่วนลด / Discount</span><span>-${formatCurrency(sale.discountAmount)}</span></div>` : ''}
         ${showVat ? `
-          <div class="row"><span class="muted">มูลค่าก่อน VAT / Before VAT</span><span>${formatCurrency(preVatAmount)}</span></div>
-          <div class="row"><span class="muted">VAT 7%</span><span>${formatCurrency(sale.taxAmount)}</span></div>
+          <div class="row"><span class="muted">มูลค่าก่อน VAT / Amount before VAT</span><span>${formatCurrency(preVatAmount)}</span></div>
+          <div class="row"><span class="muted">ภาษีมูลค่าเพิ่ม 7% / VAT 7%</span><span>${formatCurrency(sale.taxAmount)}</span></div>
         ` : ''}
         ${depositDeducted > 0 ? `<div class="row"><span class="muted">หักมัดจำ / Deposit deducted</span><span>-${formatCurrency(depositDeducted)}</span></div>` : ''}
-        <div class="row total"><span>รวมทั้งสิ้น / Grand Total</span><span>${formatCurrency(amountDue)}</span></div>
-        <div class="row"><span class="muted">รับเงิน / Paid</span><span>${formatCurrency(paidAmount)}</span></div>
+        <div class="row total"><span>${depositDeducted > 0 ? 'ยอดที่ต้องชำระ / Amount Due' : 'รวมทั้งสิ้น / Grand Total'}</span><span>${formatCurrency(amountDue)}</span></div>
+        <div class="row"><span class="muted">รับเงิน / Amount Paid</span><span>${formatCurrency(paidAmount)}</span></div>
         ${(sale.payments?.[0]?.method ?? '') === 'cash' ? `<div class="row"><span class="muted">เงินทอน / Change</span><span>${formatCurrency(changeAmount)}</span></div>` : ''}
       </div>
       <div class="note-box">${escapeHtml(footerText)}</div>

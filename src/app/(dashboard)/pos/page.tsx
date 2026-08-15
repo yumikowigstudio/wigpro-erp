@@ -1842,10 +1842,10 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
   const isDeposit = receipt.mode === 'deposit'
   const receiptShop = receipt.shopInfo ?? shop
   const receiptTitle = isDeposit
-    ? 'ใบรับมัดจำ / Deposit Receipt'
+    ? 'ใบรับมัดจำ\nDeposit Receipt'
     : receipt.showVatOnReceipt
-      ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี / Receipt / Tax Invoice'
-      : 'ใบเสร็จรับเงิน / Receipt'
+      ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี\nReceipt / Tax Invoice'
+      : 'ใบเสร็จรับเงิน\nReceipt'
   const defaultFooterText = isDeposit ? 'กรุณาเก็บใบนี้ไว้เป็นหลักฐาน / Please keep this receipt as proof.' : 'ขอบคุณที่ใช้บริการ / Thank you.'
   const footerText = uniqTexts([receipt.receiptNote ?? '', receiptShop.receiptFooter || defaultFooterText]).join('\n')
   const payerName = receipt.customerName?.trim() || 'ลูกค้าทั่วไป / Walk-in customer'
@@ -1875,17 +1875,17 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
         .logo{display:block;margin:0 auto 5px;height:40px;max-width:92px;object-fit:contain}
         .shop-name{font-size:18px;font-weight:800;letter-spacing:0;color:#181018}
         .sub{font-size:10.5px;color:#4f4350;margin-bottom:1px;white-space:pre-line}
-        .doc-type{display:block;margin:8px auto 0;padding:4px 8px;border-top:1px solid #181018;border-bottom:1px solid #181018;font-size:13px;font-weight:800;color:#181018;text-align:center}
+        .doc-type{display:block;margin:8px auto 0;padding:4px 8px;border-top:1px solid #181018;border-bottom:1px solid #181018;font-size:13px;font-weight:800;color:#181018;text-align:center;line-height:1.25;white-space:pre-line}
         .meta-box{border:1px solid #181018;border-radius:2px;margin:9px 0 10px;padding:6px 8px}
         .row{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:1px 0}
         .label{color:#4f4350}
-        .table-head{display:flex;font-size:10.5px;color:#4f4350;font-weight:700;border-bottom:1px solid #181018;padding:0 0 4px;margin-bottom:2px}
-        .item-row{display:flex;font-size:11.5px;padding:5px 0;border-bottom:1px solid #eee}
+        .table-head{display:grid;grid-template-columns:1fr 86px;gap:8px;font-size:10.5px;color:#4f4350;font-weight:700;border-bottom:1px solid #181018;padding:0 0 4px;margin-bottom:2px}
+        .item-row{font-size:11.5px;padding:7px 0;border-bottom:1px solid #eee}
+        .item-main{display:grid;grid-template-columns:minmax(0,1fr) 86px;gap:8px;align-items:start}
         .item-name{flex:1;min-width:0;overflow:visible;white-space:normal;padding-right:6px}
         .item-name p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important}
-        .item-qty{width:28px;text-align:center;color:#333}
-        .item-price{width:62px;text-align:right;color:#333}
-        .item-total{width:64px;text-align:right;font-weight:700;color:#181018}
+        .item-meta{font-size:10px;color:#4f4350;margin-top:2px;white-space:normal}
+        .item-total{text-align:right;font-weight:800;color:#181018;white-space:nowrap}
         .item-note{font-size:10px;color:#4f4350;margin-top:2px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
         .tax-note{font-size:10px;color:#555;margin-top:1px;white-space:normal}
         .summary-box{border-top:1px dashed #9b8c9b;border-bottom:1px dashed #9b8c9b;margin-top:8px;padding:7px 0}
@@ -1931,7 +1931,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
               {receiptShop.phone && <p className="sub text-xs text-[var(--text-muted)]">โทร. {receiptShop.phone}</p>}
               {receiptShop.email && <p className="sub text-xs text-[var(--text-muted)]">{receiptShop.email}</p>}
               {receiptShop.taxId && <p className="sub text-xs text-[var(--text-muted)]">เลขผู้เสียภาษี {receiptShop.taxId}</p>}
-              <span className="doc-type block mt-2 border-y border-gray-900 py-1 text-sm font-black text-gray-950">
+              <span className="doc-type block mt-2 border-y border-gray-900 py-1 text-sm font-black leading-tight whitespace-pre-line text-gray-950">
                 {receiptTitle}
               </span>
             </div>
@@ -1953,48 +1953,44 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
             </div>
 
             <div>
-              <div className="table-head flex text-[10px] text-[var(--text-muted)] font-bold mb-1 px-0.5 border-b border-gray-900 pb-1">
+              <div className="table-head grid grid-cols-[minmax(0,1fr)_5.5rem] gap-2 text-[10px] text-[var(--text-muted)] font-bold mb-1 px-0.5 border-b border-gray-900 pb-1">
                 <span className="flex-1">รายการ / Item</span>
-                <span className="w-8 text-center">จำนวน / Qty</span>
-                <span className="w-16 text-right">ราคา / Price</span>
-                <span className="w-16 text-right">รวม / Total</span>
+                <span className="text-right">จำนวน x ราคา / Amount</span>
               </div>
               {receipt.items.map((item, i) => (
-                <div key={i} className="item-row flex text-xs py-1.5 border-b border-[var(--border-light)] last:border-0 px-0.5">
-                  <div className="item-name flex-1 min-w-0 pr-1">
-                    <p className="font-medium break-words">{item.name}</p>
-                    {item.sku && <p className="text-[10px] text-[var(--text-muted)]">{item.sku}</p>}
-                    {receipt.showVatOnReceipt && item.taxType === 'non_vat' && <p className="tax-note text-[10px] text-[var(--text-muted)]">ไม่นับ VAT / Non-VAT</p>}
-                    {item.note?.trim() && <p className="item-note text-[10px] text-purple-700 whitespace-pre-wrap break-words">หมายเหตุ / Note: {item.note.trim()}</p>}
+                <div key={i} className="item-row text-xs py-2 border-b border-[var(--border-light)] last:border-0 px-0.5">
+                  <div className="item-main grid grid-cols-[minmax(0,1fr)_5.5rem] gap-2">
+                    <div className="item-name min-w-0 pr-1">
+                      <p className="font-medium break-words">{item.name}</p>
+                      {item.sku && <p className="text-[10px] text-[var(--text-muted)]">{item.sku}</p>}
+                      <p className="item-meta text-[10px] text-[var(--text-muted)]">{item.quantity} x {formatCurrency(item.price)}</p>
+                      {receipt.showVatOnReceipt && item.taxType === 'non_vat' && <p className="tax-note text-[10px] text-[var(--text-muted)]">ไม่นับ VAT / Non-VAT</p>}
+                      {item.note?.trim() && <p className="item-note text-[10px] text-purple-700 whitespace-pre-wrap break-words">หมายเหตุ / Note: {item.note.trim()}</p>}
+                    </div>
+                    <span className="item-total text-right font-bold whitespace-nowrap">{formatCurrency(item.price * item.quantity)}</span>
                   </div>
-                  <span className="item-qty w-8 text-center text-[var(--text-secondary)]">{item.quantity}</span>
-                  <span className="item-price w-16 text-right text-[var(--text-secondary)]">{formatCurrency(item.price)}</span>
-                  <span className="item-total w-16 text-right font-semibold">{formatCurrency(item.price * item.quantity)}</span>
                 </div>
               ))}
             </div>
 
             <div className="summary-box space-y-1.5 text-xs border-y border-dashed border-gray-300 py-2 mt-3">
-              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รวมเป็นเงิน / Subtotal</span><span>{formatCurrency(receipt.subtotal)}</span></div>
+              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">{receipt.showVatOnReceipt ? 'รวมเป็นเงิน / Subtotal' : 'รวมเป็นเงิน / Total'}</span><span>{formatCurrency(receipt.subtotal)}</span></div>
               {receipt.discountAmt > 0 && <div className="row flex justify-between text-emerald-600"><span>ส่วนลด / Discount</span><span>-{formatCurrency(receipt.discountAmt)}</span></div>}
               {receipt.showVatOnReceipt && (
                 <>
-                  <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">มูลค่าก่อน VAT / Before VAT</span><span>{formatCurrency(receipt.preVatAmount)}</span></div>
-                  <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">VAT 7%</span><span>{formatCurrency(receipt.vatAmt)}</span></div>
+                  <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">มูลค่าก่อน VAT / Amount before VAT</span><span>{formatCurrency(receipt.preVatAmount)}</span></div>
+                  <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">ภาษีมูลค่าเพิ่ม 7% / VAT 7%</span><span>{formatCurrency(receipt.vatAmt)}</span></div>
                 </>
               )}
               {!isDeposit && receipt.depositAmt > 0 && (
                 <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">หักมัดจำ / Deposit deducted</span><span>-{formatCurrency(receipt.depositAmt)}</span></div>
               )}
               <div className="total-row flex justify-between font-bold text-base pt-2 border-t border-gray-300 mt-1">
-                <span>รวมทั้งสิ้น / Grand Total</span><span className="text-[var(--pink-600)]">{formatCurrency(isDeposit ? receipt.total : receipt.remaining)}</span>
+                <span>{!isDeposit && receipt.depositAmt > 0 ? 'ยอดที่ต้องชำระ / Amount Due' : 'รวมทั้งสิ้น / Grand Total'}</span><span className="text-[var(--pink-600)]">{formatCurrency(isDeposit ? receipt.total : receipt.remaining)}</span>
               </div>
 
               {isDeposit && (
                 <div className="pt-2 border-t border-dashed border-amber-200 space-y-1">
-                  <div className="flex justify-between text-xs text-[var(--text-secondary)]">
-                    <span>ยอดเต็ม / Full amount</span><span className="font-semibold">{formatCurrency(receipt.total)}</span>
-                  </div>
                   <div className="deposit-row flex justify-between font-bold text-amber-700">
                     <span>รับมัดจำ / Deposit paid</span><span>{formatCurrency(receipt.depositAmt)}</span>
                   </div>
@@ -2004,7 +2000,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                 </div>
               )}
 
-              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รับเงิน / Paid</span><span>{formatCurrency(receipt.paidAmount)}</span></div>
+              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รับเงิน / Amount Paid</span><span>{formatCurrency(receipt.paidAmount)}</span></div>
               {receipt.payMethod === 'cash' && (
                 <div className="change-row flex justify-between font-semibold text-emerald-600"><span>เงินทอน / Change</span><span>{formatCurrency(receipt.change)}</span></div>
               )}
