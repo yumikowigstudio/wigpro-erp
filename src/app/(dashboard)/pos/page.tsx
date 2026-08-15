@@ -791,7 +791,25 @@ export default function POSPage() {
       receiptInfo,
       customerId: custId, customerName: custName,
       ...(custPhone ? { customerPhone: custPhone } : {}),
-      items: cart.map(c => ({ productId: c.type === 'product' ? c.id : undefined, serviceId: c.type === 'service' ? c.id : undefined, name: c.name, isWigProduct: c.isWigProduct ?? false, wigType: c.wigType, quantity: c.quantity, unitPrice: c.price, originalUnitPrice: c.originalPrice ?? c.price, isPriceEdited: (c.originalPrice ?? c.price) !== c.price, discountAmount: lineDiscount(c), taxType: 'vat', taxAmount: lineTax(c), taxIncluded: true, total: lineSubtotal(c), note: c.note?.trim() || undefined })),
+      items: cart.map(c => {
+        const itemNote = c.note?.trim()
+        return {
+          ...(c.type === 'product' ? { productId: c.id } : { serviceId: c.id }),
+          name: c.name,
+          isWigProduct: c.isWigProduct ?? false,
+          wigType: c.wigType ?? null,
+          quantity: c.quantity,
+          unitPrice: c.price,
+          originalUnitPrice: c.originalPrice ?? c.price,
+          isPriceEdited: (c.originalPrice ?? c.price) !== c.price,
+          discountAmount: lineDiscount(c),
+          taxType: 'vat',
+          taxAmount: lineTax(c),
+          taxIncluded: true,
+          total: lineSubtotal(c),
+          note: itemNote || null,
+        }
+      }),
       preVatAmount,
       taxAmount: vatAmt,
       taxIncluded: true,

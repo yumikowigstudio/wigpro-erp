@@ -90,20 +90,34 @@ export async function getCollection<T>(
   return snap.docs.map((d) => ({ id: d.id, ...convertTimestamps(d.data()) })) as T[]
 }
 
-// Generic add document — strips undefined before writing (Firestore rejects undefined)
+// Firestore rejects undefined values, including nested fields inside arrays.
+function stripUndefinedDeep(value: unknown): unknown {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (value instanceof Date || value instanceof Timestamp) return value
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => stripUndefinedDeep(item))
+      .filter((item) => item !== undefined)
+  }
+  if (typeof value === 'object') {
+    const clean: Record<string, unknown> = {}
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      const cleanedValue = stripUndefinedDeep(nestedValue)
+      if (cleanedValue !== undefined) clean[key] = cleanedValue
+    }
+    return clean
+  }
+  return value
+}
+
+// Generic add document
 export async function addDocument<T extends object>(
   collectionName: string,
   data: Omit<T, 'id'>
 ): Promise<string> {
   const colRef = collection(db, collectionName)
-  // Build a clean object with no undefined values
-  const raw = data as Record<string, unknown>
-  const clean: Record<string, unknown> = {}
-  for (const key of Object.keys(raw)) {
-    if (raw[key] !== undefined) {
-      clean[key] = raw[key]
-    }
-  }
+  const clean = stripUndefinedDeep(data) as Record<string, unknown>
   const docRef = await addDoc(colRef, {
     ...clean,
     createdAt: serverTimestamp(),
@@ -119,8 +133,9 @@ export async function updateDocument(
   data: Partial<DocumentData>
 ): Promise<void> {
   const docRef = doc(db, collectionName, id)
+  const clean = stripUndefinedDeep(data) as Record<string, unknown>
   await updateDoc(docRef, {
-    ...data,
+    ...clean,
     updatedAt: serverTimestamp(),
   })
 }
