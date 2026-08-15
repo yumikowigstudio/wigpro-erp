@@ -1072,7 +1072,7 @@ export default function POSPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-bold text-[var(--text-primary)] leading-snug break-words">{item.name}</p>
-                      <div className="mt-2 grid grid-cols-[7.5rem_minmax(0,1fr)] gap-2">
+                      <div className="mt-2 grid grid-cols-[6.75rem_minmax(0,1fr)] gap-2">
                         <label className="relative block">
                           <span className="absolute left-2 top-1 text-[9px] font-semibold text-[var(--text-muted)]">ราคา</span>
                           <input
@@ -1087,13 +1087,14 @@ export default function POSPage() {
                         </label>
                         <label className="relative block min-w-0">
                           <span className="absolute left-2 top-1 text-[9px] font-semibold text-[var(--text-muted)]">หมายเหตุ</span>
-                          <input
+                          <textarea
                             value={item.note ?? ''}
                             onChange={e => setItemNote(item.id, item.type, e.target.value)}
-                            maxLength={180}
-                            placeholder="เช่น สี, เงื่อนไข, รายละเอียดท้ายบิล"
+                            rows={item.note && item.note.length > 48 ? 3 : 2}
+                            maxLength={360}
+                            placeholder="เช่น สี, เงื่อนไข, ขนาด, รายละเอียดงาน"
                             aria-label={`หมายเหตุ ${item.name}`}
-                            className="h-10 w-full rounded-lg border border-[var(--border-light)] bg-[var(--bg-base)] px-2 pb-1 pt-4 text-xs text-[var(--text-primary)] outline-none transition focus:border-[var(--pink-300)] focus:bg-white focus:ring-2 focus:ring-[var(--pink-100)]"
+                            className="min-h-10 w-full resize-y rounded-lg border border-[var(--border-light)] bg-[var(--bg-base)] px-2 pb-1.5 pt-4 text-xs leading-snug text-[var(--text-primary)] outline-none transition focus:border-[var(--pink-300)] focus:bg-white focus:ring-2 focus:ring-[var(--pink-100)]"
                           />
                         </label>
                       </div>
@@ -1892,14 +1893,14 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
         .item-name p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important}
         .item-meta{font-size:10px;color:#4f4350;margin-top:2px;white-space:normal}
         .item-total{text-align:right;font-weight:800;color:#181018;white-space:nowrap}
-        .item-note{font-size:10px;color:#4f4350;margin-top:2px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+        .item-note{font-size:10px;color:#4f4350;margin-top:3px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;border-left:2px solid #e8d9e8;padding-left:5px}
         .tax-note{font-size:10px;color:#555;margin-top:1px;white-space:normal}
         .summary-box{border-top:1px dashed #9b8c9b;border-bottom:1px dashed #9b8c9b;margin-top:8px;padding:7px 0}
         .total-row{display:flex;justify-content:space-between;font-size:16px;font-weight:900;padding:7px 0;border-top:1px solid #181018;margin-top:5px}
         .deposit-row{display:flex;justify-content:space-between;font-size:12px;font-weight:800;padding:3px 0;color:#181018}
         .remain-row{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;color:#181018;font-weight:800}
         .change-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;color:#181018;font-weight:700}
-        .note-box{border:1px solid #181018;border-radius:2px;margin-top:10px;padding:7px 8px;font-size:10.5px;color:#181018;text-align:left;white-space:pre-wrap}
+        .note-box{border:1px solid #181018;border-radius:2px;margin-top:10px;padding:7px 8px;font-size:10.5px;color:#181018;text-align:left;white-space:pre-wrap;line-height:1.45;overflow-wrap:anywhere;word-break:break-word}
         .signature{margin-top:22px;text-align:center;font-size:10.5px;color:#181018}
         .signature-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px;text-align:center;font-size:10.5px;color:#181018}
         .signature-line{border-top:1px solid #181018;width:150px;margin:0 auto 4px}
@@ -1971,7 +1972,12 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                       {item.sku && <p className="text-[10px] text-[var(--text-muted)]">{item.sku}</p>}
                       <p className="item-meta text-[10px] text-[var(--text-muted)]">{item.quantity} x {formatCurrency(item.price)}</p>
                       {receipt.showVatOnReceipt && item.taxType === 'non_vat' && <p className="tax-note text-[10px] text-[var(--text-muted)]">ไม่นับ VAT / Non-VAT</p>}
-                      {item.note?.trim() && <p className="item-note text-[10px] text-purple-700 whitespace-pre-wrap break-words">หมายเหตุ / Note: {item.note.trim()}</p>}
+                      {item.note?.trim() && (
+                        <p className="item-note text-[10px] text-purple-700 whitespace-pre-wrap break-words">
+                          <span className="font-semibold">หมายเหตุ / Note:</span>{' '}
+                          {item.note.trim()}
+                        </p>
+                      )}
                     </div>
                     <span className="item-total text-right font-bold whitespace-nowrap">{formatCurrency(item.price * item.quantity)}</span>
                   </div>

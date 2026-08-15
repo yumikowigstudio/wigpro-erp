@@ -429,9 +429,9 @@ export default function DocumentsPage() {
         .items{margin-top:8px}.table-head{display:grid;grid-template-columns:1fr 86px;gap:8px;border-bottom:1px solid #181018;padding:0 2px 4px;text-align:left;font-size:10.5px;color:#4f4350;font-weight:700}.table-head span:last-child{text-align:right}
         .item-row{font-size:11.5px;padding:7px 2px;border-bottom:1px solid #eee}.item-main{display:grid;grid-template-columns:minmax(0,1fr) 86px;gap:8px;align-items:start}.item-title{font-weight:700;overflow-wrap:anywhere}.item-name{min-width:0}.item-meta{font-size:10px;color:#4f4350;margin-top:2px;line-height:1.35}.item-total{text-align:right;font-weight:800;white-space:nowrap;color:#181018}
         .cancel{color:#b91c1c;text-align:center;font-weight:800;margin:8px 0;border:1px solid #b91c1c;padding:4px}
-        .line-note{font-size:10px;color:#7c4a7c;margin-top:2px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+        .line-note{font-size:10px;color:#7c4a7c;margin-top:3px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;border-left:2px solid #e8d9e8;padding-left:5px}
         .summary-box{border-top:1px dashed #9b8c9b;border-bottom:1px dashed #9b8c9b;margin-top:8px;padding:7px 0}
-        .note-box{border:1px solid #181018;border-radius:2px;margin-top:10px;padding:7px 8px;font-size:10.5px;color:#181018;text-align:left;white-space:pre-wrap}
+        .note-box{border:1px solid #181018;border-radius:2px;margin-top:10px;padding:7px 8px;font-size:10.5px;color:#181018;text-align:left;white-space:pre-wrap;line-height:1.45;overflow-wrap:anywhere;word-break:break-word}
         .signature{margin-top:22px;text-align:center;font-size:10.5px;color:#181018}.signature-line{border-top:1px solid #181018;width:150px;margin:0 auto 4px}
         .signature-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px;text-align:center;font-size:10.5px;color:#181018}.signature-name{font-weight:700;margin-top:2px;white-space:normal;overflow-wrap:anywhere}
         @media print{@page{margin:5mm 8mm}body{padding:0}}
@@ -714,7 +714,7 @@ export default function DocumentsPage() {
                       <p className="font-medium truncate">{item.name}</p>
                       <p className="text-xs text-[var(--text-muted)]">{formatCurrency(item.unitPrice)}</p>
                       {(activeSale.showVatOnReceipt ?? ((activeSale.taxAmount ?? 0) > 0)) && item.taxType === 'non_vat' && <p className="text-[11px] text-amber-600">ไม่นับ VAT</p>}
-                      {item.note && <p className="text-[11px] text-purple-700 whitespace-pre-line">หมายเหตุ: {item.note}</p>}
+                      {item.note && <p className="text-[11px] text-purple-700 whitespace-pre-wrap break-words">หมายเหตุ: {item.note}</p>}
                     </div>
                     <span className="text-center">{item.quantity}</span>
                     <span className="text-right font-semibold">{formatCurrency(item.total)}</span>
