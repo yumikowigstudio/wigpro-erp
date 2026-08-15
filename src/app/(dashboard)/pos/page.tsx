@@ -443,8 +443,11 @@ export default function POSPage() {
   // หักมัดจำเดิม (เฉพาะโหมดขาย) — หักได้ไม่เกินยอดบิล
   const depositDeduct = mode === 'sale' && appliedDeposit ? Math.min(appliedDeposit.depositAmount ?? 0, total) : 0
   const netDue      = total - depositDeduct   // ยอดที่ต้องชำระจริงหลังหักมัดจำ
-  const change      = mode === 'sale' ? Math.max((parseFloat(cash) || 0) - netDue, 0) : Math.max((parseFloat(cash) || 0) - depositAmt, 0)
   const payNow      = mode === 'sale' ? netDue : depositAmt
+  const rawCashAmount = parseFloat(cash)
+  const hasCashInput = cash.trim() !== ''
+  const cashReceived = hasCashInput && Number.isFinite(rawCashAmount) ? rawCashAmount : payNow
+  const change      = payMethod === 'cash' ? Math.max(cashReceived - payNow, 0) : 0
   const paymentMethodLabel = payMethods.find(p => p.id === payMethod)?.label ?? payMethod
   const cartHasWigProduct = cart.some(c => c.type === 'product' && c.isWigProduct)
   const canDiscount = hasPermission('action.sales.discount')
@@ -485,7 +488,10 @@ export default function POSPage() {
   const requestPaymentConfirm = async (action: PosMode) => {
     setPosMsg(null)
     if (action === 'sale' && cart.length === 0) return
-    if (action === 'deposit' && !isDepositReady) return
+    if (action === 'deposit' && !isDepositReady) {
+      setPosMsg({ type: 'err', text: 'กรุณาระบุยอดมัดจำก่อนบันทึก เช่น กด 30%, 50%, 70%, เต็มจำนวน หรือพิมพ์ยอดเอง' })
+      return
+    }
     if ((action === 'deposit' || cartHasWigProduct) && !customerName.trim()) {
       setPosMsg({ type: 'err', text: 'กรุณาเลือกลูกค้าก่อนบันทึก เพื่อผูกมัดจำ/ใบสั่งผลิตกับประวัติลูกค้า' })
       return
@@ -494,7 +500,7 @@ export default function POSPage() {
       setPosMsg({ type: 'err', text: 'กรุณารออัปโหลดสลิปให้เสร็จก่อน' })
       return
     }
-    if (payMethod === 'cash' && payNow > 0 && (parseFloat(cash) || 0) < payNow) {
+    if (payMethod === 'cash' && hasCashInput && payNow > 0 && cashReceived < payNow) {
       setPosMsg({ type: 'err', text: 'กรุณาระบุเงินสดที่รับมาให้ครบยอด' })
       return
     }
@@ -589,7 +595,7 @@ export default function POSPage() {
       taxAmount: vatAmt, totalAmount: total,
       taxIncluded: true, showVatOnReceipt,
       payments: [paymentRecord],
-      paidAmount: payMethod === 'cash' ? (parseFloat(cash) || netDue) : netDue,
+      paidAmount: payMethod === 'cash' ? cashReceived : netDue,
       changeAmount: change,
       status: paymentConfirmed ? 'completed' : 'pending',
       paymentStatus: paymentConfirmed ? 'confirmed' : 'pending',
@@ -720,7 +726,7 @@ export default function POSPage() {
     }
 
     // Show receipt after confirmed save
-    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', customerPhone: customerPhone.trim() || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || netDue) : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
+    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', customerPhone: customerPhone.trim() || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setCustomerPhone(''); setReceiptNote('')
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     setSlipUrl(''); setAppliedDepositId(''); setCouponCode(''); setAppliedCoupon('')
@@ -733,7 +739,11 @@ export default function POSPage() {
 
   /* ─── รับมัดจำ ─── */
   const handleDeposit = async () => {
-    if (cart.length === 0 || depositAmt <= 0 || saving) return
+    if (cart.length === 0 || saving) return
+    if (depositAmt <= 0) {
+      setPosMsg({ type: 'err', text: 'กรุณาระบุยอดมัดจำก่อนบันทึก' })
+      return
+    }
     if (!companyId || companyId === 'demo_company' || !branchId || branchId === 'demo_branch') {
       setPosMsg({ type: 'err', text: 'ระบบกำลังโหลดข้อมูลผู้ใช้ กรุณารอสักครู่แล้วลองใหม่' })
       return
@@ -841,7 +851,7 @@ export default function POSPage() {
     }
 
     // Show receipt immediately — ไม่ต้องรอ
-    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, customerPhone: custPhone || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: createdDepositWorkOrder ? 1 : 0, receiverName: cashierName })
+    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, customerPhone: custPhone || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: createdDepositWorkOrder ? 1 : 0, receiverName: cashierName })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setCustomerPhone(''); setDepositInput(''); setPickupDate(''); setDepositNote(''); setReceiptNote('')
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     setSlipUrl(''); setCouponCode(''); setAppliedCoupon('')
@@ -1637,7 +1647,7 @@ export default function POSPage() {
               {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</> : `ตรวจสอบและบันทึกขาย · ${formatCurrency(payNow)}`}
             </button>
           ) : (
-            <button onClick={() => requestPaymentConfirm('deposit')} disabled={cart.length === 0 || !isDepositReady || saving} title={discountNeedsApproval ? 'ต้องขออนุมัติส่วนลดก่อนบันทึก' : 'รับมัดจำ'}
+            <button onClick={() => requestPaymentConfirm('deposit')} disabled={cart.length === 0 || saving} title={discountNeedsApproval ? 'ต้องขออนุมัติส่วนลดก่อนบันทึก' : 'รับมัดจำ'}
               className="sticky bottom-0 z-10 w-full py-3.5 bg-gradient-to-r from-amber-400 to-orange-400 text-white font-bold rounded-2xl shadow-lg shadow-amber-200 active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2">
               {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</>
                 : isDepositReady ? <><Wallet className="w-4 h-4" />ตรวจสอบและบันทึกมัดจำ · {formatCurrency(depositAmt)}</>
