@@ -12,7 +12,7 @@ import { invId } from '@/lib/stock'
 import { uploadToCloudinary } from '@/lib/cloudinary'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
-import { PaymentMethod, PaymentStatus, Sale, SaleStatus } from '@/types'
+import { Deposit, DepositStatus, PaymentMethod, PaymentStatus, Sale, SaleStatus } from '@/types'
 import Link from 'next/link'
 
 const docTypeConfig = {
@@ -41,6 +41,13 @@ const saleStatusConfig: Record<SaleStatus, { label: string; color: string }> = {
   completed: { label: 'ปกติ', color: 'bg-emerald-50 text-emerald-700' },
   pending:   { label: 'รอชำระ', color: 'bg-amber-50 text-amber-700' },
   returned:  { label: 'คืนสินค้า', color: 'bg-blue-50 text-blue-700' },
+  cancelled: { label: 'ยกเลิก', color: 'bg-red-50 text-red-700' },
+}
+
+const depositStatusConfig: Record<DepositStatus, { label: string; color: string }> = {
+  pending:   { label: 'รอมัดจำ', color: 'bg-amber-50 text-amber-700' },
+  deposited: { label: 'มัดจำแล้ว', color: 'bg-blue-50 text-blue-700' },
+  paid_full: { label: 'ชำระครบ', color: 'bg-emerald-50 text-emerald-700' },
   cancelled: { label: 'ยกเลิก', color: 'bg-red-50 text-red-700' },
 }
 
@@ -76,6 +83,7 @@ interface DocItem {
   sourceType:   'receipt' | 'deposit' | 'work_order'
   branchName?:   string
   sale?:        Sale
+  deposit?:     Deposit
 }
 
 export default function DocumentsPage() {
@@ -131,17 +139,19 @@ export default function DocumentsPage() {
     const q2 = query(collection(db, COLLECTIONS.DEPOSITS), where('companyId', '==', companyId), where('branchId', '==', branchId))
     const u2 = onSnapshot(q2, snap => {
       deposits = snap.docs.map(d => {
-        const data = convertTimestamps(d.data())
+        const data = convertTimestamps(d.data()) as Omit<Deposit, 'id'>
+        const deposit = { id: d.id, ...data } as Deposit
         return {
           id: d.id,
           type: 'deposit_receipt' as const,
-          docNo: data.depositNo ?? d.id,
-          customerName: data.customerName ?? '-',
-          amount: data.depositAmount ?? 0,
-          createdAt: data.createdAt instanceof Date ? data.createdAt : new Date(),
+          docNo: deposit.depositNo ?? d.id,
+          customerName: deposit.customerName ?? '-',
+          amount: deposit.depositAmount ?? 0,
+          createdAt: deposit.createdAt instanceof Date ? deposit.createdAt : new Date(),
           sourceId: d.id,
           sourceType: 'deposit' as const,
-          branchName: data.branchName,
+          branchName: deposit.branchName,
+          deposit,
         }
       })
       merge(); done()
@@ -379,6 +389,40 @@ export default function DocumentsPage() {
     }
   }
 
+  const cancelDeposit = async (deposit: Deposit) => {
+    if (deposit.status === 'cancelled') {
+      setMessage('ใบมัดจำนี้ถูกยกเลิกแล้ว')
+      return
+    }
+    if (deposit.status === 'paid_full') {
+      setMessage('ใบมัดจำนี้ชำระครบแล้ว หากต้องการแก้ไขให้จัดการจากประวัติการรับชำระ')
+      return
+    }
+    const reason = window.prompt(`ระบุเหตุผลการยกเลิกมัดจำ ${deposit.depositNo}`)?.trim()
+    if (!reason) {
+      setMessage('กรุณาระบุเหตุผลการยกเลิกมัดจำ')
+      return
+    }
+    if (!await ensurePermission('action.sales.cancelBill', 'ยกเลิกมัดจำ')) return
+    setSaving(true)
+    setMessage('')
+    try {
+      await updateDoc(doc(db, COLLECTIONS.DEPOSITS, deposit.id), {
+        status: 'cancelled',
+        cancelReason: reason,
+        cancelledBy: userId,
+        cancelledByName: userName || null,
+        cancelledAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      setMessage(`ยกเลิกมัดจำ ${deposit.depositNo} แล้ว`)
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'ยกเลิกมัดจำไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const printSale = (sale: Sale) => {
     const win = window.open('', '_blank', 'width=420,height=720,scrollbars=yes')
     if (!win) { setMessage('กรุณาอนุญาต popup เพื่อพิมพ์'); return }
@@ -514,6 +558,12 @@ export default function DocumentsPage() {
         </div>
       )}
 
+      {message && !activeSale && (
+        <div className="rounded-2xl border border-[var(--border-light)] bg-white px-4 py-3 text-sm text-[var(--text-secondary)] shadow-sm">
+          {message}
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl border border-[var(--border-light)] p-4 flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
@@ -553,6 +603,8 @@ export default function DocumentsPage() {
           {filtered.map(item => {
             const cfg = docTypeConfig[item.type]
             const saleStatus = item.sale?.status ? saleStatusConfig[item.sale.status] : null
+            const depositStatus = item.deposit?.status ? depositStatusConfig[item.deposit.status] : null
+            const isCancelled = item.sale?.status === 'cancelled' || item.deposit?.status === 'cancelled'
             const payStatus = item.sale
               ? paymentStatusConfig[item.sale.paymentStatus ?? (item.sale.status === 'completed' ? 'confirmed' : 'pending')]
               : null
@@ -567,6 +619,7 @@ export default function DocumentsPage() {
                     <p className="font-mono text-sm font-bold text-[var(--pink-600)]">{item.docNo}</p>
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>{cfg.label}</span>
                     {saleStatus && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${saleStatus.color}`}>{saleStatus.label}</span>}
+                    {depositStatus && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${depositStatus.color}`}>{depositStatus.label}</span>}
                     {payStatus && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${payStatus.color}`}>{payStatus.label}</span>}
                   </div>
                   <p className="text-xs text-[var(--text-muted)] mt-0.5">
@@ -574,7 +627,7 @@ export default function DocumentsPage() {
                   </p>
                 </div>
                 <p className={`font-semibold text-sm hidden sm:block shrink-0 ${
-                  item.sale?.status === 'cancelled'
+                  isCancelled
                     ? 'text-red-500 line-through decoration-red-400 decoration-2'
                     : 'text-[var(--text-primary)]'
                 }`}>
@@ -596,6 +649,12 @@ export default function DocumentsPage() {
                     <button onClick={() => printSale(item.sale!)}
                       className="p-2 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)] hover:text-blue-600 transition-all" title="พิมพ์">
                       <Printer className="w-4 h-4" />
+                    </button>
+                  )}
+                  {item.deposit && item.deposit.status !== 'cancelled' && item.deposit.status !== 'paid_full' && (
+                    <button onClick={() => cancelDeposit(item.deposit!)} disabled={saving}
+                      className="p-2 rounded-lg hover:bg-red-50 text-[var(--text-muted)] hover:text-red-600 transition-all disabled:opacity-40" title={canCancelBill ? 'ยกเลิกมัดจำ' : 'ต้องขอสิทธิ์ยกเลิกบิล'}>
+                      <X className="w-4 h-4" />
                     </button>
                   )}
                   <button disabled

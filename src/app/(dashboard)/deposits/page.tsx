@@ -9,6 +9,7 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
 import { Deposit } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
+import { usePermissionAction } from '@/hooks/usePermissionAction'
 
 type DepositStatus = 'pending' | 'deposited' | 'paid_full' | 'cancelled'
 
@@ -186,7 +187,8 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
 
 export default function DepositsPage() {
   const searchParams = useSearchParams()
-  const { companyId, branchId, userId, currentBranch } = useAuth()
+  const { companyId, branchId, userId, userName, currentBranch } = useAuth()
+  const { ensurePermission } = usePermissionAction()
   const [deposits, setDeposits]         = useState<Deposit[]>([])
   const [loading, setLoading]           = useState(true)
   const [search, setSearch]             = useState('')
@@ -194,6 +196,7 @@ export default function DepositsPage() {
   const [showModal, setShowModal]       = useState(false)
   const [showPayModal, setShowPayModal] = useState<Deposit | null>(null)
   const [saving, setSaving]             = useState(false)
+  const [message, setMessage]           = useState('')
   const [form, setForm] = useState({ customerName: '', itemName: '', totalAmount: '', depositAmount: '', notes: '' })
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('cash')
@@ -287,6 +290,40 @@ export default function DepositsPage() {
     finally { setSaving(false) }
   }
 
+  const cancelDeposit = async (deposit: Deposit) => {
+    if (deposit.status === 'cancelled') {
+      setMessage('ใบมัดจำนี้ถูกยกเลิกแล้ว')
+      return
+    }
+    if (deposit.status === 'paid_full') {
+      setMessage('ใบมัดจำนี้ชำระครบแล้ว หากต้องการแก้ไขให้จัดการจากประวัติการรับชำระ')
+      return
+    }
+    const reason = window.prompt(`ระบุเหตุผลการยกเลิกมัดจำ ${deposit.depositNo}`)?.trim()
+    if (!reason) {
+      setMessage('กรุณาระบุเหตุผลการยกเลิกมัดจำ')
+      return
+    }
+    if (!await ensurePermission('action.sales.cancelBill', 'ยกเลิกมัดจำ')) return
+    setSaving(true)
+    setMessage('')
+    try {
+      await updateDoc(doc(db, COLLECTIONS.DEPOSITS, deposit.id), {
+        status: 'cancelled',
+        cancelReason: reason,
+        cancelledBy: userId,
+        cancelledByName: userName || null,
+        cancelledAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      setMessage(`ยกเลิกมัดจำ ${deposit.depositNo} แล้ว`)
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'ยกเลิกมัดจำไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const printPickupReceipt = (dep: Deposit, paid: number, method: string) => {
     const methodLabel: Record<string,string> = { cash:'เงินสด', transfer:'โอนเงิน', card:'บัตรเครดิต/เดบิต', promptpay:'พร้อมเพย์' }
     const change = Math.max(paid - dep.remainingAmount, 0)
@@ -369,6 +406,12 @@ export default function DepositsPage() {
           )
         })}
       </div>
+
+      {message && (
+        <div className="rounded-2xl border border-[var(--border-light)] bg-white px-4 py-3 text-sm text-[var(--text-secondary)] shadow-sm">
+          {message}
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-4 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -502,13 +545,9 @@ export default function DepositsPage() {
                           )}
                           {(dep.status === 'pending' || dep.status === 'deposited') && (
                             <button
-                              onClick={() => {
-                                if (!confirm(`ยืนยันยกเลิกมัดจำ ${dep.depositNo}?`)) return
-                                updateDoc(doc(db, COLLECTIONS.DEPOSITS, dep.id), {
-                                  status: 'cancelled', updatedAt: serverTimestamp(),
-                                }).catch(console.error)
-                              }}
-                              className="px-2.5 py-1 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium hover:bg-red-100 transition-all whitespace-nowrap">
+                              onClick={() => cancelDeposit(dep)}
+                              disabled={saving}
+                              className="px-2.5 py-1 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium hover:bg-red-100 transition-all whitespace-nowrap disabled:opacity-40">
                               ยกเลิก
                             </button>
                           )}

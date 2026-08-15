@@ -506,6 +506,10 @@ export interface Deposit {
   receiptNote?: string
   pickupDate?: string
   slipUrl?: string
+  cancelReason?: string
+  cancelledBy?: string
+  cancelledByName?: string
+  cancelledAt?: Date
   createdByName?: string
   receivedBy?: string
   receivedByName?: string
