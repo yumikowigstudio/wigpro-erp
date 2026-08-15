@@ -8,6 +8,7 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
 import { getBranchStock, adjustBranchStock, invId } from '@/lib/stock'
 import { useAuth } from '@/hooks/useAuth'
+import { writeActivityLog } from '@/lib/activityLog'
 
 interface Branch { id: string; name: string; code?: string }
 interface Prod { id: string; name: string; sku?: string; stockQty?: number; costPrice?: number }
@@ -42,7 +43,7 @@ const transferItemName = (item: TItem, products: Prod[]) =>
 
 export default function TransfersPage() {
   const searchParams = useSearchParams()
-  const { companyId, branchId, userId } = useAuth()
+  const { companyId, branchId, userId, userName } = useAuth()
   const [branches, setBranches] = useState<Branch[]>([])
   const [products, setProducts] = useState<Prod[]>([])
   const [inv, setInv] = useState<Record<string, number>>({})   // key `${pid}_${bid}` -> qty
@@ -98,6 +99,18 @@ export default function TransfersPage() {
         await adjustBranchStock({ companyId, productId: p.id, productName: p.name, branchId: bid,
           delta: p.stockQty ?? 0, type: 'in', costPrice: p.costPrice, referenceType: 'seed', performedBy: userId })
       }
+      await writeActivityLog({
+        companyId,
+        branchId: bid,
+        userId,
+        userName,
+        action: 'stock',
+        module: 'โอนสินค้า',
+        description: `นำสต๊อกเริ่มต้นเข้าสาขา ${branchName(bid)} ${products.length} รายการ`,
+        recordId: bid,
+        recordType: 'branch_stock_seed',
+        metadata: { branchId: bid, branchName: branchName(bid), itemCount: products.length },
+      })
       setMsg({ t: 'ok', m: `นำสต๊อกสินค้าเข้าคลัง "${branchName(bid)}" แล้ว` })
     } catch (e) { setMsg({ t: 'err', m: 'seed ไม่สำเร็จ: ' + (e instanceof Error ? e.message : '') }) }
     finally { setBusy('') }
@@ -116,6 +129,18 @@ export default function TransfersPage() {
             delta: 0, type: 'adjust', costPrice: p.costPrice, referenceType: 'clone', performedBy: userId })
         }
       }
+      await writeActivityLog({
+        companyId,
+        branchId: bid,
+        userId,
+        userName,
+        action: 'stock',
+        module: 'โอนสินค้า',
+        description: `โคลนรายการสินค้าเข้าสาขา ${branchName(bid)} จำนวนเริ่มต้น 0`,
+        recordId: bid,
+        recordType: 'branch_stock_clone',
+        metadata: { branchId: bid, branchName: branchName(bid), itemCount: products.length },
+      })
       setMsg({ t: 'ok', m: `โคลนสินค้าเข้าสาขา "${branchName(bid)}" แล้ว (จำนวน 0)` })
     } catch (e) { setMsg({ t: 'err', m: 'โคลนไม่สำเร็จ: ' + (e instanceof Error ? e.message : '') }) }
     finally { setBusy('') }
@@ -146,7 +171,7 @@ export default function TransfersPage() {
         const qty = Number(r.quantity)
         await adjustBranchStock({ companyId, productId: p.id, productName: p.name, branchId: from, delta: -qty, type: 'transfer_out', costPrice: p.costPrice, referenceType: 'transfer', referenceNo: orderNo, performedBy: userId })
       }
-      await addDoc(collection(db, COLLECTIONS.TRANSFER_ORDERS), {
+      const transferRef = await addDoc(collection(db, COLLECTIONS.TRANSFER_ORDERS), {
         companyId, orderNo, fromBranchId: from, toBranchId: to,
         items: items.map(r => {
           const p = products.find(product => product.id === r.productId)
@@ -162,6 +187,26 @@ export default function TransfersPage() {
           }
         }),
         status: 'in_transit', requestedBy: userId, requestedAt: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      })
+      await writeActivityLog({
+        companyId,
+        branchId: from || branchId,
+        userId,
+        userName,
+        action: 'transfer',
+        module: 'โอนสินค้า',
+        description: `สร้างใบโอน ${orderNo} จาก ${branchName(from)} ไป ${branchName(to)} จำนวน ${items.length} รายการ`,
+        recordId: transferRef.id,
+        recordType: 'transfer_order',
+        metadata: {
+          orderNo,
+          fromBranchId: from,
+          fromBranchName: branchName(from),
+          toBranchId: to,
+          toBranchName: branchName(to),
+          itemCount: items.length,
+          totalQty: items.reduce((sum, item) => sum + Number(item.quantity), 0),
+        },
       })
       setMsg({ t: 'ok', m: `โอนสำเร็จ (${orderNo})` })
       setMsg({ t: 'ok', m: `สร้างใบโอน ${orderNo} แล้ว รอปลายทางตรวจรับก่อนเข้าสต๊อก` })
@@ -201,6 +246,26 @@ export default function TransfersPage() {
         receivedBy: userId,
         items: (order.items ?? []).map(item => ({ ...item, receivedQty: transferQty(item) })),
         updatedAt: serverTimestamp(),
+      })
+      await writeActivityLog({
+        companyId,
+        branchId: order.toBranchId || branchId,
+        userId,
+        userName,
+        action: 'transfer',
+        module: 'โอนสินค้า',
+        description: `ตรวจรับใบโอน ${order.orderNo} เข้าสาขา ${branchName(order.toBranchId)}`,
+        recordId: order.id,
+        recordType: 'transfer_order',
+        metadata: {
+          orderNo: order.orderNo,
+          fromBranchId: order.fromBranchId,
+          fromBranchName: branchName(order.fromBranchId),
+          toBranchId: order.toBranchId,
+          toBranchName: branchName(order.toBranchId),
+          itemCount: order.items?.length ?? 0,
+          totalQty: (order.items ?? []).reduce((sum, item) => sum + transferQty(item), 0),
+        },
       })
       setMsg({ t: 'ok', m: `ตรวจรับใบโอน ${order.orderNo} เรียบร้อย สต๊อกเข้าปลายทางแล้ว` })
     } catch (e) {

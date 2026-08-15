@@ -27,6 +27,7 @@ import {
   serviceTemplateRowsToSheet,
   SERVICE_IMPORT_MAX_ROWS,
 } from '@/lib/serviceImport'
+import { writeActivityLog } from '@/lib/activityLog'
 import {
   Plus, Search, Package, Eye, Edit, X, Loader2,
   Tag, Trash2, ImagePlus, FolderOpen, Download, Upload, FileSpreadsheet, CheckCircle2, AlertCircle,
@@ -219,7 +220,7 @@ function CategoryModal({
 
 /* ─── Main Page ─── */
 export default function ProductsPage() {
-  const { companyId, branchId, userId, branches } = useAuth()
+  const { companyId, branchId, userId, userName, branches } = useAuth()
   const [catalogTab, setCatalogTab] = useState<'products' | 'services'>('products')
   const [products, setProducts]     = useState<Product[]>([])
   const [services, setServices]     = useState<Service[]>([])
@@ -494,6 +495,23 @@ export default function ProductsPage() {
 
       if (ops > 0) await batch.commit()
 
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        userName,
+        action: 'create',
+        module: 'สินค้าและบริการ',
+        description: `นำเข้าสินค้าจาก Excel ${parsed.rows.length} รายการ`,
+        recordType: 'product_import',
+        metadata: {
+          fileName: file.name,
+          imported: parsed.rows.length,
+          skipped: parsed.skipped,
+          categoriesCreated: categoriesToCreate.length,
+        },
+      })
+
       setImportSummary({
         fileName: file.name,
         imported: parsed.rows.length,
@@ -649,6 +667,23 @@ export default function ProductsPage() {
 
       if (ops > 0) await batch.commit()
 
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        userName,
+        action: 'create',
+        module: 'สินค้าและบริการ',
+        description: `นำเข้าบริการจาก Excel ${parsed.rows.length} รายการ`,
+        recordType: 'service_import',
+        metadata: {
+          fileName: file.name,
+          imported: parsed.rows.length,
+          skipped: parsed.skipped,
+          categoriesCreated: categoriesToCreate.length,
+        },
+      })
+
       setServiceImportSummary({
         fileName: file.name,
         imported: parsed.rows.length,
@@ -748,6 +783,26 @@ export default function ProductsPage() {
 
       await batch.commit()
 
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        userName,
+        action: 'create',
+        module: 'สินค้าและบริการ',
+        description: `เพิ่มสินค้า ${form.name.trim()}`,
+        recordId: productRef.id,
+        recordType: 'product',
+        metadata: {
+          name: form.name.trim(),
+          sku: form.sku.trim(),
+          category: form.category || allCategories[0] || 'ทั่วไป',
+          sellingPrice: Number(form.sellingPrice),
+          isMainCatalogBranch,
+          clonedBranchCount: targetBranchIds.length,
+        },
+      })
+
       closeModal()
     } catch (err) {
       console.error(err)
@@ -777,7 +832,7 @@ export default function ProductsPage() {
     setServiceSubmitting(true)
     try {
       const code = serviceForm.code.trim() || `SVC-${String(Date.now()).slice(-6)}`
-      await addDocument<Service>(COLLECTIONS.SERVICES, {
+      const serviceId = await addDocument<Service>(COLLECTIONS.SERVICES, {
         companyId,
         ...buildCatalogScopeFields(branchId, catalogBranchIds, isMainCatalogBranch),
         code,
@@ -794,6 +849,25 @@ export default function ProductsPage() {
         createdAt: new Date(),
         updatedAt: new Date(),
       } as Omit<Service, 'id'>)
+
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        userName,
+        action: 'create',
+        module: 'สินค้าและบริการ',
+        description: `เพิ่มบริการ ${serviceForm.name.trim()}`,
+        recordId: serviceId,
+        recordType: 'service',
+        metadata: {
+          code,
+          name: serviceForm.name.trim(),
+          category: serviceForm.category.trim() || 'บริการทั่วไป',
+          price: Number(serviceForm.price),
+          isMainCatalogBranch,
+        },
+      })
 
       closeServiceModal()
       setCatalogTab('services')

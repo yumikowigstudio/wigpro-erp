@@ -753,6 +753,9 @@ export interface ActivityLog {
   action: string
   module: string
   description: string
+  recordId?: string
+  recordType?: string
+  metadata?: Record<string, unknown>
   ipAddress?: string
   device?: string
   createdAt: Date

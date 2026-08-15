@@ -14,6 +14,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { Deposit, DepositStatus, PaymentMethod, PaymentStatus, Sale, SaleStatus } from '@/types'
 import Link from 'next/link'
+import { writeActivityLog } from '@/lib/activityLog'
 
 const docTypeConfig = {
   quotation:       { label: 'ใบเสนอราคา',     color: 'bg-blue-100 text-blue-700'       },
@@ -222,6 +223,18 @@ export default function DocumentsPage() {
         notes: editForm.notes.trim(),
         updatedAt: serverTimestamp(),
       })
+      await writeActivityLog({
+        companyId,
+        branchId: activeSale.branchId || branchId,
+        userId,
+        userName,
+        action: 'update',
+        module: 'ประวัติบิล',
+        description: `แก้ไขข้อมูลบิล ${activeSale.receiptNo ?? activeSale.id}`,
+        recordId: activeSale.id,
+        recordType: 'sale',
+        metadata: { receiptNo: activeSale.receiptNo, totalAmount: activeSale.totalAmount },
+      })
       setMessage('บันทึกข้อมูลบิลแล้ว')
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'บันทึกไม่สำเร็จ')
@@ -248,6 +261,18 @@ export default function DocumentsPage() {
         status: activeSale.status === 'cancelled' ? 'cancelled' : 'pending',
         updatedAt: serverTimestamp(),
       })
+      await writeActivityLog({
+        companyId,
+        branchId: activeSale.branchId || branchId,
+        userId,
+        userName,
+        action: 'payment',
+        module: 'ประวัติบิล',
+        description: `แนบ/เปลี่ยนสลิปบิล ${activeSale.receiptNo ?? activeSale.id}`,
+        recordId: activeSale.id,
+        recordType: 'sale',
+        metadata: { receiptNo: activeSale.receiptNo, totalAmount: activeSale.totalAmount },
+      })
       setMessage('แนบสลิปแล้ว รอการยืนยันชำระเงิน')
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'อัปโหลดสลิปไม่สำเร็จ')
@@ -272,6 +297,18 @@ export default function DocumentsPage() {
         paymentConfirmedAt: serverTimestamp(),
         status: activeSale.status === 'cancelled' ? 'cancelled' : 'completed',
         updatedAt: serverTimestamp(),
+      })
+      await writeActivityLog({
+        companyId,
+        branchId: activeSale.branchId || branchId,
+        userId,
+        userName,
+        action: 'payment',
+        module: 'ประวัติบิล',
+        description: `ยืนยันชำระเงินบิล ${activeSale.receiptNo ?? activeSale.id}`,
+        recordId: activeSale.id,
+        recordType: 'sale',
+        metadata: { receiptNo: activeSale.receiptNo, totalAmount: activeSale.totalAmount },
       })
       setMessage('ยืนยันการชำระเงินแล้ว')
     } catch (err) {
@@ -379,6 +416,23 @@ export default function DocumentsPage() {
       } catch (commissionErr) {
         console.error('Commission cancel sync error:', commissionErr)
       }
+      await writeActivityLog({
+        companyId,
+        branchId: activeSale.branchId || branchId,
+        userId,
+        userName,
+        action: 'cancel',
+        module: 'ประวัติบิล',
+        description: `ยกเลิกบิล ${activeSale.receiptNo ?? activeSale.id}${restoredQty > 0 ? ` และคืนสต๊อก ${restoredQty} ชิ้น` : ''}`,
+        recordId: activeSale.id,
+        recordType: 'sale',
+        metadata: {
+          receiptNo: activeSale.receiptNo,
+          totalAmount: activeSale.totalAmount,
+          reason: cancelReason.trim(),
+          restoredQty,
+        },
+      })
       setMessage(restoredQty > 0
         ? `ยกเลิกบิลแล้ว และคืนสต๊อก ${restoredQty} ชิ้น`
         : 'ยกเลิกบิลแล้ว')
@@ -414,6 +468,23 @@ export default function DocumentsPage() {
         cancelledByName: userName || null,
         cancelledAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+      })
+      await writeActivityLog({
+        companyId,
+        branchId: deposit.branchId || branchId,
+        userId,
+        userName,
+        action: 'cancel',
+        module: 'มัดจำ',
+        description: `ยกเลิกมัดจำ ${deposit.depositNo ?? deposit.id}`,
+        recordId: deposit.id,
+        recordType: 'deposit',
+        metadata: {
+          depositNo: deposit.depositNo,
+          depositAmount: deposit.depositAmount,
+          remainingAmount: deposit.remainingAmount,
+          reason,
+        },
       })
       setMessage(`ยกเลิกมัดจำ ${deposit.depositNo} แล้ว`)
     } catch (err) {

@@ -18,6 +18,7 @@ import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
 import { adjustBranchStock } from '@/lib/stock'
 import { findCatalogMainBranch, getLegacyBranchStockFallback, isCatalogVisibleInBranch } from '@/lib/catalogScope'
+import { writeActivityLog } from '@/lib/activityLog'
 
 type ProductWithStock = Product & { stockQty?: number }
 type PosMode = 'sale' | 'deposit'
@@ -731,6 +732,31 @@ export default function POSPage() {
       }).catch(err => console.error('Close deposit error:', err))
     }
 
+    await writeActivityLog({
+      companyId,
+      branchId,
+      userId,
+      userName: cashierName,
+      action: 'sale',
+      module: 'POS',
+      description: `บันทึกขาย ${receiptNo} ยอด ${formatCurrency(total)}${createdWorkOrderCount > 0 ? ` และสร้างใบสั่งผลิต ${createdWorkOrderCount} รายการ` : ''}`,
+      recordId: saleId,
+      recordType: 'sale',
+      metadata: {
+        receiptNo,
+        totalAmount: total,
+        netDue,
+        itemCount: cart.length,
+        paymentMethod: payMethod,
+        paymentStatus: paymentConfirmed ? 'confirmed' : 'pending',
+        showVatOnReceipt,
+        workOrderCreatedCount: createdWorkOrderCount,
+        hasNegativeStockSale,
+        negativeStockReason: hasNegativeStockSale ? negativeReason : undefined,
+        depositDeducted: depositDeduct > 0 ? depositDeduct : undefined,
+      },
+    })
+
     // Show receipt after confirmed save
     setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', customerPhone: customerPhone.trim() || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setCustomerPhone(''); setReceiptNote('')
@@ -873,6 +899,31 @@ export default function POSPage() {
         setPosMsg({ type: 'err', text: 'บันทึกมัดจำแล้ว แต่สร้างใบสั่งผลิตไม่สำเร็จ กรุณาไปสร้างในหน้างานผลิตวิก' })
       }
     }
+
+    await writeActivityLog({
+      companyId,
+      branchId,
+      userId,
+      userName: cashierName,
+      action: 'deposit',
+      module: 'POS',
+      description: `บันทึกมัดจำ ${depositNo} ยอดมัดจำ ${formatCurrency(depositAmt)}${createdDepositWorkOrder ? ' และสร้างใบสั่งผลิตแล้ว' : ''}`,
+      recordId: depositId,
+      recordType: 'deposit',
+      metadata: {
+        depositNo,
+        totalAmount: total,
+        depositAmount: depositAmt,
+        remainingAmount: remaining,
+        itemCount: cart.length,
+        paymentMethod: payMethod,
+        paymentStatus: paymentConfirmed ? 'confirmed' : 'pending',
+        showVatOnReceipt,
+        workOrderCreated: createdDepositWorkOrder,
+        createWorkOrder,
+        pickupDate: pickupDate || undefined,
+      },
+    })
 
     // Show receipt immediately — ไม่ต้องรอ
     setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, customerPhone: custPhone || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: createdDepositWorkOrder ? 1 : 0, receiverName: cashierName })

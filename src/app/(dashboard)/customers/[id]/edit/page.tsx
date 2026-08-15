@@ -39,6 +39,7 @@ import { getDocument, softDelete, COLLECTIONS } from '@/lib/firestore'
 import { uploadToCloudinary } from '@/lib/cloudinary'
 import { Customer, CustomerImage } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
+import { writeActivityLog } from '@/lib/activityLog'
 
 type CustomerImageCategory = CustomerImage['category']
 type ImageFilter = CustomerImageCategory | 'all'
@@ -125,7 +126,7 @@ function toDate(value: unknown): Date {
 export default function EditCustomerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
-  const { userId, companyId } = useAuth()
+  const { userId, userName, companyId } = useAuth()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [deleteSaving, setDeleteSaving] = useState(false)
@@ -215,6 +216,7 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
 
     setUploading(true)
     try {
+      let uploadedCount = 0
       for (const file of files) {
         if (!file.type.startsWith('image/')) {
           alert('แนบได้เฉพาะไฟล์รูปภาพเท่านั้น')
@@ -235,6 +237,20 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
           uploadedBy: userId || 'system',
           createdAt: serverTimestamp(),
         })
+        uploadedCount += 1
+      }
+      if (uploadedCount > 0) {
+        await writeActivityLog({
+          companyId: activeCompanyId,
+          userId,
+          userName,
+          action: 'photo',
+          module: 'ลูกค้า',
+          description: `เพิ่มรูปลูกค้า ${form.firstName} ${form.lastName}`.trim(),
+          recordId: id,
+          recordType: 'customer',
+          metadata: { customerId: id, category: uploadCat, uploadedCount },
+        })
       }
     } catch (err) {
       console.error('Upload customer image error:', err)
@@ -246,10 +262,24 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
 
   const handleDeleteImage = async (imageId: string) => {
     if (!confirm('ต้องการลบรูปนี้ใช่ไหม?')) return
-    await deleteDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, imageId)).catch(err => {
+    const target = images.find(image => image.id === imageId)
+    try {
+      await deleteDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, imageId))
+      await writeActivityLog({
+        companyId: activeCompanyId,
+        userId,
+        userName,
+        action: 'delete',
+        module: 'ลูกค้า',
+        description: `ลบรูปลูกค้า ${form.firstName} ${form.lastName}`.trim(),
+        recordId: id,
+        recordType: 'customer',
+        metadata: { customerId: id, imageId, category: target?.category },
+      })
+    } catch (err) {
       console.error('Delete customer image error:', err)
       alert('ลบรูปไม่สำเร็จ กรุณาลองใหม่')
-    })
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -279,6 +309,17 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
 
     try {
       await updateDoc(doc(db, COLLECTIONS.CUSTOMERS, id), updates)
+      await writeActivityLog({
+        companyId: activeCompanyId,
+        userId,
+        userName,
+        action: 'update',
+        module: 'ลูกค้า',
+        description: `แก้ไขข้อมูลลูกค้า ${form.firstName} ${form.lastName}`.trim(),
+        recordId: id,
+        recordType: 'customer',
+        metadata: { phone: form.phone.trim(), caseTypes: form.caseTypes, memberLevel: form.memberLevel },
+      })
       setSaveMessage('บันทึกแล้ว')
       router.push(`/customers/${id}`)
     } catch (err) {
@@ -294,6 +335,17 @@ export default function EditCustomerPage({ params }: { params: Promise<{ id: str
     setDeleteSaving(true)
     try {
       await softDelete(COLLECTIONS.CUSTOMERS, id, userId)
+      await writeActivityLog({
+        companyId: activeCompanyId,
+        userId,
+        userName,
+        action: 'delete',
+        module: 'ลูกค้า',
+        description: `ลบลูกค้า ${form.firstName} ${form.lastName}`.trim(),
+        recordId: id,
+        recordType: 'customer',
+        metadata: { phone: form.phone.trim() },
+      })
       router.push('/customers')
     } catch (err) {
       console.error('Delete customer error:', err)

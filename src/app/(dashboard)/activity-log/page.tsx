@@ -1,7 +1,11 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { formatDateTime } from '@/lib/utils'
-import { Search, BookOpen, User, ShoppingCart, Edit, Trash2, LogIn, LogOut, Loader2, Package } from 'lucide-react'
+import {
+  Search, BookOpen, User, ShoppingCart, Edit, Trash2, LogIn, LogOut,
+  Loader2, Package, CreditCard, Ban, ArrowLeftRight, Factory,
+  ImageIcon, ShieldCheck, DatabaseBackup, RotateCcw, Wrench,
+} from 'lucide-react'
 import { collection, onSnapshot, query, where, limit } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS } from '@/lib/firestore'
@@ -14,7 +18,17 @@ const actionIcons: Record<string, { icon: React.ElementType; color: string; labe
   update:  { icon: Edit,         color: 'bg-amber-100 text-amber-600',     label: 'แก้ไขข้อมูล'},
   delete:  { icon: Trash2,       color: 'bg-red-100 text-red-600',         label: 'ลบข้อมูล'   },
   sale:    { icon: ShoppingCart, color: 'bg-purple-100 text-purple-600',   label: 'ขาย'         },
+  deposit: { icon: CreditCard,   color: 'bg-amber-100 text-amber-700',     label: 'มัดจำ'        },
+  payment: { icon: ShieldCheck,  color: 'bg-emerald-100 text-emerald-700', label: 'ชำระเงิน'     },
+  cancel:  { icon: Ban,          color: 'bg-red-100 text-red-700',         label: 'ยกเลิก'       },
   stock:   { icon: Package,      color: 'bg-teal-100 text-teal-600',       label: 'สต๊อก'       },
+  transfer:{ icon: ArrowLeftRight,color: 'bg-sky-100 text-sky-700',        label: 'โอนสินค้า'    },
+  production:{ icon: Factory,    color: 'bg-violet-100 text-violet-700',   label: 'งานผลิต'      },
+  photo:   { icon: ImageIcon,    color: 'bg-pink-100 text-pink-700',       label: 'รูปภาพ'       },
+  backup:  { icon: DatabaseBackup,color: 'bg-indigo-100 text-indigo-700',  label: 'สำรองข้อมูล'  },
+  restore: { icon: RotateCcw,    color: 'bg-blue-100 text-blue-700',       label: 'กู้คืนข้อมูล' },
+  repair:  { icon: Wrench,       color: 'bg-orange-100 text-orange-700',   label: 'ซ่อมข้อมูล'   },
+  system:  { icon: BookOpen,     color: 'bg-gray-100 text-gray-700',       label: 'ระบบ'         },
 }
 
 interface ActivityLog {
@@ -25,6 +39,9 @@ interface ActivityLog {
   action: string
   module: string
   description: string
+  recordId?: string
+  recordType?: string
+  metadata?: Record<string, unknown>
   createdAt: Date
 }
 
@@ -61,7 +78,7 @@ export default function ActivityLogPage() {
 
   const filtered = logs.filter(log => {
     const q = search.toLowerCase()
-    const matchSearch = !q || [log.userName, log.description, log.module].some(v => v?.toLowerCase().includes(q))
+    const matchSearch = !q || [log.userName, log.description, log.module, log.recordId, log.recordType].some(v => v?.toLowerCase().includes(q))
     return matchSearch
       && (!filterModule || log.module === filterModule)
       && (!filterAction || log.action === filterAction)
@@ -134,6 +151,7 @@ export default function ActivityLogPage() {
                     {log.userName && <span className="font-medium text-[var(--text-secondary)]">{log.userName}</span>}
                     {log.userName && <span>·</span>}
                     <span className="px-2 py-0.5 bg-[var(--bg-base)] rounded-full">{log.module}</span>
+                    {log.recordId && <span className="px-2 py-0.5 bg-[var(--bg-base)] rounded-full">{log.recordId}</span>}
                   </div>
                 </div>
                 <p className="text-xs text-[var(--text-muted)] shrink-0 mt-0.5">{formatDateTime(log.createdAt)}</p>

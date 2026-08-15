@@ -25,6 +25,7 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS } from '@/lib/firestore'
 import { uploadToCloudinary } from '@/lib/cloudinary'
 import { useAuth } from '@/hooks/useAuth'
+import { writeActivityLog } from '@/lib/activityLog'
 
 type CustomerPhotoCategory = 'before' | 'after' | 'finished' | 'receipt' | 'wig_order' | 'document' | 'other'
 
@@ -101,7 +102,7 @@ const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--
 
 export default function NewCustomerPage() {
   const router = useRouter()
-  const { companyId, branchId, userId } = useAuth()
+  const { companyId, branchId, userId, userName } = useAuth()
   const [form, setForm] = useState<CustomerFormState>(defaultForm)
   const [saving, setSaving] = useState(false)
   const [done, setDone] = useState(false)
@@ -243,6 +244,23 @@ export default function NewCustomerPage() {
         }
       }
 
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        userName,
+        action: 'create',
+        module: 'ลูกค้า',
+        description: `สร้างลูกค้าใหม่ ${form.firstName} ${form.lastName}`.trim(),
+        recordId: customerRef.id,
+        recordType: 'customer',
+        metadata: {
+          customerId,
+          phone: form.phone.trim(),
+          caseTypes: form.caseTypes,
+          attachedPhotoCount: customerPhotos.length,
+        },
+      })
       setSaveMessage('บันทึกแล้ว')
       router.push('/customers')
     } catch (err) {

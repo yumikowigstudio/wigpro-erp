@@ -17,6 +17,7 @@ import { adjustBranchStock } from '@/lib/stock'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { findCatalogMainBranch, getLegacyBranchStockFallback, isCatalogVisibleInBranch } from '@/lib/catalogScope'
+import { writeActivityLog } from '@/lib/activityLog'
 
 /* ─── Types ─── */
 type ProductWithStock = Product & { stockQty?: number }
@@ -34,7 +35,7 @@ const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--
 
 /* ─── Receive Stock Modal ─── */
 function ReceiveModal({
-  products, onClose, onDone, companyId, branchId, userId,
+  products, onClose, onDone, companyId, branchId, userId, userName,
 }: {
   products: ProductWithStock[]
   onClose: () => void
@@ -42,6 +43,7 @@ function ReceiveModal({
   companyId: string
   branchId: string
   userId: string
+  userName: string
 }) {
   const { ensurePermission } = usePermissionAction()
   const [supplier, setSupplier] = useState('')
@@ -96,6 +98,23 @@ function ReceiveModal({
           updatedAt: serverTimestamp(),
         })
       }
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        userName,
+        action: 'stock',
+        module: 'สต๊อกสินค้า',
+        description: `รับสินค้าเข้า ${items.length} รายการ มูลค่า ${formatCurrency(totalCost)}`,
+        recordType: 'stock_receive',
+        metadata: {
+          supplier: supplier || undefined,
+          note: note || undefined,
+          itemCount: items.length,
+          totalQty: items.reduce((sum, item) => sum + item.qty, 0),
+          totalCost,
+        },
+      })
       onDone()
       onClose()
     } catch (err) {
@@ -256,7 +275,7 @@ function MoveBadge({ type }: { type: string }) {
 
 /* ─── Main Page ─── */
 export default function InventoryPage() {
-  const { companyId, branchId, userId, branches } = useAuth()
+  const { companyId, branchId, userId, userName, branches } = useAuth()
   const { ensurePermission, hasPermission } = usePermissionAction()
   const [products, setProducts]     = useState<ProductWithStock[]>([])
   const [branchStock, setBranchStock] = useState<Record<string, number>>({})
@@ -371,6 +390,25 @@ export default function InventoryPage() {
         referenceType: 'manual_adjust',
         performedBy: userId,
         notes: adjustNote || undefined,
+      })
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        userName,
+        action: 'stock',
+        module: 'สต๊อกสินค้า',
+        description: `ปรับสต๊อก ${adjustItem.name} จาก ${prevQty} เป็น ${newQty}`,
+        recordId: adjustItem.id,
+        recordType: 'inventory',
+        metadata: {
+          productId: adjustItem.id,
+          productName: adjustItem.name,
+          previousQty: prevQty,
+          newQty,
+          delta: newQty - prevQty,
+          note: adjustNote || undefined,
+        },
       })
       setAdjustItem(null); setAdjustQty(''); setAdjustNote('')
     } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
@@ -638,6 +676,7 @@ export default function InventoryPage() {
           companyId={companyId}
           branchId={branchId}
           userId={userId}
+          userName={userName}
         />
       )}
     </div>

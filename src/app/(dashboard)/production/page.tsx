@@ -14,6 +14,7 @@ import { WorkOrder } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
+import { writeActivityLog } from '@/lib/activityLog'
 
 type ProdStatus = 'waiting' | 'in_production' | 'qc' | 'ready_to_ship' | 'shipped' | 'at_branch' | 'ready_to_pickup' | 'delivered' | 'cancelled'
 
@@ -158,6 +159,18 @@ export default function ProductionPage() {
       if (next === 'at_branch')       extra.receivedAtBranchDate     = serverTimestamp()
       if (next === 'delivered')       extra.deliveredDate            = serverTimestamp()
       await updateDoc(doc(db, COLLECTIONS.WORK_ORDERS, order.id), { status: next, ...extra, updatedAt: serverTimestamp() })
+      await writeActivityLog({
+        companyId,
+        branchId: order.branchId || branchId,
+        userId,
+        userName,
+        action: 'production',
+        module: 'งานผลิตวิก',
+        description: `เปลี่ยนสถานะงานผลิต ${order.orderNo} จาก ${statusCfg[order.status as ProdStatus]?.label ?? order.status ?? '-'} เป็น ${statusCfg[next].label}`,
+        recordId: order.id,
+        recordType: 'work_order',
+        metadata: { orderNo: order.orderNo, fromStatus: order.status, toStatus: next },
+      })
       setStatusDrafts(prev => {
         const nextDrafts = { ...prev }
         delete nextDrafts[order.id]
@@ -194,6 +207,18 @@ export default function ProductionPage() {
         cancelledAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
+      await writeActivityLog({
+        companyId,
+        branchId: order.branchId || branchId,
+        userId,
+        userName,
+        action: 'cancel',
+        module: 'งานผลิตวิก',
+        description: `ยกเลิกงานผลิต ${order.orderNo}`,
+        recordId: order.id,
+        recordType: 'work_order',
+        metadata: { orderNo: order.orderNo, reason, previousStatus: order.status },
+      })
       setStatusDrafts(prev => {
         const nextDrafts = { ...prev }
         delete nextDrafts[order.id]
@@ -221,6 +246,19 @@ export default function ProductionPage() {
         [imageType]: arrayUnion(url),
         updatedAt: serverTimestamp(),
       })
+      const order = orders.find(item => item.id === orderId)
+      await writeActivityLog({
+        companyId,
+        branchId: order?.branchId || branchId,
+        userId,
+        userName,
+        action: 'photo',
+        module: 'งานผลิตวิก',
+        description: `เพิ่มรูป${imageType === 'completedImages' ? 'งานเสร็จ/QC' : 'ความคืบหน้า'} ${order?.orderNo ?? orderId}`,
+        recordId: orderId,
+        recordType: 'work_order',
+        metadata: { orderNo: order?.orderNo, imageType },
+      })
     } catch (err) { console.error(err); alert('อัปโหลดไม่สำเร็จ') }
     finally { setUploading(null) }
   }
@@ -228,10 +266,28 @@ export default function ProductionPage() {
   /* Delete progress image */
   const handleProgressDelete = async (orderId: string, url: string, imageType: 'progressImages' | 'completedImages') => {
     if (!confirm('ต้องการลบรูปนี้?')) return
-    await updateDoc(doc(db, COLLECTIONS.WORK_ORDERS, orderId), {
-      [imageType]: arrayRemove(url),
-      updatedAt: serverTimestamp(),
-    }).catch(console.error)
+    try {
+      await updateDoc(doc(db, COLLECTIONS.WORK_ORDERS, orderId), {
+        [imageType]: arrayRemove(url),
+        updatedAt: serverTimestamp(),
+      })
+      const order = orders.find(item => item.id === orderId)
+      await writeActivityLog({
+        companyId,
+        branchId: order?.branchId || branchId,
+        userId,
+        userName,
+        action: 'delete',
+        module: 'งานผลิตวิก',
+        description: `ลบรูป${imageType === 'completedImages' ? 'งานเสร็จ/QC' : 'ความคืบหน้า'} ${order?.orderNo ?? orderId}`,
+        recordId: orderId,
+        recordType: 'work_order',
+        metadata: { orderNo: order?.orderNo, imageType },
+      })
+    } catch (err) {
+      console.error(err)
+      alert('ลบรูปไม่สำเร็จ')
+    }
   }
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -265,7 +321,25 @@ export default function ProductionPage() {
       if (form.manufacturer) woData.manufacturer = form.manufacturer
       if (form.bagNumber)    woData.bagNumber    = form.bagNumber
       if (form.expectedDate) woData.expectedDate = new Date(form.expectedDate)
-      await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, woData as Omit<WorkOrder, 'id'>)
+      const workOrderId = await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, woData as Omit<WorkOrder, 'id'>)
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        userName,
+        action: 'create',
+        module: 'งานผลิตวิก',
+        description: `สร้างงานผลิต ${orderNo}`,
+        recordId: workOrderId,
+        recordType: 'work_order',
+        metadata: {
+          orderNo,
+          customerName: form.customerName,
+          totalAmount: total,
+          depositAmount: dep,
+          remainingAmount: total - dep,
+        },
+      })
       setShowModal(false)
       setSelectedCustomerId('')
       setForm({ customerName:'', customerPhone:'', wigType:'', wigColor:'', wigLength:'', wigModel:'', manufacturer:'', bagNumber:'', totalAmount:'', depositAmount:'', expectedDate:'', notes:'' })
