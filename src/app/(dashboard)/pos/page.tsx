@@ -79,6 +79,7 @@ interface ReceiptData {
   depositId?:    string
   customerId?:   string
   workOrderCreatedCount?: number
+  receiverName:  string
 }
 
 const DEFAULT_STOCK_POLICY: StockPolicy = {
@@ -118,6 +119,7 @@ const VAT_RATE = 0.07
 
 export default function POSPage() {
   const { companyId, branchId, userId, currentBranch, user } = useAuth()
+  const cashierName = user?.displayName?.trim() || user?.email?.trim() || userId
   const { ensurePermission, hasPermission } = usePermissionAction()
   const [products, setProducts]       = useState<ProductWithStock[]>([])
   const [branchStock, setBranchStock] = useState<Record<string, number>>({})
@@ -546,9 +548,13 @@ export default function POSPage() {
       status: paymentConfirmed ? 'completed' : 'pending',
       paymentStatus: paymentConfirmed ? 'confirmed' : 'pending',
       createdBy: userId,
+      createdByName: cashierName,
+      receivedBy: userId,
+      receivedByName: cashierName,
     }
     if (paymentConfirmed) {
       saleData.paymentConfirmedBy = userId
+      saleData.paymentConfirmedByName = cashierName
       saleData.paymentConfirmedAt = now
     }
     if (customerId)     saleData.customerId     = customerId
@@ -666,7 +672,7 @@ export default function POSPage() {
     }
 
     // Show receipt after confirmed save
-    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || netDue) : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount })
+    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || netDue) : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId('')
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     setSlipUrl(''); setAppliedDepositId(''); setCouponCode(''); setAppliedCoupon('')
@@ -728,9 +734,13 @@ export default function POSPage() {
       paymentMethod: payMethod,
       paymentStatus: paymentConfirmed ? 'confirmed' : 'pending',
       createdBy: userId,
+      createdByName: cashierName,
+      receivedBy: userId,
+      receivedByName: cashierName,
     }
     if (paymentConfirmed) {
       depData.paymentConfirmedBy = userId
+      depData.paymentConfirmedByName = cashierName
       depData.paymentConfirmedAt = now
     }
     if (notesStr) depData.notes = notesStr
@@ -779,7 +789,7 @@ export default function POSPage() {
     }
 
     // Show receipt immediately — ไม่ต้องรอ
-    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: createdDepositWorkOrder ? 1 : 0 })
+    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, payMethod, paidAmount: payMethod === 'cash' ? (parseFloat(cash) || depositAmt) : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: createdDepositWorkOrder ? 1 : 0, receiverName: cashierName })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setDepositInput(''); setPickupDate(''); setDepositNote('')
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     setSlipUrl(''); setCouponCode(''); setAppliedCoupon('')
@@ -1749,6 +1759,8 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
       ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี'
       : 'ใบเสร็จรับเงิน'
   const footerText = receiptShop.receiptFooter || (isDeposit ? 'กรุณาเก็บใบนี้ไว้เป็นหลักฐาน' : 'ขอบคุณที่ใช้บริการ')
+  const payerName = receipt.customerName?.trim() || 'ลูกค้าทั่วไป'
+  const receiverName = receipt.receiverName?.trim() || '-'
   const nextActions = [
     { href: '/pos', label: 'ขาย/รับมัดจำต่อ', icon: ShoppingCart, show: true },
     { href: receipt.customerId ? `/customers/${receipt.customerId}?tab=timeline` : '', label: 'ดูประวัติลูกค้า', icon: UserRound, show: Boolean(receipt.customerId) },
@@ -1794,7 +1806,9 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
         .change-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;color:#181018;font-weight:700}
         .note-box{border:1px solid #181018;border-radius:2px;margin-top:10px;padding:7px 8px;font-size:10.5px;color:#181018;text-align:left;white-space:pre-wrap}
         .signature{margin-top:22px;text-align:center;font-size:10.5px;color:#181018}
+        .signature-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px;text-align:center;font-size:10.5px;color:#181018}
         .signature-line{border-top:1px solid #181018;width:150px;margin:0 auto 4px}
+        .signature-name{font-weight:700;margin-top:2px;white-space:normal;overflow-wrap:anywhere}
         .footer{text-align:center;margin-top:10px;font-size:10.5px;color:#555}
         @media print{@page{margin:5mm 8mm}body{padding:0}}
       </style>
@@ -1927,9 +1941,17 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
               )}
             </div>
 
-            <div className="signature mt-8 text-center text-[11px] text-gray-900">
-              <div className="signature-line mx-auto mb-1 w-40 border-t border-gray-900" />
-              <p>ผู้รับเงิน / Receiver</p>
+            <div className="signature-grid grid grid-cols-2 gap-4 mt-8 text-center text-[11px] text-gray-900">
+              <div>
+                <div className="signature-line mx-auto mb-1 w-32 border-t border-gray-900" />
+                <p>ผู้ชำระเงิน / Payer</p>
+                <p className="signature-name font-bold mt-0.5 break-words">{payerName}</p>
+              </div>
+              <div>
+                <div className="signature-line mx-auto mb-1 w-32 border-t border-gray-900" />
+                <p>ผู้รับเงิน / Receiver</p>
+                <p className="signature-name font-bold mt-0.5 break-words">{receiverName}</p>
+              </div>
             </div>
           </div>
 

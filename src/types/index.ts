@@ -495,6 +495,10 @@ export interface Deposit {
   notes?: string
   pickupDate?: string
   slipUrl?: string
+  createdByName?: string
+  receivedBy?: string
+  receivedByName?: string
+  paymentConfirmedByName?: string
   createdBy: string
   createdAt: Date
   updatedAt: Date
@@ -550,6 +554,7 @@ export interface Sale {
   status: SaleStatus
   paymentStatus?: PaymentStatus
   paymentConfirmedBy?: string
+  paymentConfirmedByName?: string
   paymentConfirmedAt?: Date
   hasNegativeStockSale?: boolean
   negativeStockReason?: string
@@ -580,6 +585,9 @@ export interface Sale {
   cancelledAt?: Date
   notes?: string
   createdBy: string
+  createdByName?: string
+  receivedBy?: string
+  receivedByName?: string
   branchName?: string
   branchCode?: string
   receiptInfo?: ReceiptShopSnapshot

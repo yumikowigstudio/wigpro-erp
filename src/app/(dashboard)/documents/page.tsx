@@ -397,6 +397,12 @@ export default function DocumentsPage() {
     const paidAmount = sale.paidAmount ?? sale.payments?.[0]?.amount ?? amountDue
     const changeAmount = sale.changeAmount ?? 0
     const footerText = receiptInfo?.receiptFooter || 'ขอบคุณที่ใช้บริการ'
+    const payerName = sale.customerName?.trim() || 'ลูกค้าทั่วไป'
+    const receiverName = sale.receivedByName?.trim()
+      || sale.createdByName?.trim()
+      || sale.paymentConfirmedByName?.trim()
+      || sale.createdBy
+      || '-'
     win.document.write(`<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"/>
       <title>ใบเสร็จ ${sale.receiptNo}</title>
       <style>
@@ -414,6 +420,7 @@ export default function DocumentsPage() {
         .summary-box{border-top:1px dashed #9b8c9b;border-bottom:1px dashed #9b8c9b;margin-top:8px;padding:7px 0}
         .note-box{border:1px solid #181018;border-radius:2px;margin-top:10px;padding:7px 8px;font-size:10.5px;color:#181018;text-align:left;white-space:pre-wrap}
         .signature{margin-top:22px;text-align:center;font-size:10.5px;color:#181018}.signature-line{border-top:1px solid #181018;width:150px;margin:0 auto 4px}
+        .signature-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px;text-align:center;font-size:10.5px;color:#181018}.signature-name{font-weight:700;margin-top:2px;white-space:normal;overflow-wrap:anywhere}
         @media print{@page{margin:5mm 8mm}body{padding:0}}
       </style></head><body>
       ${receiptInfo ? `<div class="shop">
@@ -449,7 +456,10 @@ export default function DocumentsPage() {
         ${(sale.payments?.[0]?.method ?? '') === 'cash' ? `<div class="row"><span class="muted">เงินทอน</span><span>${formatCurrency(changeAmount)}</span></div>` : ''}
       </div>
       <div class="note-box">${escapeHtml(footerText)}</div>
-      <div class="signature"><div class="signature-line"></div><div>ผู้รับเงิน / Receiver</div></div>
+      <div class="signature-grid">
+        <div><div class="signature-line"></div><div>ผู้ชำระเงิน / Payer</div><div class="signature-name">${escapeHtml(payerName)}</div></div>
+        <div><div class="signature-line"></div><div>ผู้รับเงิน / Receiver</div><div class="signature-name">${escapeHtml(receiverName)}</div></div>
+      </div>
       <script>window.onload=()=>window.print()</script>
       </body></html>`)
     win.document.close()
