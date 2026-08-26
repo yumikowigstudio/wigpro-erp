@@ -14,9 +14,10 @@ import { formatDate, formatCurrency } from '@/lib/utils'
 import { getDocument, COLLECTIONS } from '@/lib/firestore'
 import {
   collection, query, where, onSnapshot,
-  addDoc, deleteDoc, doc, serverTimestamp, writeBatch,
+  addDoc, deleteDoc, doc, serverTimestamp, updateDoc, writeBatch,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
+import { writeActivityLog } from '@/lib/activityLog'
 import {
   Customer,
   Appointment,
@@ -721,6 +722,12 @@ function PhotosTab({
     return d.toISOString().slice(0, 10)
   }
 
+  const dateInputValue = (value?: Date) => {
+    const d = value instanceof Date && !Number.isNaN(value.getTime()) ? new Date(value) : new Date()
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+    return d.toISOString().slice(0, 10)
+  }
+
   const blankCaseForm = (): CaseForm => ({
     type: 'custom_wig',
     title: '',
@@ -732,6 +739,7 @@ function PhotosTab({
   const [uploading, setUploading] = useState<string | null>(null)
   const [savingCase, setSavingCase] = useState(false)
   const [showCaseForm, setShowCaseForm] = useState(false)
+  const [editingCaseId, setEditingCaseId] = useState<string | null>(null)
   const [caseForm, setCaseForm] = useState<CaseForm>(blankCaseForm)
   const [lightbox, setLightbox] = useState<string | null>(null)
   const [activeImgCat, setActiveImgCat] = useState<ImgCat | 'all'>('all')
@@ -740,6 +748,8 @@ function PhotosTab({
   const [galleryDate, setGalleryDate] = useState('all')
   const [galleryLayout, setGalleryLayout] = useState<'compare' | 'grid4' | 'grid5'>('compare')
   const [generalUploadCat, setGeneralUploadCat] = useState<ImgCat>('before')
+  const [movingImageId, setMovingImageId] = useState<string | null>(null)
+  const [moveTargetByImage, setMoveTargetByImage] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const uploadTargetRef = useRef<{ caseId?: string; category: ImgCat }>({ category: 'before' })
 
@@ -758,6 +768,30 @@ function PhotosTab({
   const openUpload = (category: ImgCat, caseId?: string) => {
     uploadTargetRef.current = { category, caseId }
     fileRef.current?.click()
+  }
+
+  const openCreateCase = () => {
+    setEditingCaseId(null)
+    setCaseForm(blankCaseForm())
+    setShowCaseForm(true)
+  }
+
+  const openEditCase = (workCase: CustomerWorkCase) => {
+    setEditingCaseId(workCase.id)
+    setCaseForm({
+      type: workCase.type,
+      title: workCase.title ?? '',
+      caseDate: dateInputValue(workCase.caseDate),
+      repairTypes: workCase.repairTypes ?? [],
+      notes: workCase.notes ?? '',
+    })
+    setShowCaseForm(true)
+  }
+
+  const closeCaseForm = () => {
+    setShowCaseForm(false)
+    setEditingCaseId(null)
+    setCaseForm(blankCaseForm())
   }
 
   const uploadImageFile = async (file: File, folder: string) => {
@@ -807,7 +841,18 @@ function PhotosTab({
           createdAt: serverTimestamp(),
         }
         if (target.caseId) imageData.workCaseId = target.caseId
-        await addDoc(collection(db, COLLECTIONS.CUSTOMER_IMAGES), imageData)
+        const imageRef = await addDoc(collection(db, COLLECTIONS.CUSTOMER_IMAGES), imageData)
+        await writeActivityLog({
+          companyId,
+          branchId,
+          userId,
+          action: 'photo',
+          module: 'customers',
+          description: `เพิ่มรูป${categoryLabel}ให้ลูกค้า`,
+          recordId: imageRef.id,
+          recordType: 'customer_image',
+          metadata: { customerId, workCaseId: target.caseId, category: target.category },
+        })
       }
     } catch (err) {
       console.error(err)
@@ -826,7 +871,7 @@ function PhotosTab({
     }))
   }
 
-  const handleCreateCase = async (e: React.FormEvent) => {
+  const handleSaveCase = async (e: React.FormEvent) => {
     e.preventDefault()
     if (savingCase) return
     if (!companyId || companyId === 'demo_company') {
@@ -836,25 +881,54 @@ function PhotosTab({
     setSavingCase(true)
     try {
       const type = getCaseType(caseForm.type)
-      await addDoc(collection(db, COLLECTIONS.CUSTOMER_WORK_CASES), {
+      const casePayload = {
         customerId,
         companyId,
         branchId: branchId || '',
         type: caseForm.type,
         title: caseForm.title.trim() || `${type.label} ${workCases.length + 1}`,
-        caseDate: caseForm.caseDate ? new Date(caseForm.caseDate) : new Date(),
+        caseDate: caseForm.caseDate ? new Date(`${caseForm.caseDate}T00:00:00`) : new Date(),
         repairTypes: caseForm.type === 'repair' ? caseForm.repairTypes : [],
         notes: caseForm.notes.trim(),
-        status: 'active',
-        createdBy: userId || 'system',
-        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      })
-      setCaseForm(blankCaseForm())
-      setShowCaseForm(false)
+      }
+
+      if (editingCaseId) {
+        await updateDoc(doc(db, COLLECTIONS.CUSTOMER_WORK_CASES, editingCaseId), casePayload)
+        await writeActivityLog({
+          companyId,
+          branchId,
+          userId,
+          action: 'update',
+          module: 'customers',
+          description: `แก้ไขชิ้นงานลูกค้า: ${casePayload.title}`,
+          recordId: editingCaseId,
+          recordType: 'customer_work_case',
+          metadata: { customerId, type: caseForm.type },
+        })
+      } else {
+        const caseRef = await addDoc(collection(db, COLLECTIONS.CUSTOMER_WORK_CASES), {
+          ...casePayload,
+          status: 'active',
+          createdBy: userId || 'system',
+          createdAt: serverTimestamp(),
+        })
+        await writeActivityLog({
+          companyId,
+          branchId,
+          userId,
+          action: 'create',
+          module: 'customers',
+          description: `สร้างชิ้นงานลูกค้า: ${casePayload.title}`,
+          recordId: caseRef.id,
+          recordType: 'customer_work_case',
+          metadata: { customerId, type: caseForm.type },
+        })
+      }
+      closeCaseForm()
     } catch (err) {
       console.error(err)
-      alert('สร้างเคสงานไม่สำเร็จ กรุณาลองใหม่')
+      alert(editingCaseId ? 'แก้ไขชิ้นงานไม่สำเร็จ กรุณาลองใหม่' : 'สร้างชิ้นงานไม่สำเร็จ กรุณาลองใหม่')
     } finally {
       setSavingCase(false)
     }
@@ -862,14 +936,36 @@ function PhotosTab({
 
   const handleDeleteImage = async (imageId: string) => {
     if (!confirm('ต้องการลบรูปนี้ใช่ไหม?')) return
-    await deleteDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, imageId)).catch(() => alert('ลบรูปไม่สำเร็จ'))
+    const target = images.find(image => image.id === imageId)
+    try {
+      await deleteDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, imageId))
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        action: 'delete',
+        module: 'customers',
+        description: `ลบรูปลูกค้า${target?.caption ? `: ${target.caption}` : ''}`,
+        recordId: imageId,
+        recordType: 'customer_image',
+        metadata: { customerId, workCaseId: target?.workCaseId, category: target?.category },
+      })
+    } catch {
+      alert('ลบรูปไม่สำเร็จ')
+    }
   }
 
   const handleDeleteCase = async (workCaseId: string) => {
+    const workCase = workCases.find(item => item.id === workCaseId)
     const relatedImages = images.filter(image => image.workCaseId === workCaseId)
-    if (!confirm(`ลบเคสงานนี้พร้อมรูป ${relatedImages.length} รูปใช่ไหม?`)) return
+    const warning = [
+      `ต้องการลบชิ้นงาน "${workCase?.title ?? 'นี้'}" ใช่ไหม?`,
+      relatedImages.length ? `ชิ้นงานนี้มีรูปที่ผูกอยู่ ${relatedImages.length} รูป ซึ่งจะถูกลบไปด้วย` : 'ชิ้นงานนี้ยังไม่มีรูปที่ผูกอยู่',
+      'การลบนี้เป็นการลบจริง กรุณายืนยันเฉพาะกรณีสร้างผิดหรือทดสอบเท่านั้น',
+    ].join('\n\n')
+    if (!confirm(warning)) return
     if (relatedImages.length > 440) {
-      alert('เคสนี้มีรูปเยอะมาก กรุณาลบรูปบางส่วนก่อนลบเคส')
+      alert('ชิ้นงานนี้มีรูปเยอะมาก กรุณาลบรูปบางส่วนก่อนลบชิ้นงาน')
       return
     }
     try {
@@ -877,9 +973,56 @@ function PhotosTab({
       relatedImages.forEach(image => batch.delete(doc(db, COLLECTIONS.CUSTOMER_IMAGES, image.id)))
       batch.delete(doc(db, COLLECTIONS.CUSTOMER_WORK_CASES, workCaseId))
       await batch.commit()
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        action: 'delete',
+        module: 'customers',
+        description: `ลบชิ้นงานลูกค้า: ${workCase?.title ?? workCaseId}`,
+        recordId: workCaseId,
+        recordType: 'customer_work_case',
+        metadata: { customerId, deletedImages: relatedImages.length, type: workCase?.type },
+      })
     } catch (err) {
       console.error(err)
-      alert('ลบเคสงานไม่สำเร็จ')
+      alert('ลบชิ้นงานไม่สำเร็จ')
+    }
+  }
+
+  const handleMoveImageToCase = async (image: CustomerImage) => {
+    const targetCaseId = moveTargetByImage[image.id]
+    if (!targetCaseId) {
+      alert('กรุณาเลือกชิ้นงานที่จะย้ายรูปเข้าไป')
+      return
+    }
+    const targetCase = workCases.find(workCase => workCase.id === targetCaseId)
+    setMovingImageId(image.id)
+    try {
+      await updateDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, image.id), {
+        workCaseId: targetCaseId,
+      })
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        action: 'update',
+        module: 'customers',
+        description: `ย้ายรูปลูกค้าเข้าอัลบั้ม: ${targetCase?.title ?? targetCaseId}`,
+        recordId: image.id,
+        recordType: 'customer_image',
+        metadata: { customerId, workCaseId: targetCaseId, category: image.category },
+      })
+      setMoveTargetByImage(current => {
+        const next = { ...current }
+        delete next[image.id]
+        return next
+      })
+    } catch (err) {
+      console.error(err)
+      alert('ย้ายรูปเข้าอัลบั้มไม่สำเร็จ กรุณาลองใหม่')
+    } finally {
+      setMovingImageId(null)
     }
   }
 
@@ -900,16 +1043,49 @@ function PhotosTab({
     (galleryCategory === 'all' || image.category === galleryCategory) &&
     (galleryDate === 'all' || imageDateKey(image) === galleryDate)
   )
-  const galleryCompareCategories: ImgCat[] = galleryCategory === 'all'
-    ? ['before', 'after', 'finished']
-    : [galleryCategory]
   const galleryGridClass = galleryLayout === 'grid5'
     ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
     : 'grid-cols-2 md:grid-cols-4'
+  const docCategoryIds: ImgCat[] = ['receipt', 'wig_order', 'document', 'other']
+  const phaseCategoryIds: ImgCat[] = ['before', 'after', 'finished']
+  const caseImageStats = (caseImages: CustomerImage[]) => ({
+    before: caseImages.filter(image => image.category === 'before').length,
+    after: caseImages.filter(image => image.category === 'after').length,
+    finished: caseImages.filter(image => image.category === 'finished').length,
+    documents: caseImages.filter(image => docCategoryIds.includes(image.category)).length,
+  })
+  const shouldShowGalleryCategory = (categoryId: ImgCat) => galleryCategory === 'all' || galleryCategory === categoryId
+  const galleryDocCategories = activeGalleryCase
+    ? caseImageCategories(activeGalleryCase.type).filter(category => docCategoryIds.includes(category.id) && shouldShowGalleryCategory(category.id))
+    : []
+  const galleryPhaseCategories = activeGalleryCase
+    ? caseImageCategories(activeGalleryCase.type).filter(category => phaseCategoryIds.includes(category.id) && shouldShowGalleryCategory(category.id))
+    : []
+  const galleryImagesByCategory = (categoryId: ImgCat) => galleryImages.filter(image => image.category === categoryId)
   const openCaseGallery = (workCaseId: string) => {
     setGalleryCaseId(workCaseId)
     setGalleryCategory('all')
     setGalleryDate('all')
+  }
+  const renderImageTile = (image: CustomerImage, aspectClass = 'aspect-square') => {
+    const category = getImageCategory(image.category)
+    return (
+      <div key={image.id} className={`relative group ${aspectClass} rounded-2xl overflow-hidden border border-[var(--border-light)] bg-white`}>
+        <CustomerPhoto src={image.url} alt={image.caption || category.label} />
+        <span className={`absolute left-2 top-2 text-[9px] px-2 py-0.5 rounded-full border font-semibold ${category.color}`}>{category.label}</span>
+        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+          <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
+            <ZoomIn className="w-3.5 h-3.5" />
+          </button>
+          <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
+          <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -919,22 +1095,27 @@ function PhotosTab({
       <div className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-4 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h3 className="font-semibold text-[var(--text-primary)] text-sm">อัลบั้ม / เคสงานลูกค้า</h3>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">{workCases.length} เคส · {images.length} รูป</p>
+            <h3 className="font-semibold text-[var(--text-primary)] text-sm">ชิ้นงาน / รูปลูกค้า</h3>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{workCases.length} ชิ้นงาน · {images.length} รูป</p>
           </div>
           <button
             type="button"
-            onClick={() => setShowCaseForm(true)}
+            onClick={openCreateCase}
             className="flex items-center justify-center gap-1.5 px-4 py-2 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-xs font-semibold hover:opacity-90 transition-all shadow-md">
-            <Plus className="w-3.5 h-3.5" /> สร้างเคสงาน
+            <Plus className="w-3.5 h-3.5" /> สร้างชิ้นงาน
           </button>
         </div>
 
         {showCaseForm && (
-          <form onSubmit={handleCreateCase} className="rounded-2xl border border-[var(--border-light)] bg-white p-4 space-y-4">
+          <form onSubmit={handleSaveCase} className="rounded-2xl border border-[var(--border-light)] bg-white p-4 space-y-4">
             <div className="flex items-center justify-between">
-              <h4 className="font-semibold text-sm text-[var(--text-primary)]">สร้างเคสงานใหม่</h4>
-              <button type="button" onClick={() => setShowCaseForm(false)} className="p-1 rounded-lg hover:bg-[var(--bg-base)]">
+              <div>
+                <h4 className="font-semibold text-sm text-[var(--text-primary)]">
+                  {editingCaseId ? 'แก้ไขชิ้นงาน' : 'สร้างชิ้นงานใหม่'}
+                </h4>
+                <p className="text-[11px] text-[var(--text-muted)] mt-0.5">ใช้แยกรูป Before / After และเอกสารของแต่ละวิกหรือรอบงาน</p>
+              </div>
+              <button type="button" onClick={closeCaseForm} className="p-1 rounded-lg hover:bg-[var(--bg-base)]">
                 <X className="w-4 h-4 text-[var(--text-muted)]" />
               </button>
             </div>
@@ -956,11 +1137,11 @@ function PhotosTab({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ชื่อเคส / ชิ้นงาน</label>
+                <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ชื่อชิ้นงาน / อัลบั้ม</label>
                 <input
                   value={caseForm.title}
                   onChange={e => setCaseForm(current => ({ ...current, title: e.target.value }))}
-                  placeholder="เช่น ชิ้นที่ 1, วิกฟูคัสตอม, งานซ่อมหน้าม้า"
+                  placeholder="เช่น ชิ้นที่ 1 ฟูวิก, วิกกึ่งฟูรอบใหม่, งานซ่อมหน้าม้า"
                   className={inputCls}
                 />
               </div>
@@ -1000,7 +1181,7 @@ function PhotosTab({
               value={caseForm.notes}
               onChange={e => setCaseForm(current => ({ ...current, notes: e.target.value }))}
               rows={3}
-              placeholder="หมายเหตุของเคสนี้ เช่น รายละเอียดงาน สิ่งที่ต้องระวัง หรือข้อมูลที่อยากให้ทีมเห็น"
+              placeholder="หมายเหตุของชิ้นงานนี้ เช่น รายละเอียดงาน สิ่งที่ต้องระวัง หรือข้อมูลที่อยากให้ทีมเห็น"
               className={inputCls + ' resize-none'}
             />
 
@@ -1009,7 +1190,7 @@ function PhotosTab({
               disabled={savingCase}
               className="w-full py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2">
               {savingCase ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              {savingCase ? 'กำลังสร้างเคส...' : 'บันทึกเคสงาน'}
+              {savingCase ? 'กำลังบันทึก...' : editingCaseId ? 'บันทึกการแก้ไขชิ้นงาน' : 'บันทึกชิ้นงาน'}
             </button>
           </form>
         )}
@@ -1018,7 +1199,7 @@ function PhotosTab({
       {workCases.length === 0 ? (
         <div className="py-12 text-center space-y-2 rounded-2xl border border-dashed border-[var(--border-light)]">
           <ImageIcon className="w-10 h-10 text-[var(--pink-100)] mx-auto" />
-          <p className="text-sm text-[var(--text-muted)]">ยังไม่มีเคสงานของลูกค้าคนนี้</p>
+          <p className="text-sm text-[var(--text-muted)]">ยังไม่มีชิ้นงานของลูกค้าคนนี้</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -1026,6 +1207,7 @@ function PhotosTab({
             const type = getCaseType(workCase.type)
             const caseImages = images.filter(image => image.workCaseId === workCase.id)
             const categories = caseImageCategories(workCase.type)
+            const stats = caseImageStats(caseImages)
 
             return (
               <div key={workCase.id} className="rounded-2xl border border-[var(--border-light)] bg-white overflow-hidden">
@@ -1047,13 +1229,39 @@ function PhotosTab({
                       ) : null}
                     </div>
                     {workCase.notes && <p className="text-xs text-[var(--text-secondary)] mt-2 whitespace-pre-line">{workCase.notes}</p>}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 max-w-2xl">
+                      {[
+                        ['Before', stats.before, 'text-orange-700 bg-orange-50 border-orange-100'],
+                        ['After', stats.after, 'text-emerald-700 bg-emerald-50 border-emerald-100'],
+                        ['เอกสาร', stats.documents, 'text-blue-700 bg-blue-50 border-blue-100'],
+                        ['งานเสร็จ', stats.finished, 'text-pink-700 bg-pink-50 border-pink-100'],
+                      ].map(([label, count, color]) => (
+                        <div key={label} className={`rounded-xl border px-3 py-2 ${color}`}>
+                          <p className="text-[10px] font-semibold opacity-80">{label}</p>
+                          <p className="text-sm font-black">{count} รูป</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="self-start flex items-center gap-2">
+                  <div className="self-start flex flex-wrap items-center gap-2">
                     <button
                       type="button"
                       onClick={() => openCaseGallery(workCase.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] text-xs font-semibold text-[var(--text-secondary)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)] transition-all">
-                      <ZoomIn className="w-3.5 h-3.5" /> ดู Before & After
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white text-xs font-semibold hover:opacity-90 transition-all shadow-sm">
+                      <ZoomIn className="w-3.5 h-3.5" /> ดูอัลบั้ม
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openUpload('before', workCase.id)}
+                      disabled={Boolean(uploading)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] text-xs font-semibold text-[var(--text-secondary)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)] transition-all disabled:opacity-50">
+                      <Upload className="w-3.5 h-3.5" /> เพิ่มรูป
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openEditCase(workCase)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[var(--border-light)] bg-white text-xs font-semibold text-[var(--text-secondary)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)] transition-all">
+                      <Edit className="w-3.5 h-3.5" /> แก้ไข
                     </button>
                     <button
                       type="button"
@@ -1127,7 +1335,7 @@ function PhotosTab({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="font-semibold text-[var(--text-primary)] text-sm">รูปทั่วไป / รูปเดิม</h3>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">{generalImages.length} รูปที่ยังไม่ได้ผูกกับเคสงาน</p>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{generalImages.length} รูปที่ยังไม่ได้ผูกกับชิ้นงาน</p>
           </div>
           <div className="flex gap-2">
             <select
@@ -1184,20 +1392,43 @@ function PhotosTab({
             {filteredGeneralImages.map(image => {
               const category = getImageCategory(image.category)
               return (
-                <div key={image.id} className="relative group aspect-square rounded-xl overflow-hidden border border-[var(--border-light)] bg-[var(--bg-base)]">
-                  <CustomerPhoto src={image.url} alt={image.caption || 'customer'} />
-                  <span className={`absolute left-2 top-2 text-[9px] px-2 py-0.5 rounded-full border font-semibold ${category.color}`}>{category.label}</span>
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                    <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
-                      <ZoomIn className="w-3.5 h-3.5" />
-                    </button>
-                    <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                <div key={image.id} className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-2 space-y-2">
+                  <div className="relative group aspect-square rounded-xl overflow-hidden bg-white">
+                    <CustomerPhoto src={image.url} alt={image.caption || 'customer'} />
+                    <span className={`absolute left-2 top-2 text-[9px] px-2 py-0.5 rounded-full border font-semibold ${category.color}`}>{category.label}</span>
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                      <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
+                        <ZoomIn className="w-3.5 h-3.5" />
+                      </button>
+                      <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
+                      <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
+                    </div>
                   </div>
-                  <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
-                    <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
-                  </div>
+                  {workCases.length > 0 && (
+                    <div className="space-y-1.5">
+                      <select
+                        value={moveTargetByImage[image.id] ?? ''}
+                        onChange={e => setMoveTargetByImage(current => ({ ...current, [image.id]: e.target.value }))}
+                        className="w-full px-2 py-1.5 bg-white border border-[var(--border-light)] rounded-xl text-[11px] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
+                        <option value="">เลือกอัลบั้ม...</option>
+                        {workCases.map(workCase => (
+                          <option key={workCase.id} value={workCase.id}>{workCase.title}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => handleMoveImageToCase(image)}
+                        disabled={movingImageId === image.id}
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-xl border border-[var(--pink-100)] bg-white text-[11px] font-semibold text-[var(--pink-600)] hover:bg-[var(--pink-50)] disabled:opacity-50">
+                        {movingImageId === image.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <ChevronRight className="w-3 h-3" />}
+                        ย้ายเข้าอัลบั้ม
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -1211,7 +1442,7 @@ function PhotosTab({
             <div className="shrink-0 border-b border-[var(--border-light)] p-4 space-y-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-[11px] font-bold text-[var(--pink-600)] uppercase tracking-wide">Before & After Gallery</p>
+                  <p className="text-[11px] font-bold text-[var(--pink-600)] uppercase tracking-wide">อัลบั้ม Before & After</p>
                   <h3 className="text-lg font-bold text-[var(--text-primary)] truncate">{activeGalleryCase.title}</h3>
                   <p className="text-xs text-[var(--text-muted)] mt-0.5">
                     {formatDate(activeGalleryCase.caseDate)} · {activeGalleryImages.length} รูป · {getCaseType(activeGalleryCase.type).label}
@@ -1270,14 +1501,13 @@ function PhotosTab({
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {(['before', 'after', 'finished'] as ImgCat[]).map(categoryId => {
-                  const category = getImageCategory(categoryId)
-                  const key = `${activeGalleryCase.id}:${categoryId}`
+                {caseImageCategories(activeGalleryCase.type).map(category => {
+                  const key = `${activeGalleryCase.id}:${category.id}`
                   return (
                     <button
-                      key={categoryId}
+                      key={category.id}
                       type="button"
-                      onClick={() => openUpload(categoryId, activeGalleryCase.id)}
+                      onClick={() => openUpload(category.id, activeGalleryCase.id)}
                       disabled={Boolean(uploading)}
                       className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-semibold disabled:opacity-50 ${category.color}`}>
                       {uploading === key ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
@@ -1289,26 +1519,102 @@ function PhotosTab({
             </div>
 
             <div className="flex-1 overflow-y-auto bg-[var(--bg-base)] p-4">
-              {galleryImages.length === 0 ? (
+              {galleryImages.length === 0 && galleryLayout !== 'compare' ? (
                 <div className="min-h-[20rem] flex flex-col items-center justify-center gap-2 text-center">
                   <ImageIcon className="w-10 h-10 text-[var(--pink-200)]" />
                   <p className="text-sm font-semibold text-[var(--text-secondary)]">ยังไม่มีรูปตามเงื่อนไขนี้</p>
                   <p className="text-xs text-[var(--text-muted)]">เลือกวันที่/หมวดอื่น หรือกดเพิ่มรูปด้านบน</p>
                 </div>
               ) : galleryLayout === 'compare' ? (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                  {galleryCompareCategories.map(categoryId => {
-                    const category = getImageCategory(categoryId)
-                    const categoryImages = galleryImages.filter(image => image.category === categoryId)
+                <div className="space-y-4">
+                  {galleryDocCategories.length > 0 && (
+                    <section className="rounded-2xl border border-[var(--border-light)] bg-white p-3 space-y-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-[var(--text-primary)]">เอกสารของชิ้นงาน</h4>
+                        <p className="text-xs text-[var(--text-muted)] mt-0.5">ใบเสร็จ ใบออเดอร์วิก เอกสาร และรูปประกอบอื่นๆ ของชิ้นนี้</p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                        {galleryDocCategories.map(category => {
+                          const categoryImages = galleryImagesByCategory(category.id)
+                          return (
+                            <div key={category.id} className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-3 space-y-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${category.color}`}>
+                                  {category.label} ({categoryImages.length})
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => openUpload(category.id, activeGalleryCase.id)}
+                                  disabled={Boolean(uploading)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-white border border-[var(--border-light)] text-[11px] font-semibold text-[var(--text-secondary)] disabled:opacity-50">
+                                  เพิ่มรูป
+                                </button>
+                              </div>
+                              {categoryImages.length === 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openUpload(category.id, activeGalleryCase.id)}
+                                  className="w-full h-24 rounded-2xl border-2 border-dashed border-[var(--border-light)] bg-white text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]">
+                                  ยังไม่มีรูปหมวดนี้
+                                </button>
+                              ) : (
+                                <div className="grid grid-cols-2 gap-2">
+                                  {categoryImages.map(image => renderImageTile(image, 'aspect-[4/5]'))}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </section>
+                  )}
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {(['before', 'after'] as ImgCat[]).filter(shouldShowGalleryCategory).map(categoryId => {
+                      const category = getImageCategory(categoryId)
+                      const categoryImages = galleryImagesByCategory(categoryId)
+                      return (
+                        <section key={categoryId} className="rounded-2xl border border-[var(--border-light)] bg-white p-3 space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${category.color}`}>
+                              {category.label} ({categoryImages.length})
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => openUpload(categoryId, activeGalleryCase.id)}
+                              disabled={Boolean(uploading)}
+                              className="px-2.5 py-1.5 rounded-xl bg-[var(--bg-base)] border border-[var(--border-light)] text-[11px] font-semibold text-[var(--text-secondary)] disabled:opacity-50">
+                              เพิ่มรูป
+                            </button>
+                          </div>
+                          {categoryImages.length === 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => openUpload(categoryId, activeGalleryCase.id)}
+                              className="w-full h-44 rounded-2xl border-2 border-dashed border-[var(--border-light)] text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]">
+                              ยังไม่มีรูปหมวดนี้
+                            </button>
+                          ) : (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                              {categoryImages.map(image => renderImageTile(image, 'aspect-[4/5]'))}
+                            </div>
+                          )}
+                        </section>
+                      )
+                    })}
+                  </div>
+
+                  {galleryPhaseCategories.filter(category => category.id === 'finished').map(category => {
+                    const categoryImages = galleryImagesByCategory(category.id)
                     return (
-                      <section key={categoryId} className="rounded-2xl border border-[var(--border-light)] bg-white p-3 space-y-3">
+                      <section key={category.id} className="rounded-2xl border border-[var(--border-light)] bg-white p-3 space-y-3">
                         <div className="flex items-center justify-between gap-2">
                           <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${category.color}`}>
                             {category.label} ({categoryImages.length})
                           </span>
                           <button
                             type="button"
-                            onClick={() => openUpload(categoryId, activeGalleryCase.id)}
+                            onClick={() => openUpload(category.id, activeGalleryCase.id)}
                             disabled={Boolean(uploading)}
                             className="px-2.5 py-1.5 rounded-xl bg-[var(--bg-base)] border border-[var(--border-light)] text-[11px] font-semibold text-[var(--text-secondary)] disabled:opacity-50">
                             เพิ่มรูป
@@ -1317,28 +1623,13 @@ function PhotosTab({
                         {categoryImages.length === 0 ? (
                           <button
                             type="button"
-                            onClick={() => openUpload(categoryId, activeGalleryCase.id)}
-                            className="w-full h-36 rounded-2xl border-2 border-dashed border-[var(--border-light)] text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]">
+                            onClick={() => openUpload(category.id, activeGalleryCase.id)}
+                            className="w-full h-32 rounded-2xl border-2 border-dashed border-[var(--border-light)] text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]">
                             ยังไม่มีรูปหมวดนี้
                           </button>
                         ) : (
-                          <div className="grid grid-cols-2 gap-2">
-                            {categoryImages.map(image => (
-                              <div key={image.id} className="relative group aspect-[4/5] rounded-xl overflow-hidden border border-[var(--border-light)] bg-[var(--bg-base)]">
-                                <CustomerPhoto src={image.url} alt={image.caption || category.label} />
-                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                                  <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
-                                    <ZoomIn className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                                <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
-                                  <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
-                                </div>
-                              </div>
-                            ))}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                            {categoryImages.map(image => renderImageTile(image, 'aspect-square'))}
                           </div>
                         )}
                       </section>
@@ -1347,26 +1638,7 @@ function PhotosTab({
                 </div>
               ) : (
                 <div className={`grid ${galleryGridClass} gap-3`}>
-                  {galleryImages.map(image => {
-                    const category = getImageCategory(image.category)
-                    return (
-                      <div key={image.id} className="relative group aspect-square rounded-2xl overflow-hidden border border-[var(--border-light)] bg-white">
-                        <CustomerPhoto src={image.url} alt={image.caption || category.label} />
-                        <span className={`absolute left-2 top-2 text-[9px] px-2 py-0.5 rounded-full border font-semibold ${category.color}`}>{category.label}</span>
-                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                          <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
-                            <ZoomIn className="w-3.5 h-3.5" />
-                          </button>
-                          <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                        <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
-                          <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
-                        </div>
-                      </div>
-                    )
-                  })}
+                  {galleryImages.map(image => renderImageTile(image))}
                 </div>
               )}
             </div>
