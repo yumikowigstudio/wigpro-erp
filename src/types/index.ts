@@ -146,6 +146,7 @@ export interface CustomerImage {
   url: string
   thumbnail?: string
   caption?: string
+  notes?: string
   imageDate?: Date
   uploadedBy: string
   createdAt: Date

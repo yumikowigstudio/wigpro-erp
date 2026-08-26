@@ -750,6 +750,8 @@ function PhotosTab({
   const [generalUploadCat, setGeneralUploadCat] = useState<ImgCat>('before')
   const [movingImageId, setMovingImageId] = useState<string | null>(null)
   const [moveTargetByImage, setMoveTargetByImage] = useState<Record<string, string>>({})
+  const [savingImageNoteId, setSavingImageNoteId] = useState<string | null>(null)
+  const [imageNoteDrafts, setImageNoteDrafts] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const uploadTargetRef = useRef<{ caseId?: string; category: ImgCat }>({ category: 'before' })
 
@@ -1026,6 +1028,75 @@ function PhotosTab({
     }
   }
 
+  const imageNoteValue = (image: CustomerImage) => (
+    imageNoteDrafts[image.id] ?? image.notes ?? ''
+  )
+
+  const handleSaveImageNote = async (image: CustomerImage) => {
+    if (savingImageNoteId) return
+    const note = imageNoteValue(image).trim()
+    const currentNote = (image.notes ?? '').trim()
+    if (note === currentNote) return
+    setSavingImageNoteId(image.id)
+    try {
+      await updateDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, image.id), {
+        notes: note,
+        updatedAt: serverTimestamp(),
+      })
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        action: 'update',
+        module: 'customers',
+        description: `แก้ไขหมายเหตุรูป${image.caption ? `: ${image.caption}` : ''}`,
+        recordId: image.id,
+        recordType: 'customer_image',
+        metadata: { customerId, workCaseId: image.workCaseId, category: image.category },
+      })
+      setImageNoteDrafts(current => {
+        const next = { ...current }
+        delete next[image.id]
+        return next
+      })
+    } catch (err) {
+      console.error(err)
+      alert('บันทึกหมายเหตุรูปไม่สำเร็จ กรุณาลองใหม่')
+    } finally {
+      setSavingImageNoteId(null)
+    }
+  }
+
+  const renderImageNoteEditor = (image: CustomerImage) => {
+    const value = imageNoteValue(image)
+    const isDirty = value.trim() !== (image.notes ?? '').trim()
+    const isSaving = savingImageNoteId === image.id
+    return (
+      <div className="space-y-1.5">
+        <textarea
+          value={value}
+          onChange={e => setImageNoteDrafts(current => ({ ...current, [image.id]: e.target.value }))}
+          rows={2}
+          placeholder="หมายเหตุรูปนี้..."
+          className="w-full resize-none rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]"
+        />
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[10px] text-[var(--text-muted)] truncate">
+            {image.notes ? 'มีหมายเหตุแล้ว' : 'ยังไม่มีหมายเหตุ'}
+          </p>
+          <button
+            type="button"
+            onClick={() => handleSaveImageNote(image)}
+            disabled={!isDirty || isSaving}
+            className="inline-flex items-center justify-center gap-1 rounded-lg border border-[var(--pink-100)] bg-white px-2 py-1 text-[10px] font-semibold text-[var(--pink-600)] hover:bg-[var(--pink-50)] disabled:opacity-45 disabled:hover:bg-white">
+            {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <StickyNote className="w-3 h-3" />}
+            บันทึก
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   const generalImages = images.filter(image => !image.workCaseId)
   const filteredGeneralImages = activeImgCat === 'all'
     ? generalImages
@@ -1070,20 +1141,23 @@ function PhotosTab({
   const renderImageTile = (image: CustomerImage, aspectClass = 'aspect-square') => {
     const category = getImageCategory(image.category)
     return (
-      <div key={image.id} className={`relative group ${aspectClass} rounded-2xl overflow-hidden border border-[var(--border-light)] bg-white`}>
-        <CustomerPhoto src={image.url} alt={image.caption || category.label} />
-        <span className={`absolute left-2 top-2 text-[9px] px-2 py-0.5 rounded-full border font-semibold ${category.color}`}>{category.label}</span>
-        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-          <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
-            <ZoomIn className="w-3.5 h-3.5" />
-          </button>
-          <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+      <div key={image.id} className="rounded-2xl border border-[var(--border-light)] bg-white p-2 space-y-2">
+        <div className={`relative group ${aspectClass} rounded-xl overflow-hidden bg-[var(--bg-base)]`}>
+          <CustomerPhoto src={image.url} alt={image.caption || category.label} />
+          <span className={`absolute left-2 top-2 text-[9px] px-2 py-0.5 rounded-full border font-semibold ${category.color}`}>{category.label}</span>
+          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+            <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
+            <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
+          </div>
         </div>
-        <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
-          <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
-        </div>
+        {renderImageNoteEditor(image)}
       </div>
     )
   }
@@ -1303,22 +1377,7 @@ function PhotosTab({
                           </button>
                         ) : (
                           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                            {groupedImages.map(image => (
-                              <div key={image.id} className="relative group aspect-square rounded-xl overflow-hidden border border-[var(--border-light)] bg-[var(--bg-base)]">
-                                <CustomerPhoto src={image.url} alt={image.caption || category.label} />
-                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                                  <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
-                                    <ZoomIn className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                                <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
-                                  <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
-                                </div>
-                              </div>
-                            ))}
+                            {groupedImages.map(image => renderImageTile(image))}
                           </div>
                         )}
                       </section>
@@ -1408,6 +1467,7 @@ function PhotosTab({
                       <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
                     </div>
                   </div>
+                  {renderImageNoteEditor(image)}
                   {workCases.length > 0 && (
                     <div className="space-y-1.5">
                       <select
