@@ -751,6 +751,7 @@ function PhotosTab({
   const [movingImageId, setMovingImageId] = useState<string | null>(null)
   const [moveTargetByImage, setMoveTargetByImage] = useState<Record<string, string>>({})
   const [savingImageNoteId, setSavingImageNoteId] = useState<string | null>(null)
+  const [imageNoteModalId, setImageNoteModalId] = useState<string | null>(null)
   const [imageNoteDrafts, setImageNoteDrafts] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const uploadTargetRef = useRef<{ caseId?: string; category: ImgCat }>({ category: 'before' })
@@ -1032,6 +1033,22 @@ function PhotosTab({
     imageNoteDrafts[image.id] ?? image.notes ?? ''
   )
 
+  const openImageNoteEditor = (image: CustomerImage) => {
+    setImageNoteDrafts(current => ({ ...current, [image.id]: image.notes ?? '' }))
+    setImageNoteModalId(image.id)
+  }
+
+  const closeImageNoteEditor = () => {
+    const closingImageId = imageNoteModalId
+    setImageNoteModalId(null)
+    if (!closingImageId) return
+    setImageNoteDrafts(current => {
+      const next = { ...current }
+      delete next[closingImageId]
+      return next
+    })
+  }
+
   const handleSaveImageNote = async (image: CustomerImage) => {
     if (savingImageNoteId) return
     const note = imageNoteValue(image).trim()
@@ -1059,6 +1076,7 @@ function PhotosTab({
         delete next[image.id]
         return next
       })
+      if (imageNoteModalId === image.id) setImageNoteModalId(null)
     } catch (err) {
       console.error(err)
       alert('บันทึกหมายเหตุรูปไม่สำเร็จ กรุณาลองใหม่')
@@ -1067,33 +1085,23 @@ function PhotosTab({
     }
   }
 
-  const renderImageNoteEditor = (image: CustomerImage) => {
-    const value = imageNoteValue(image)
-    const isDirty = value.trim() !== (image.notes ?? '').trim()
-    const isSaving = savingImageNoteId === image.id
+  const renderImageNoteAction = (image: CustomerImage) => {
+    const note = (image.notes ?? '').trim()
     return (
-      <div className="space-y-1.5">
-        <textarea
-          value={value}
-          onChange={e => setImageNoteDrafts(current => ({ ...current, [image.id]: e.target.value }))}
-          rows={2}
-          placeholder="หมายเหตุรูปนี้..."
-          className="w-full resize-none rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]"
-        />
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-[10px] text-[var(--text-muted)] truncate">
-            {image.notes ? 'มีหมายเหตุแล้ว' : 'ยังไม่มีหมายเหตุ'}
-          </p>
-          <button
-            type="button"
-            onClick={() => handleSaveImageNote(image)}
-            disabled={!isDirty || isSaving}
-            className="inline-flex items-center justify-center gap-1 rounded-lg border border-[var(--pink-100)] bg-white px-2 py-1 text-[10px] font-semibold text-[var(--pink-600)] hover:bg-[var(--pink-50)] disabled:opacity-45 disabled:hover:bg-white">
-            {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <StickyNote className="w-3 h-3" />}
-            บันทึก
-          </button>
-        </div>
-      </div>
+      <button
+        type="button"
+        onClick={() => openImageNoteEditor(image)}
+        title={note || 'เพิ่มหมายเหตุรูปนี้'}
+        className={`w-full min-h-9 rounded-xl border px-2.5 py-2 text-left transition-all ${
+          note
+            ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+            : 'border-[var(--border-light)] bg-[var(--bg-base)] text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]'
+        }`}>
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold">
+          <StickyNote className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{note ? `โน้ต: ${note}` : 'เพิ่มโน้ต'}</span>
+        </span>
+      </button>
     )
   }
 
@@ -1124,7 +1132,12 @@ function PhotosTab({
     after: caseImages.filter(image => image.category === 'after').length,
     finished: caseImages.filter(image => image.category === 'finished').length,
     documents: caseImages.filter(image => docCategoryIds.includes(image.category)).length,
+    notes: caseImages.filter(image => (image.notes ?? '').trim()).length,
   })
+  const activeGalleryStats = activeGalleryCase ? caseImageStats(activeGalleryImages) : null
+  const totalImageNotes = images.filter(image => (image.notes ?? '').trim()).length
+  const noteModalImage = imageNoteModalId ? images.find(image => image.id === imageNoteModalId) ?? null : null
+  const noteModalCategory = noteModalImage ? getImageCategory(noteModalImage.category) : null
   const shouldShowGalleryCategory = (categoryId: ImgCat) => galleryCategory === 'all' || galleryCategory === categoryId
   const galleryDocCategories = activeGalleryCase
     ? caseImageCategories(activeGalleryCase.type).filter(category => docCategoryIds.includes(category.id) && shouldShowGalleryCategory(category.id))
@@ -1157,7 +1170,7 @@ function PhotosTab({
             <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
           </div>
         </div>
-        {renderImageNoteEditor(image)}
+        {renderImageNoteAction(image)}
       </div>
     )
   }
@@ -1170,7 +1183,7 @@ function PhotosTab({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="font-semibold text-[var(--text-primary)] text-sm">ชิ้นงาน / รูปลูกค้า</h3>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">{workCases.length} ชิ้นงาน · {images.length} รูป</p>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{workCases.length} ชิ้นงาน · {images.length} รูป · {totalImageNotes} โน้ต</p>
           </div>
           <button
             type="button"
@@ -1303,12 +1316,13 @@ function PhotosTab({
                       ) : null}
                     </div>
                     {workCase.notes && <p className="text-xs text-[var(--text-secondary)] mt-2 whitespace-pre-line">{workCase.notes}</p>}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 max-w-2xl">
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-3 max-w-3xl">
                       {[
                         ['Before', stats.before, 'text-orange-700 bg-orange-50 border-orange-100'],
                         ['After', stats.after, 'text-emerald-700 bg-emerald-50 border-emerald-100'],
                         ['เอกสาร', stats.documents, 'text-blue-700 bg-blue-50 border-blue-100'],
                         ['งานเสร็จ', stats.finished, 'text-pink-700 bg-pink-50 border-pink-100'],
+                        ['โน้ต', stats.notes, 'text-amber-700 bg-amber-50 border-amber-100'],
                       ].map(([label, count, color]) => (
                         <div key={label} className={`rounded-xl border px-3 py-2 ${color}`}>
                           <p className="text-[10px] font-semibold opacity-80">{label}</p>
@@ -1467,7 +1481,7 @@ function PhotosTab({
                       <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
                     </div>
                   </div>
-                  {renderImageNoteEditor(image)}
+                  {renderImageNoteAction(image)}
                   {workCases.length > 0 && (
                     <div className="space-y-1.5">
                       <select
@@ -1505,7 +1519,7 @@ function PhotosTab({
                   <p className="text-[11px] font-bold text-[var(--pink-600)] uppercase tracking-wide">อัลบั้ม Before & After</p>
                   <h3 className="text-lg font-bold text-[var(--text-primary)] truncate">{activeGalleryCase.title}</h3>
                   <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                    {formatDate(activeGalleryCase.caseDate)} · {activeGalleryImages.length} รูป · {getCaseType(activeGalleryCase.type).label}
+                    {formatDate(activeGalleryCase.caseDate)} · {activeGalleryImages.length} รูป · {activeGalleryStats?.notes ?? 0} โน้ต · {getCaseType(activeGalleryCase.type).label}
                   </p>
                 </div>
                 <button
@@ -1515,6 +1529,23 @@ function PhotosTab({
                   <X className="w-4 h-4" />
                 </button>
               </div>
+
+              {activeGalleryStats && (
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {[
+                    ['Before', activeGalleryStats.before, 'bg-orange-50 text-orange-700 border-orange-100'],
+                    ['After', activeGalleryStats.after, 'bg-emerald-50 text-emerald-700 border-emerald-100'],
+                    ['เอกสาร', activeGalleryStats.documents, 'bg-blue-50 text-blue-700 border-blue-100'],
+                    ['งานเสร็จ', activeGalleryStats.finished, 'bg-pink-50 text-pink-700 border-pink-100'],
+                    ['มีโน้ต', activeGalleryStats.notes, 'bg-amber-50 text-amber-700 border-amber-100'],
+                  ].map(([label, count, color]) => (
+                    <div key={label} className={`rounded-xl border px-3 py-2 ${color}`}>
+                      <p className="text-[10px] font-semibold opacity-75">{label}</p>
+                      <p className="text-sm font-black">{count}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-[1.2fr_1fr_1fr_auto] gap-2">
                 <select
@@ -1558,23 +1589,6 @@ function PhotosTab({
                     </button>
                   ))}
                 </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {caseImageCategories(activeGalleryCase.type).map(category => {
-                  const key = `${activeGalleryCase.id}:${category.id}`
-                  return (
-                    <button
-                      key={category.id}
-                      type="button"
-                      onClick={() => openUpload(category.id, activeGalleryCase.id)}
-                      disabled={Boolean(uploading)}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-semibold disabled:opacity-50 ${category.color}`}>
-                      {uploading === key ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
-                      เพิ่ม {category.label}
-                    </button>
-                  )
-                })}
               </div>
             </div>
 
@@ -1701,6 +1715,67 @@ function PhotosTab({
                   {galleryImages.map(image => renderImageTile(image))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {noteModalImage && noteModalCategory && (
+        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg rounded-3xl bg-white shadow-2xl overflow-hidden">
+            <div className="flex items-start justify-between gap-3 border-b border-[var(--border-light)] p-4">
+              <div>
+                <p className="text-[11px] font-bold text-[var(--pink-600)] uppercase tracking-wide">หมายเหตุรูป</p>
+                <h3 className="text-base font-bold text-[var(--text-primary)]">บันทึกรายละเอียดของรูปนี้</h3>
+              </div>
+              <button
+                type="button"
+                onClick={closeImageNoteEditor}
+                disabled={savingImageNoteId === noteModalImage.id}
+                className="h-9 w-9 shrink-0 rounded-xl border border-[var(--border-light)] flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-base)] disabled:opacity-50">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div className="flex gap-3 rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-3">
+                <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-white">
+                  <CustomerPhoto src={noteModalImage.url} alt={noteModalImage.caption || noteModalCategory.label} />
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <span className={`inline-flex text-[11px] px-2 py-1 rounded-full border font-semibold ${noteModalCategory.color}`}>
+                    {noteModalCategory.label}
+                  </span>
+                  <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{noteModalImage.caption || noteModalCategory.label}</p>
+                  <p className="text-xs text-[var(--text-muted)]">{formatDate(noteModalImage.imageDate ?? noteModalImage.createdAt)}</p>
+                </div>
+              </div>
+
+              <textarea
+                value={imageNoteValue(noteModalImage)}
+                onChange={e => setImageNoteDrafts(current => ({ ...current, [noteModalImage.id]: e.target.value }))}
+                rows={6}
+                placeholder="เช่น รายละเอียดงาน, จุดที่ต้องระวัง, เอกสารนี้เกี่ยวกับอะไร, หมายเหตุสำหรับทีม..."
+                className="w-full resize-none rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] px-3 py-3 text-sm leading-relaxed text-[var(--text-secondary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]"
+              />
+
+              <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeImageNoteEditor}
+                  disabled={savingImageNoteId === noteModalImage.id}
+                  className="px-4 py-2.5 rounded-xl border border-[var(--border-light)] bg-white text-sm font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-base)] disabled:opacity-50">
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveImageNote(noteModalImage)}
+                  disabled={savingImageNoteId === noteModalImage.id || imageNoteValue(noteModalImage).trim() === (noteModalImage.notes ?? '').trim()}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white text-sm font-bold shadow-sm hover:opacity-90 disabled:opacity-50">
+                  {savingImageNoteId === noteModalImage.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <StickyNote className="w-4 h-4" />}
+                  บันทึกหมายเหตุ
+                </button>
+              </div>
             </div>
           </div>
         </div>
