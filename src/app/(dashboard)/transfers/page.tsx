@@ -1,12 +1,13 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { formatDate } from '@/lib/utils'
 import { ArrowLeftRight, Plus, X, Loader2, Package, Copy, Download, CheckCircle2, AlertTriangle } from 'lucide-react'
-import { collection, onSnapshot, query, where, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore'
+import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
-import { getBranchStock, adjustBranchStock, invId } from '@/lib/stock'
+import { adjustBranchStock, invId } from '@/lib/stock'
+import { createTransfer, confirmTransferReceipt } from '@/lib/transfers'
 import { useAuth } from '@/hooks/useAuth'
 import { writeActivityLog } from '@/lib/activityLog'
 
@@ -38,10 +39,8 @@ interface TOrder {
 
 const sel = 'px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]'
 const transferQty = (item: TItem) => Number(item.receivedQty ?? item.approvedQty ?? item.requestedQty ?? item.quantity ?? 0)
-const transferItemName = (item: TItem, products: Prod[]) =>
-  item.productName || item.name || products.find(p => p.id === item.productId)?.name || item.productId
-
 export default function TransfersPage() {
+  const transferAttempt = useRef<{ id: string; no: string } | null>(null)
   const searchParams = useSearchParams()
   const { companyId, branchId, userId, userName } = useAuth()
   const [branches, setBranches] = useState<Branch[]>([])
@@ -152,127 +151,31 @@ export default function TransfersPage() {
   const removeRow = (i: number) => setRows(rows.filter((_, idx) => idx !== i))
 
   const submitTransfer = async () => {
-    if (!from || !to || from === to) { setMsg({ t: 'err', m: 'เลือกสาขาต้นทาง/ปลายทางให้ต่างกัน' }); return }
-    const items = rows.filter(r => r.productId && Number(r.quantity) > 0)
-    if (items.length === 0) { setMsg({ t: 'err', m: 'เพิ่มรายการอย่างน้อย 1 รายการ' }); return }
-    // ตรวจสต๊อกต้นทางพอไหม
-    for (const r of items) {
-      const cur = await getBranchStock(r.productId, from)
-      if (Number(r.quantity) > cur) {
-        setMsg({ t: 'err', m: `${products.find(p => p.id === r.productId)?.name}: สต๊อกต้นทางเหลือ ${cur} ไม่พอโอน ${r.quantity}` }); return
-      }
-    }
-    setBusy('transfer')
-    setMsg({ t: 'ok', m: `กำลังโอนสินค้าไปยัง "${branchName(to)}"...` })
+    if (busy) return
+    setBusy('transfer'); setMsg(null)
     try {
-      const orderNo = await generateBranchDocumentNo(companyId, from, 'transfer')
-      for (const r of items) {
-        const p = products.find(x => x.id === r.productId)!
-        const qty = Number(r.quantity)
-        await adjustBranchStock({ companyId, productId: p.id, productName: p.name, branchId: from, delta: -qty, type: 'transfer_out', costPrice: p.costPrice, referenceType: 'transfer', referenceNo: orderNo, performedBy: userId })
-      }
-      const transferRef = await addDoc(collection(db, COLLECTIONS.TRANSFER_ORDERS), {
-        companyId, orderNo, fromBranchId: from, toBranchId: to,
-        items: items.map(r => {
-          const p = products.find(product => product.id === r.productId)
-          return {
-            productId: r.productId,
-            name: p?.name ?? '',
-            productName: p?.name ?? '',
-            sku: p?.sku ?? '',
-            quantity: Number(r.quantity),
-            requestedQty: Number(r.quantity),
-            approvedQty: Number(r.quantity),
-            costPrice: p?.costPrice ?? 0,
-          }
+      transferAttempt.current ||= { id: crypto.randomUUID(), no: await generateBranchDocumentNo(companyId, from, 'transfer') }
+      await createTransfer({ id: transferAttempt.current.id, orderNo: transferAttempt.current.no, companyId, fromBranchId: from, toBranchId: to, userId, userName,
+        items: rows.filter(row => row.productId).map(row => {
+          const product = products.find(item => item.id === row.productId)
+          return { productId: row.productId, productName: product?.name ?? '', quantity: Number(row.quantity), costPrice: product?.costPrice ?? 0, sku: product?.sku ?? '' }
         }),
-        status: 'in_transit', requestedBy: userId, requestedAt: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       })
-      await writeActivityLog({
-        companyId,
-        branchId: from || branchId,
-        userId,
-        userName,
-        action: 'transfer',
-        module: 'โอนสินค้า',
-        description: `สร้างใบโอน ${orderNo} จาก ${branchName(from)} ไป ${branchName(to)} จำนวน ${items.length} รายการ`,
-        recordId: transferRef.id,
-        recordType: 'transfer_order',
-        metadata: {
-          orderNo,
-          fromBranchId: from,
-          fromBranchName: branchName(from),
-          toBranchId: to,
-          toBranchName: branchName(to),
-          itemCount: items.length,
-          totalQty: items.reduce((sum, item) => sum + Number(item.quantity), 0),
-        },
-      })
-      setMsg({ t: 'ok', m: `โอนสำเร็จ (${orderNo})` })
-      setMsg({ t: 'ok', m: `สร้างใบโอน ${orderNo} แล้ว รอปลายทางตรวจรับก่อนเข้าสต๊อก` })
+      setMsg({ t: 'ok', m: `สร้างใบโอน ${transferAttempt.current.no} แล้ว รอปลายทางตรวจรับ` })
+      transferAttempt.current = null
       setRows([{ productId: '', quantity: '' }]); setShowModal(false)
-    } catch (e) { setMsg({ t: 'err', m: 'โอนไม่สำเร็จ: ' + (e instanceof Error ? e.message : '') }) }
+    } catch (error) { setMsg({ t: 'err', m: error instanceof Error ? error.message : 'โอนไม่สำเร็จ' }) }
     finally { setBusy('') }
   }
 
   const receiveTransfer = async (order: TOrder) => {
-    if (!companyId || order.status === 'received') return
-    if (!confirm(`ยืนยันตรวจรับใบโอน ${order.orderNo} เข้าสาขา ${branchName(order.toBranchId)}?`)) return
+    if (busy || !confirm(`ยืนยันตรวจรับ ${order.orderNo}?`)) return
     setBusy(`receive-${order.id}`)
-    setMsg({ t: 'ok', m: `กำลังตรวจรับใบโอน ${order.orderNo}...` })
     try {
-      for (const item of order.items ?? []) {
-        const qty = transferQty(item)
-        if (qty <= 0) continue
-        const p = products.find(product => product.id === item.productId)
-        await adjustBranchStock({
-          companyId,
-          productId: item.productId,
-          productName: transferItemName(item, products),
-          branchId: order.toBranchId,
-          delta: qty,
-          type: 'transfer_in',
-          costPrice: item.costPrice ?? p?.costPrice ?? 0,
-          referenceType: 'transfer',
-          referenceNo: order.orderNo,
-          performedBy: userId,
-          notes: `ตรวจรับใบโอน ${order.orderNo}`,
-        })
-      }
-
-      await updateDoc(doc(db, COLLECTIONS.TRANSFER_ORDERS, order.id), {
-        status: 'received',
-        receivedAt: serverTimestamp(),
-        receivedBy: userId,
-        items: (order.items ?? []).map(item => ({ ...item, receivedQty: transferQty(item) })),
-        updatedAt: serverTimestamp(),
-      })
-      await writeActivityLog({
-        companyId,
-        branchId: order.toBranchId || branchId,
-        userId,
-        userName,
-        action: 'transfer',
-        module: 'โอนสินค้า',
-        description: `ตรวจรับใบโอน ${order.orderNo} เข้าสาขา ${branchName(order.toBranchId)}`,
-        recordId: order.id,
-        recordType: 'transfer_order',
-        metadata: {
-          orderNo: order.orderNo,
-          fromBranchId: order.fromBranchId,
-          fromBranchName: branchName(order.fromBranchId),
-          toBranchId: order.toBranchId,
-          toBranchName: branchName(order.toBranchId),
-          itemCount: order.items?.length ?? 0,
-          totalQty: (order.items ?? []).reduce((sum, item) => sum + transferQty(item), 0),
-        },
-      })
-      setMsg({ t: 'ok', m: `ตรวจรับใบโอน ${order.orderNo} เรียบร้อย สต๊อกเข้าปลายทางแล้ว` })
-    } catch (e) {
-      setMsg({ t: 'err', m: 'ตรวจรับไม่สำเร็จ: ' + (e instanceof Error ? e.message : '') })
-    } finally {
-      setBusy('')
-    }
+      await confirmTransferReceipt({ id: order.id, companyId, branchId, userId, userName })
+      setMsg({ t: 'ok', m: `ตรวจรับ ${order.orderNo} เรียบร้อย` })
+    } catch (error) { setMsg({ t: 'err', m: error instanceof Error ? error.message : 'ตรวจรับไม่สำเร็จ' }) }
+    finally { setBusy('') }
   }
 
   const pendingReceiveCount = orders.filter(o => o.status !== 'received' && o.status !== 'cancelled').length

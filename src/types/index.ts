@@ -444,6 +444,9 @@ export interface WorkOrder {
   sourceItemId?: string
   sourceItemName?: string
   sourceItemQty?: number
+  depositId?: string
+  workCaseId?: string
+  sourceCancelled?: boolean
   // Wig details
   wigType?: string
   wigColor?: string
@@ -485,6 +488,18 @@ export interface WorkOrder {
 
 export type DepositStatus = 'pending' | 'deposited' | 'paid_full' | 'cancelled'
 
+export interface DepositPayment {
+  id: string
+  amount: number
+  method: string
+  receivedAt?: Date
+  receivedBy?: string
+  receivedByName?: string
+  slipUrl?: string
+  confirmed: boolean
+  dateUnknown?: boolean
+}
+
 export interface Deposit {
   id: string
   companyId: string
@@ -507,6 +522,16 @@ export interface Deposit {
   depositAmount: number
   paidAmount: number
   remainingAmount: number
+  paymentHistory?: DepositPayment[]
+  paymentStatus?: PaymentStatus
+  paymentMethod?: string
+  payMethod?: string
+  appliedAmount?: number
+  refundedCreditAmount?: number
+  closedBySaleId?: string
+  workOrderIds?: string[]
+  workCaseId?: string
+  refundDue?: number
   status: DepositStatus
   notes?: string
   receiptNote?: string
@@ -572,6 +597,11 @@ export interface Sale {
   showVatOnReceipt?: boolean
   totalAmount: number
   depositDeducted?: number
+  depositId?: string
+  workOrderIds?: string[]
+  workCaseId?: string
+  refundDue?: number
+  stockCommitted?: boolean
   payments: Payment[]
   paidAmount: number
   changeAmount: number

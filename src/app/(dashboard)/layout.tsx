@@ -1,4 +1,6 @@
 'use client'
+import { OperationalAlertsProvider } from '@/components/OperationalAlertsProvider'
+import { Suspense } from 'react'
 import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore'
@@ -61,6 +63,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
+    <OperationalAlertsProvider>
     <div className="min-h-screen bg-[var(--bg-base)]">
       {/* Desktop Sidebar */}
       <div className="hidden md:block">
@@ -100,9 +103,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </button>
               </div>
             </div>
-          ) : children}
+          ) : <Suspense fallback={<div className="p-6 text-sm">กำลังโหลด...</div>}>{children}</Suspense>}
         </main>
       </div>
     </div>
+    </OperationalAlertsProvider>
   )
 }

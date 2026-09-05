@@ -1,11 +1,12 @@
 'use client'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { formatCurrency } from '@/lib/utils'
 import { Undo2, Search, Loader2, Package, CheckCircle2 } from 'lucide-react'
-import { collection, query, where, getDocs, doc, updateDoc, increment, serverTimestamp } from 'firebase/firestore'
+import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { COLLECTIONS, addDocument, generateBranchDocumentNo } from '@/lib/firestore'
-import { adjustBranchStock } from '@/lib/stock'
+import { COLLECTIONS } from '@/lib/firestore'
+import { legacyReturnTotals, recordReturn } from '@/lib/returns'
+import { calculateReturn } from '@/lib/money'
 import { Sale, SaleItem } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -17,7 +18,10 @@ const methods = [
 ]
 
 export default function ReturnsPage() {
-  const { companyId, branchId, userId } = useAuth()
+  const { companyId, branchId, userId, userName } = useAuth()
+  const [returned, setReturned] = useState<Record<string, number>>({})
+  const operationId = useRef('')
+  const busy = useRef(false)
   const [receiptNo, setReceiptNo] = useState('')
   const [searching, setSearching] = useState(false)
   const [sale, setSale]   = useState<Sale | null>(null)
@@ -40,6 +44,12 @@ export default function ReturnsPage() {
       if (snap.empty) { alert('ไม่พบใบเสร็จเลขที่นี้'); return }
       const d = snap.docs[0]
       const data = { id: d.id, ...d.data() } as Sale
+      if (data.status === 'cancelled' || data.paymentStatus === 'pending' || data.paymentStatus === 'rejected') throw new Error('บิลนี้ถูกยกเลิกหรือยังไม่ยืนยันรับชำระ')
+      const totals = await getDoc(doc(db, COLLECTIONS.RETURN_TOTALS, data.id))
+      const priorQuantities = totals.exists() ? totals.data().quantities : await legacyReturnTotals(data)
+      calculateReturn(data, data.items.map(() => 0), priorQuantities)
+      setReturned(priorQuantities)
+      operationId.current = crypto.randomUUID()
       setSale(data)
       setRows((data.items ?? []).map(it => ({ ...it, returnQty: 0 })))
     } catch (err) {
@@ -48,50 +58,24 @@ export default function ReturnsPage() {
   }
 
   const setQty = (i: number, v: number) =>
-    setRows(rows.map((r, idx) => idx === i ? { ...r, returnQty: Math.max(0, Math.min(v, r.quantity)) } : r))
+    setRows(rows.map((r, idx) => idx === i ? { ...r, returnQty: Math.max(0, Math.min(v, r.quantity - (returned[String(i)] ?? 0))) } : r))
 
-  const refundSubtotal = rows.reduce((s, r) => s + r.returnQty * r.unitPrice, 0)
-  const refundVat   = refundSubtotal * 0.07
-  const refundTotal = refundSubtotal + refundVat
+  const refund = sale ? calculateReturn(sale, rows.map(r => r.returnQty), returned) : { subtotal: 0, vat: 0, total: 0 }
+  const { subtotal: refundSubtotal, vat: refundVat, total: refundTotal } = refund
   const anyReturn   = rows.some(r => r.returnQty > 0)
 
   const handleConfirm = async () => {
-    if (!anyReturn || !sale) return
+    if (!anyReturn || !sale || busy.current) return
+    if (!reason.trim()) { alert('กรุณาระบุเหตุผลการคืน'); return }
     if (!companyId || companyId === 'demo_company') { alert('ระบบกำลังโหลดข้อมูล กรุณารอสักครู่'); return }
     if (!confirm(`ยืนยันการคืนสินค้า คืนเงิน ${formatCurrency(refundTotal)}?`)) return
     setSaving(true)
-    const returnedItems = rows.filter(r => r.returnQty > 0)
-    const saleBranchId = sale.branchId || branchId
+    busy.current = true
     try {
-      const returnNo = await generateBranchDocumentNo(companyId, saleBranchId, 'return')
-      await addDocument(COLLECTIONS.RETURNS, {
-        companyId, branchId: saleBranchId, returnNo,
-        originalSaleId: sale.id, originalReceiptNo: sale.receiptNo,
-        branchName: sale.branchName ?? null,
-        customerId: sale.customerId ?? null, customerName: sale.customerName ?? null,
-        items: returnedItems.map(r => ({ productId: r.productId ?? null, name: r.name, quantity: r.returnQty, unitPrice: r.unitPrice, total: r.returnQty * r.unitPrice })),
-        refundSubtotal, refundVat, refundTotal, method,
-        reason: reason.trim() || null, createdBy: userId,
-      } as never)
-
-      // คืนสต๊อกสินค้า (เฉพาะ product ที่มี productId) + บันทึกการเคลื่อนไหว
-      for (const r of returnedItems) {
-        if (r.type !== 'product' || !r.productId) continue
-        await updateDoc(doc(db, COLLECTIONS.PRODUCTS, r.productId), {
-          stockQty: increment(r.returnQty), updatedAt: serverTimestamp(),
-        }).catch(() => {})
-        await adjustBranchStock({
-          companyId, branchId: saleBranchId, productId: r.productId, productName: r.name,
-          delta: r.returnQty, type: 'return', referenceType: 'return', referenceNo: returnNo,
-          notes: `คืนจากบิล ${sale.receiptNo}`,
-          performedBy: userId,
-        }).catch(() => {})
-      }
-
-      setDone({ returnNo, total: refundTotal })
+      setDone(await recordReturn({ sale, quantities: rows.map(r => r.returnQty), method, reason, userId, userName, operationId: operationId.current }))
     } catch (err) {
       alert('บันทึกการคืนไม่สำเร็จ: ' + (err instanceof Error ? err.message : ''))
-    } finally { setSaving(false) }
+    } finally { setSaving(false); busy.current = false }
   }
 
   const reset = () => { setReceiptNo(''); setSale(null); setRows([]); setReason(''); setDone(null) }
@@ -141,11 +125,11 @@ export default function ReturnsPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{r.name}</p>
-                      <p className="text-xs text-[var(--text-muted)]">ขายไป {r.quantity} · {formatCurrency(r.unitPrice)}/ชิ้น{r.type === 'service' ? ' · บริการ (ไม่คืนสต๊อก)' : ''}</p>
+                      <p className="text-xs text-[var(--text-muted)]">ขาย {r.quantity} · คืนแล้ว {returned[String(i)] ?? 0} · คืนได้ {r.quantity - (returned[String(i)] ?? 0)}{r.type === 'service' ? ' · บริการ' : ''}</p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <span className="text-xs text-[var(--text-muted)]">คืน</span>
-                      <input type="number" min={0} max={r.quantity} value={r.returnQty || ''}
+                      <input type="number" min={0} max={r.quantity - (returned[String(i)] ?? 0)} value={r.returnQty || ''}
                         onChange={e => setQty(i, parseInt(e.target.value) || 0)}
                         className="w-14 px-2 py-1.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]" />
                     </div>
@@ -165,7 +149,7 @@ export default function ReturnsPage() {
                     ))}
                   </div>
                 </div>
-                <input value={reason} onChange={e => setReason(e.target.value)} placeholder="เหตุผลการคืน (ไม่บังคับ)"
+                <input value={reason} onChange={e => setReason(e.target.value)} placeholder="เหตุผลการคืน"
                   className="w-full px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]" />
 
                 <div className="bg-[var(--bg-base)] rounded-xl p-3 space-y-1 text-sm">

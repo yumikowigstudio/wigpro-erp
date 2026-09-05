@@ -13,6 +13,8 @@ import { Sale, Customer, WorkOrder, Deposit } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { downloadCsv } from '@/lib/export'
+import { cashbook, type RefundRecord } from '@/lib/cashbook'
+import { saleLineAmounts } from '@/lib/money'
 
 const monthNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
 
@@ -43,6 +45,8 @@ type BranchReportRow = ReportBranch & {
   depositCount: number
   commission: number
   totalCollected: number
+  saleCollected: number
+  refunds: number
 }
 
 type BranchItemReportRow = {
@@ -99,6 +103,7 @@ export default function ReportsPage() {
   const [branchReportSales, setBranchReportSales]       = useState<Sale[]>([])
   const [branchReportDeposits, setBranchReportDeposits] = useState<Deposit[]>([])
   const [branchReportLoading, setBranchReportLoading]   = useState(true)
+  const [refunds, setRefunds] = useState<RefundRecord[]>([])
 
   useEffect(() => {
     if (!companyId || !branchId) return
@@ -189,13 +194,16 @@ export default function ReportsPage() {
       () => check()
     )
 
-    return () => { salesUnsub(); depositsUnsub() }
+    const refundsUnsub = onSnapshot(query(collection(db, COLLECTIONS.RETURNS), where('companyId', '==', companyId)), snap => setRefunds(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) }) as RefundRecord)))
+    return () => { salesUnsub(); depositsUnsub(); refundsUnsub() }
   }, [companyId])
 
   const countableSales = useMemo(() => sales.filter(isCountableSale), [sales])
   const countableSales6m = useMemo(() => allSales6m.filter(isCountableSale), [allSales6m])
   const countableBranchReportSales = useMemo(() => branchReportSales.filter(isCountableSale), [branchReportSales])
   const countableBranchReportDeposits = useMemo(() => branchReportDeposits.filter(isCountableDeposit), [branchReportDeposits])
+  const cashEntries = useMemo(() => cashbook(branchReportSales, branchReportDeposits, refunds), [branchReportSales, branchReportDeposits, refunds])
+  const undatedReceipts = cashEntries.filter(entry => !entry.date).reduce((sum, entry) => sum + entry.amount, 0)
   const totalRevenue = countableSales.reduce((a, s) => a + s.totalAmount, 0)
 
   // 6-month chart
@@ -284,6 +292,8 @@ export default function ReportsPage() {
         depositCount: 0,
         commission: 0,
         totalCollected: 0,
+        saleCollected: 0,
+        refunds: 0,
       }))
       .sort((a, b) => (a.code || '').localeCompare(b.code || '', 'th') || a.name.localeCompare(b.name, 'th'))
 
@@ -296,9 +306,10 @@ export default function ReportsPage() {
         const row = rowMap.get(sale.branchId)
         if (!row) return
         row.billCount += 1
-        sale.items?.forEach(item => {
+        const lineAmounts = saleLineAmounts(sale)
+        sale.items?.forEach((item, index) => {
           const qty = numberValue(item.quantity ?? 1)
-          const revenue = numberValue(item.total)
+          const revenue = lineAmounts[index]
           const commission = numberValue(item.commissionAmount)
           const type = item.type === 'service' || item.serviceId ? 'service' : 'product'
 
@@ -333,17 +344,28 @@ export default function ReportsPage() {
       })
 
     countableBranchReportDeposits
-      .filter(deposit => isWithinDateRange(deposit.createdAt, reportStartDate, reportEndDate))
+      .filter(deposit => new Date(deposit.createdAt) <= parseDateInput(reportEndDate, true))
       .forEach(deposit => {
         const row = rowMap.get(deposit.branchId)
         if (!row) return
-        row.depositCount += 1
-        row.depositPaid += numberValue(deposit.paidAmount)
         row.depositOutstanding += numberValue(deposit.remainingAmount)
       })
 
+    const depositRefs = new Map<string, Set<string>>()
+    cashEntries.filter(entry => entry.date && isWithinDateRange(entry.date, reportStartDate, reportEndDate)).forEach(entry => {
+      const row = rowMap.get(entry.branchId)
+      if (!row) return
+      if (entry.kind === 'sale') row.saleCollected += entry.amount
+      if (entry.kind === 'refund') row.refunds -= entry.amount
+      if (entry.kind === 'deposit') {
+        row.depositPaid += entry.amount
+        const refs = depositRefs.get(entry.branchId) ?? new Set<string>()
+        refs.add(entry.reference); depositRefs.set(entry.branchId, refs)
+        row.depositCount = refs.size
+      }
+    })
     rows.forEach(row => {
-      row.totalCollected = row.productSales + row.serviceSales + row.depositPaid
+      row.totalCollected = row.saleCollected + row.depositPaid - row.refunds
     })
 
     const totals = rows.reduce((acc, row) => ({
@@ -358,6 +380,8 @@ export default function ReportsPage() {
       depositOutstanding: acc.depositOutstanding + row.depositOutstanding,
       commission: acc.commission + row.commission,
       totalCollected: acc.totalCollected + row.totalCollected,
+      saleCollected: acc.saleCollected + row.saleCollected,
+      refunds: acc.refunds + row.refunds,
     }), {
       billCount: 0,
       itemCount: 0,
@@ -370,6 +394,8 @@ export default function ReportsPage() {
       depositOutstanding: 0,
       commission: 0,
       totalCollected: 0,
+      saleCollected: 0,
+      refunds: 0,
     })
 
     return {
@@ -377,15 +403,15 @@ export default function ReportsPage() {
       itemRows: Array.from(itemMap.values()).sort((a, b) => b.revenue - a.revenue),
       totals,
     }
-  }, [countableBranchReportDeposits, countableBranchReportSales, branches, currentBranch, reportEndDate, reportStartDate])
+  }, [countableBranchReportDeposits, countableBranchReportSales, branches, currentBranch, reportEndDate, reportStartDate, cashEntries])
 
   // Export ตามแท็บที่เปิดอยู่
   const stamp = new Date().toISOString().slice(0, 10)
   const handleExport = async () => {
     if (!await ensurePermission('action.reports.export', 'ส่งออกรายงาน')) return
     if (activeTab === 'branches') {
-      downloadCsv(`branch-report-${reportStartDate}-${reportEndDate}`, ['สาขา','รหัสสาขา','จำนวนบิล','ยอดขายสินค้า','ยอดขายบริการ','รับมัดจำ','ค้างชำระ','คอมมิชชั่น','รวมรับ'],
-        branchReport.rows.map(r => [r.name, r.code ?? '', r.billCount, r.productSales.toFixed(2), r.serviceSales.toFixed(2), r.depositPaid.toFixed(2), r.depositOutstanding.toFixed(2), r.commission.toFixed(2), r.totalCollected.toFixed(2)]))
+      downloadCsv(`branch-report-${reportStartDate}-${reportEndDate}`, ['สาขา','รหัสสาขา','จำนวนบิล','ยอดขายสินค้า','ยอดขายบริการ','รับมัดจำ','ยอดค้างปัจจุบัน','คอมมิชชั่น','รับจากขาย','คืนเงินจริง','รับสุทธิ'],
+        branchReport.rows.map(r => [r.name, r.code ?? '', r.billCount, r.productSales.toFixed(2), r.serviceSales.toFixed(2), r.depositPaid.toFixed(2), r.depositOutstanding.toFixed(2), r.commission.toFixed(2), r.saleCollected.toFixed(2), r.refunds.toFixed(2), r.totalCollected.toFixed(2)]))
     } else if (activeTab === 'customers') {
       downloadCsv(`customers-${stamp}`, ['ชื่อ','เบอร์โทร','ระดับสมาชิก','แต้ม'],
         customers.map(c => [`${c.firstName} ${c.lastName ?? ''}`.trim(), c.phone ?? '', c.memberLevel ?? '', c.points ?? 0]))
@@ -484,7 +510,7 @@ export default function ReportsPage() {
                     { label: 'ยอดขายสินค้า', value: formatCurrency(branchReport.totals.productSales), note: `${branchReport.totals.productQty} ชิ้น`, color: 'text-[var(--pink-600)]' },
                     { label: 'ยอดขายบริการ', value: formatCurrency(branchReport.totals.serviceSales), note: `${branchReport.totals.serviceQty} รายการ`, color: 'text-blue-600' },
                     { label: 'รับมัดจำ', value: formatCurrency(branchReport.totals.depositPaid), note: `${branchReport.totals.depositCount} ใบ`, color: 'text-emerald-600' },
-                    { label: 'ค้างชำระ', value: formatCurrency(branchReport.totals.depositOutstanding), note: 'จากมัดจำในช่วงนี้', color: 'text-red-500' },
+                    { label: 'ค้างชำระปัจจุบัน', value: formatCurrency(branchReport.totals.depositOutstanding), note: 'งานที่เปิดถึงวันสิ้นสุด', color: 'text-red-500' },
                     { label: 'คอมมิชชั่น', value: formatCurrency(branchReport.totals.commission), note: 'ตามพนักงานขาย', color: 'text-purple-600' },
                     { label: 'บิลขาย', value: String(branchReport.totals.billCount), note: 'ไม่รวมบิลยกเลิก', color: 'text-amber-600' },
                   ].map(card => (
@@ -496,6 +522,12 @@ export default function ReportsPage() {
                   ))}
                 </div>
 
+                {undatedReceipts > 0 && <p className="text-sm text-amber-700">ยอดรับเดิม {formatCurrency(undatedReceipts)} ไม่ทราบวันที่รับ จึงยังไม่รวมในยอดรับตามช่วงวันที่</p>}
+                <div className="flex flex-wrap gap-6 border-y py-4 text-sm">
+                  <p>รับจากขาย <strong>{formatCurrency(branchReport.totals.saleCollected)}</strong></p>
+                  <p>คืนเงินจริง <strong>{formatCurrency(branchReport.totals.refunds)}</strong></p>
+                  <p>รับสุทธิ <strong>{formatCurrency(branchReport.totals.totalCollected)}</strong></p>
+                </div>
                 <div className="rounded-2xl border border-[var(--border-light)] overflow-hidden">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 py-3 bg-[var(--pink-50)]/60 border-b border-[var(--border-light)]">
                     <div>
@@ -517,7 +549,7 @@ export default function ReportsPage() {
                           <th className="text-right text-xs font-semibold text-[var(--text-muted)] px-3 py-3">รับมัดจำ</th>
                           <th className="text-right text-xs font-semibold text-[var(--text-muted)] px-3 py-3">ค้างชำระ</th>
                           <th className="text-right text-xs font-semibold text-[var(--text-muted)] px-3 py-3">คอมฯ</th>
-                          <th className="text-right text-xs font-semibold text-[var(--text-muted)] px-4 py-3">รวมรับ</th>
+                          <th className="text-right text-xs font-semibold text-[var(--text-muted)] px-4 py-3">รับสุทธิ</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--border-light)]">

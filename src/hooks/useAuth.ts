@@ -1,5 +1,5 @@
 'use client'
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import { doc, onSnapshot, setDoc, serverTimestamp, collection, addDoc } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
@@ -214,11 +214,11 @@ export function useAuth() {
     clearSupportCompany()
   }
 
-  const hasPermission = (permission: string): boolean => {
+  const hasPermission = useCallback((permission: string): boolean => {
     if (!user) return false
     if (user.role === 'super_admin' || user.role === 'owner') return true
     return getEffectivePermissions(user.role, user.permissions).includes(permission as PermissionKey)
-  }
+  }, [user])
 
   const canDiscount = (percent: number): boolean => {
     if (!user) return false

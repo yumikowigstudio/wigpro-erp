@@ -3,10 +3,11 @@ import { useState, useEffect } from 'react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { TrendingUp, TrendingDown, DollarSign, Download, Plus, X, Loader2, Trash2 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { collection, onSnapshot, query, where, Timestamp, doc, deleteDoc } from 'firebase/firestore'
+import { collection, onSnapshot, query, where, doc, deleteDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
-import { isCountableDeposit, isCountableSale } from '@/lib/sales'
+import { cashbook, type RefundRecord } from '@/lib/cashbook'
+import { downloadCsv } from '@/lib/export'
 import { Expense, Sale, Deposit } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -21,6 +22,8 @@ export default function AccountingPage() {
   const [expenses, setExpenses]     = useState<Expense[]>([])
   const [sales, setSales]           = useState<Sale[]>([])
   const [deposits, setDeposits]     = useState<Deposit[]>([])
+  const [refunds, setRefunds] = useState<RefundRecord[]>([])
+  const [loadError, setLoadError] = useState('')
   const [loading, setLoading]       = useState(true)
   const [period, setPeriod]         = useState('month')
   const [showModal, setShowModal]   = useState(false)
@@ -29,74 +32,75 @@ export default function AccountingPage() {
   const [form, setForm] = useState({ category: expenseCategories[0], description: '', amount: '', date: new Date().toISOString().split('T')[0] })
 
   useEffect(() => {
-    if (!companyId) return
-    const now   = new Date()
-    const start = period === 'day'
-      ? new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      : period === 'month'
-      ? new Date(now.getFullYear(), now.getMonth(), 1)
-      : new Date(now.getFullYear(), 0, 1)
-    const ts = Timestamp.fromDate(start)
+    if (!companyId || !branchId) return
+    setLoading(true); setLoadError('')
+    const scope = [where('companyId', '==', companyId), where('branchId', '==', branchId)]
+    const expQ = query(collection(db, COLLECTIONS.EXPENSES), ...scope)
+    const saleQ = query(collection(db, COLLECTIONS.SALES), ...scope)
+    const depQ = query(collection(db, COLLECTIONS.DEPOSITS), ...scope)
+    const refundQ = query(collection(db, COLLECTIONS.RETURNS), ...scope)
 
-    // No orderBy — sort client-side to avoid composite index requirement
-    const expQ  = query(collection(db, COLLECTIONS.EXPENSES),  where('companyId', '==', companyId), where('createdAt', '>=', ts))
-    const saleQ = query(collection(db, COLLECTIONS.SALES),     where('companyId', '==', companyId), where('createdAt', '>=', ts))
-    const depQ  = query(collection(db, COLLECTIONS.DEPOSITS),  where('companyId', '==', companyId), where('createdAt', '>=', ts))
-
-    let expDone = false, saleDone = false, depDone = false
-    const check = () => { if (expDone && saleDone && depDone) setLoading(false) }
+    let expDone = false, saleDone = false, depDone = false, refundDone = false
+    const check = () => { if (expDone && saleDone && depDone && refundDone) setLoading(false) }
 
     const u1 = onSnapshot(expQ, snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Expense[]
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       setExpenses(list)
       expDone = true; check()
-    }, () => { expDone = true; check() })
+    }, () => { setLoadError('โหลดรายจ่ายไม่สำเร็จ'); expDone = true; check() })
 
     const u2 = onSnapshot(saleQ, snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       setSales(list)
       saleDone = true; check()
-    }, () => { saleDone = true; check() })
+    }, () => { setLoadError('โหลดบิลไม่สำเร็จ'); saleDone = true; check() })
 
     const u3 = onSnapshot(depQ, snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Deposit[]
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       setDeposits(list)
       depDone = true; check()
-    }, () => { depDone = true; check() })
+    }, () => { setLoadError('โหลดมัดจำไม่สำเร็จ'); depDone = true; check() })
 
-    return () => { u1(); u2(); u3() }
-  }, [period, companyId])
+    const u4 = onSnapshot(refundQ, snap => {
+      setRefunds(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as RefundRecord[])
+      refundDone = true; check()
+    }, () => { setLoadError('โหลดรายการคืนเงินไม่สำเร็จ'); refundDone = true; check() })
+    return () => { u1(); u2(); u3(); u4() }
+  }, [companyId, branchId])
 
-  const countableSales = sales.filter(isCountableSale)
-  const countableDeposits = deposits.filter(isCountableDeposit)
-  const salesIncome   = countableSales.reduce((s, r) => s + r.totalAmount, 0)
-  const depositIncome = countableDeposits.reduce((s, d) => s + d.paidAmount, 0)
-  const totalIncome   = salesIncome + depositIncome
-  const totalExpense  = expenses.reduce((s, r) => s + r.amount, 0)
-  const netProfit     = totalIncome - totalExpense
-
-  // Build monthly chart (last 6 months)
-  const monthNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
   const now = new Date()
+  const start = period === 'day' ? new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    : period === 'month' ? new Date(now.getFullYear(), now.getMonth(), 1) : new Date(now.getFullYear(), 0, 1)
+  const entries = cashbook(sales, deposits, refunds)
+  const periodEntries = entries.filter(entry => entry.date && entry.date >= start && entry.date <= now)
+  const periodExpenses = expenses.filter(expense => new Date(expense.date ?? expense.createdAt) >= start && new Date(expense.date ?? expense.createdAt) <= now)
+  const salesIncome = periodEntries.filter(entry => entry.kind === 'sale').reduce((sum, entry) => sum + entry.amount, 0)
+  const depositIncome = periodEntries.filter(entry => entry.kind === 'deposit').reduce((sum, entry) => sum + entry.amount, 0)
+  const refundsPaid = -periodEntries.filter(entry => entry.kind === 'refund').reduce((sum, entry) => sum + entry.amount, 0)
+  const totalIncome = salesIncome + depositIncome
+  const totalExpense = periodExpenses.reduce((sum, expense) => sum + expense.amount, 0) + refundsPaid
+  const netProfit = totalIncome - totalExpense
+  const undated = entries.filter(entry => !entry.date).reduce((sum, entry) => sum + entry.amount, 0)
+  const monthNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
   const chartData = Array.from({ length: 6 }, (_, i) => {
-    const m = (now.getMonth() - 5 + i + 12) % 12
-    const y = now.getFullYear() - (now.getMonth() - 5 + i < 0 ? 1 : 0)
-    const sIncome = countableSales.filter(s => { const d = new Date(s.createdAt); return d.getMonth()===m && d.getFullYear()===y }).reduce((a,s)=>a+s.totalAmount, 0)
-    const dIncome = countableDeposits.filter(d => { const dt = new Date(d.createdAt); return dt.getMonth()===m && dt.getFullYear()===y }).reduce((a,d)=>a+d.paidAmount, 0)
-    const income  = sIncome + dIncome
-    const expense = expenses.filter(e => { const d = new Date(e.createdAt); return d.getMonth()===m && d.getFullYear()===y }).reduce((a,e)=>a+e.amount, 0)
-    return { name: monthNames[m], income, expense }
+    const date = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1)
+    const month = date.getMonth(), year = date.getFullYear()
+    const inMonth = (value: Date) => value.getMonth() === month && value.getFullYear() === year
+    const income = entries.filter(entry => entry.date && inMonth(entry.date) && entry.amount > 0).reduce((sum, entry) => sum + entry.amount, 0)
+    const expense = expenses.filter(item => inMonth(new Date(item.date ?? item.createdAt))).reduce((sum, item) => sum + item.amount, 0)
+      - entries.filter(entry => entry.date && inMonth(entry.date) && entry.amount < 0).reduce((sum, entry) => sum + entry.amount, 0)
+    return { name: monthNames[month], income, expense }
   })
-
-  // Recent transactions merged
-  const transactions: Transaction[] = [
-    ...countableSales.slice(0,10).map(s => ({ id:'s'+s.id, type:'income' as const, desc: `ขาย #${s.receiptNo}${s.customerName ? ' - '+s.customerName : ''}`, amount: s.totalAmount, date: new Date(s.createdAt), category: 'ยอดขาย', deletable: false })),
-    ...countableDeposits.slice(0,10).map(d => ({ id:'d'+d.id, type:'income' as const, desc: `มัดจำ #${d.depositNo} - ${d.customerName}`, amount: d.paidAmount, date: new Date(d.createdAt), category: 'มัดจำ', deletable: false })),
-    ...expenses.slice(0,20).map(e => ({ id:'e'+e.id, type:'expense' as const, desc: e.description, amount: e.amount, date: new Date(e.createdAt), category: e.category, deletable: true })),
-  ].sort((a,b) => b.date.getTime() - a.date.getTime()).slice(0, 20)
+  const allTransactions: Transaction[] = [
+    ...periodEntries.map(entry => ({ id: entry.id, type: entry.amount < 0 ? 'expense' as const : 'income' as const,
+      desc: entry.reference, amount: Math.abs(entry.amount), date: entry.date!, category: entry.kind === 'sale' ? 'รับจากขาย' : entry.kind === 'deposit' ? 'รับมัดจำ/งวดชำระ' : 'คืนเงินจริง', deletable: false })),
+    ...periodExpenses.map(expense => ({ id: 'e' + expense.id, type: 'expense' as const, desc: expense.description, amount: expense.amount,
+      date: new Date(expense.date ?? expense.createdAt), category: expense.category, deletable: true })),
+  ].sort((a, b) => b.date.getTime() - a.date.getTime())
+  const transactions = allTransactions.slice(0, 20)
 
   const handleAdd = async (evt: React.FormEvent) => {
     evt.preventDefault(); setSaving(true)
@@ -124,24 +128,8 @@ export default function AccountingPage() {
   }
 
   const handleExport = () => {
-    const rows = [
-      ['ประเภท','วันที่','หมวดหมู่','รายละเอียด','จำนวน (บาท)'],
-      ...transactions.map(tx => [
-        tx.type === 'income' ? 'รายรับ' : 'รายจ่าย',
-        formatDate(tx.date),
-        tx.category,
-        tx.desc,
-        tx.amount.toFixed(2),
-      ])
-    ]
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href     = url
-    a.download = `accounting-${period}-${new Date().toISOString().slice(0,10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`accounting-${period}-${new Date().toISOString().slice(0, 10)}`, ['ประเภท', 'วันที่', 'หมวดหมู่', 'รายละเอียด', 'จำนวน (บาท)'],
+      allTransactions.map(tx => [tx.type === 'income' ? 'รายรับ' : 'รายจ่าย', formatDate(tx.date), tx.category, tx.desc, tx.amount.toFixed(2)]))
   }
 
   return (
@@ -149,7 +137,7 @@ export default function AccountingPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text-primary)]">บัญชีการเงิน</h1>
-          <p className="text-sm text-[var(--text-muted)]">รายรับ-รายจ่ายและกำไรขาดทุน</p>
+          <p className="text-sm text-[var(--text-muted)]">เงินรับและเงินจ่ายจริงของสาขาที่เลือก</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <select value={period} onChange={e => setPeriod(e.target.value)}
@@ -168,12 +156,14 @@ export default function AccountingPage() {
         </div>
       </div>
 
+      {loadError && <p role="alert" className="text-sm text-red-600">{loadError}</p>}
+      {undated > 0 && <p className="text-sm text-amber-700">รายการเดิมที่ไม่ทราบวันที่รับเงิน {formatCurrency(undated)} ยังไม่รวมในช่วงวันที่</p>}
       {/* KPI */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
           { label:'รายรับรวม',  value: totalIncome,  icon: TrendingUp,   color:'text-emerald-600', bg:'bg-emerald-100' },
           { label:'รายจ่ายรวม', value: totalExpense, icon: TrendingDown, color:'text-red-600',     bg:'bg-red-100'     },
-          { label:'กำไรสุทธิ',  value: netProfit,    icon: DollarSign,   color: netProfit >= 0 ? 'text-[var(--pink-500)]' : 'text-red-600', bg:'bg-[var(--pink-50)]' },
+          { label:'เงินรับสุทธิ',  value: netProfit,    icon: DollarSign,   color: netProfit >= 0 ? 'text-[var(--pink-500)]' : 'text-red-600', bg:'bg-[var(--pink-50)]' },
         ].map(s => (
           <div key={s.label} className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] p-5">
             <div className="flex items-center gap-3 mb-2">
@@ -195,7 +185,7 @@ export default function AccountingPage() {
           <p className="text-xs font-semibold text-[var(--text-muted)] mb-3">แหล่งรายรับ</p>
           <div className="flex gap-6">
             <div>
-              <p className="text-xs text-[var(--text-muted)]">ยอดขายปกติ</p>
+              <p className="text-xs text-[var(--text-muted)]">รับจากบิลขาย</p>
               <p className="font-bold text-sm text-emerald-600">{formatCurrency(salesIncome)}</p>
             </div>
             <div>
@@ -203,7 +193,7 @@ export default function AccountingPage() {
               <p className="font-bold text-sm text-blue-600">{formatCurrency(depositIncome)}</p>
             </div>
             <div className="ml-auto">
-              <p className="text-xs text-[var(--text-muted)]">อัตรากำไร</p>
+              <p className="text-xs text-[var(--text-muted)]">สัดส่วนเงินรับสุทธิ</p>
               <p className={`font-bold text-sm ${netProfit >= 0 ? 'text-[var(--pink-500)]' : 'text-red-600'}`}>
                 {totalIncome > 0 ? ((netProfit / totalIncome) * 100).toFixed(1) : '0'}%
               </p>

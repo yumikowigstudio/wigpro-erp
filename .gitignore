@@ -12,6 +12,10 @@
 
 # testing
 /coverage
+/test-results
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
 
 # backups & service account key (ห้าม commit — เป็นความลับ/ข้อมูลลูกค้า)
 /backups

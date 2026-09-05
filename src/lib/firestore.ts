@@ -41,6 +41,7 @@ export const COLLECTIONS = {
   DEPOSITS: 'deposits',
   SALES: 'sales',
   RETURNS: 'returns',
+  RETURN_TOTALS: 'return_totals',
   COUPONS: 'coupons',
   EXPENSES: 'expenses',
   COMMISSION_RECORDS: 'commission_records',
@@ -64,7 +65,9 @@ export function convertTimestamps(data: DocumentData): DocumentData {
   for (const key of Object.keys(result)) {
     if (result[key] instanceof Timestamp) {
       result[key] = result[key].toDate()
-    } else if (result[key] && typeof result[key] === 'object' && !Array.isArray(result[key])) {
+    } else if (Array.isArray(result[key])) {
+      result[key] = result[key].map((value: unknown) => value instanceof Timestamp ? value.toDate() : value && typeof value === 'object' && !(value instanceof Date) ? convertTimestamps(value as DocumentData) : value)
+    } else if (result[key] && typeof result[key] === 'object' && !(result[key] instanceof Date)) {
       result[key] = convertTimestamps(result[key])
     }
   }
@@ -91,7 +94,7 @@ export async function getCollection<T>(
 }
 
 // Firestore rejects undefined values, including nested fields inside arrays.
-function stripUndefinedDeep(value: unknown): unknown {
+export function stripUndefinedDeep(value: unknown): unknown {
   if (value === undefined) return undefined
   if (value === null) return null
   if (value instanceof Date || value instanceof Timestamp) return value

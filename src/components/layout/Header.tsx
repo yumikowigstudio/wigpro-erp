@@ -1,10 +1,13 @@
 'use client'
+import { GlobalSearch } from '@/components/GlobalSearch'
+import { useOperationalAlerts } from '@/components/OperationalAlertsProvider'
 import { useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { Bell, Search, Menu, ChevronDown, Building2, LogOut, Settings, User, XCircle } from 'lucide-react'
+import { Bell, Menu, ChevronDown, Building2, LogOut, Settings, User, XCircle } from 'lucide-react'
 import Link from 'next/link'
 
 export default function Header({ onMenuToggle }: { onMenuToggle?: () => void }) {
+  const { unread } = useOperationalAlerts()
   const { user, currentBranch, branches, canSwitchBranch, switchBranch, logout, isSupportMode, supportCompanyName, exitSupportCompany } = useAuth()
   const [showUserMenu, setShowUserMenu] = useState(false)
 
@@ -18,17 +21,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle?: () => void }) 
         <Menu className="w-5 h-5" />
       </button>
 
-      {/* Search bar — glass style */}
-      <div className="flex-1 max-w-sm">
-        <div className="relative">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-          <input
-            type="text"
-            placeholder="ค้นหาลูกค้า สินค้า ใบเสร็จ..."
-            className="w-full pl-10 pr-4 py-2.5 bg-white/70 backdrop-blur-sm border border-[var(--border-light)] rounded-2xl text-sm placeholder:text-[var(--text-light)] focus:outline-none focus:border-[var(--pink-300)] focus:bg-white transition-all shadow-[var(--shadow-sm)]"
-          />
-        </div>
-      </div>
+      <GlobalSearch />
 
       <div className="flex items-center gap-2 ml-auto">
         {isSupportMode && (
@@ -66,7 +59,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle?: () => void }) 
           className="relative p-2.5 rounded-2xl bg-white/70 border border-[var(--border-light)] hover:bg-white text-[var(--text-muted)] hover:text-[var(--pink-500)] transition-all shadow-[var(--shadow-sm)] backdrop-blur-sm"
         >
           <Bell className="w-4.5 h-4.5 w-[18px] h-[18px]" />
-          <span className="absolute top-2 right-2 w-2 h-2 bg-[var(--pink-500)] rounded-full ring-2 ring-white" />
+          {unread > 0 && <span className="absolute -top-1 -right-1 min-w-4 px-1 text-center text-[10px] text-white bg-[var(--pink-500)] rounded-full ring-2 ring-white">{unread > 99 ? '99+' : unread}</span>}
         </Link>
 
         {/* User dropdown */}

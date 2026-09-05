@@ -1,12 +1,15 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { CancelFinancialDocument } from '@/components/CancelFinancialDocument'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { Plus, Search, CreditCard, CheckCircle, Clock, XCircle, Loader2, X, AlertTriangle, CalendarDays, UserRound } from 'lucide-react'
-import { collection, onSnapshot, query, where, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { COLLECTIONS, addDocument, convertTimestamps } from '@/lib/firestore'
+import { COLLECTIONS, addDocument, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
+import { receiveDepositPayment } from '@/lib/depositPayments'
+import { depositPaid, depositPayments, depositRemaining, money } from '@/lib/money'
 import { Deposit } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
@@ -25,8 +28,8 @@ const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--
 const PAY_METHODS = [
   { id: 'cash', label: 'เงินสด', icon: '💵' },
   { id: 'transfer', label: 'โอนเงิน', icon: '🏦' },
-  { id: 'promptpay', label: 'พร้อมเพย์', icon: '📱' },
-  { id: 'card', label: 'บัตร', icon: '💳' },
+  { id: 'qr', label: 'พร้อมเพย์', icon: '📱' },
+  { id: 'credit_card', label: 'บัตร', icon: '💳' },
 ]
 
 const parsePickupDate = (value?: string) => {
@@ -186,6 +189,8 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
 }
 
 export default function DepositsPage() {
+  const paymentAttempt = useRef('')
+  const paymentBusy = useRef(false)
   const searchParams = useSearchParams()
   const { companyId, branchId, userId, userName, currentBranch } = useAuth()
   const { ensurePermission } = usePermissionAction()
@@ -196,12 +201,13 @@ export default function DepositsPage() {
   const [showModal, setShowModal]       = useState(false)
   const [showPayModal, setShowPayModal] = useState<Deposit | null>(null)
   const [saving, setSaving]             = useState(false)
-  const [message, setMessage]           = useState('')
+  const [message]           = useState('')
   const [form, setForm] = useState({ customerName: '', itemName: '', totalAmount: '', depositAmount: '', notes: '' })
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('cash')
 
   useEffect(() => {
+    setSearch(searchParams.get('q') ?? '')
     const requestedStatus = searchParams?.get('status')
     if (requestedStatus) setFilterStatus(requestedStatus)
   }, [searchParams])
@@ -211,7 +217,10 @@ export default function DepositsPage() {
     // No orderBy to avoid composite index — sort client-side
     const q = query(collection(db, COLLECTIONS.DEPOSITS), where('companyId', '==', companyId))
     return onSnapshot(q, snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Deposit[]
+      const list = snap.docs.map(d => {
+        const record = { id: d.id, ...convertTimestamps(d.data()) } as Deposit
+        return { ...record, remainingAmount: depositRemaining(record) }
+      })
       list.sort((a, b) => {
         const da = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt as unknown as string)
         const db_ = b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt as unknown as string)
@@ -252,7 +261,8 @@ export default function DepositsPage() {
       const total   = parseFloat(form.totalAmount) || 0
       const deposit = parseFloat(form.depositAmount) || 0
       const now     = new Date()
-      const depositNo = `DEP-${String(now.getMonth()+1).padStart(2,'0')}${String(now.getFullYear()).slice(-2)}-${String(deposits.length+1).padStart(3,'0')}`
+      if (total <= 0 || deposit < 0 || deposit > total) throw new Error('ยอดมัดจำต้องอยู่ระหว่าง 0 ถึงยอดรวม')
+      const depositNo = await generateBranchDocumentNo(companyId, branchId, 'deposit')
       await addDocument<Deposit>(COLLECTIONS.DEPOSITS, {
         companyId, branchId,
         branchName: currentBranch?.name ?? '',
@@ -260,6 +270,7 @@ export default function DepositsPage() {
         depositNo, customerId: '', customerName: form.customerName,
         items: [{ name: form.itemName, quantity: 1, unitPrice: total, total }],
         totalAmount: total, depositAmount: deposit, paidAmount: deposit,
+        paymentHistory: deposit > 0 ? [{ id: 'initial', amount: deposit, method: 'cash', receivedAt: now, receivedBy: userId, receivedByName: userName, confirmed: true }] : [],
         remainingAmount: total - deposit,
         status: deposit >= total ? 'paid_full' : deposit > 0 ? 'deposited' : 'pending',
         notes: form.notes || undefined,
@@ -272,60 +283,24 @@ export default function DepositsPage() {
   }
 
   const handlePay = async () => {
-    if (!showPayModal) return; setSaving(true)
+    if (!showPayModal || paymentBusy.current) return
+    if (!await ensurePermission('action.sales.confirmPayment', 'รับชำระมัดจำ')) return
+    setSaving(true); paymentBusy.current = true
     try {
       const amount = parseFloat(payAmount) || 0
-      const newPaid = showPayModal.paidAmount + amount
-      const newRemaining = Math.max(showPayModal.totalAmount - newPaid, 0)
-      const isFullyPaid = newRemaining <= 0
-      await updateDoc(doc(db, COLLECTIONS.DEPOSITS, showPayModal.id), {
-        paidAmount: newPaid, remainingAmount: newRemaining,
-        status: isFullyPaid ? 'paid_full' : 'deposited',
-        payMethod, pickupConfirmedAt: isFullyPaid ? serverTimestamp() : null,
-        updatedAt: serverTimestamp(),
-      })
-      if (isFullyPaid) printPickupReceipt(showPayModal, amount, payMethod || 'cash')
+      const received = payMethod === 'cash' ? Math.min(amount, showPayModal.remainingAmount) : amount
+      paymentAttempt.current ||= crypto.randomUUID()
+      const updated = await receiveDepositPayment(showPayModal, { id: paymentAttempt.current, amount: money(received), method: payMethod, receivedAt: new Date(), receivedBy: userId, receivedByName: userName, confirmed: true })
+      if (updated.remainingAmount <= 0) printPickupReceipt(showPayModal, amount, payMethod || 'cash')
+      paymentAttempt.current = ''
       setShowPayModal(null); setPayAmount(''); setPayMethod('cash')
-    } catch (err) { console.error(err); alert('เกิดข้อผิดพลาด') }
-    finally { setSaving(false) }
+    } catch (err) { alert(err instanceof Error ? err.message : 'รับชำระไม่สำเร็จ') }
+    finally { setSaving(false); paymentBusy.current = false }
   }
 
-  const cancelDeposit = async (deposit: Deposit) => {
-    if (deposit.status === 'cancelled') {
-      setMessage('ใบมัดจำนี้ถูกยกเลิกแล้ว')
-      return
-    }
-    if (deposit.status === 'paid_full') {
-      setMessage('ใบมัดจำนี้ชำระครบแล้ว หากต้องการแก้ไขให้จัดการจากประวัติการรับชำระ')
-      return
-    }
-    const reason = window.prompt(`ระบุเหตุผลการยกเลิกมัดจำ ${deposit.depositNo}`)?.trim()
-    if (!reason) {
-      setMessage('กรุณาระบุเหตุผลการยกเลิกมัดจำ')
-      return
-    }
-    if (!await ensurePermission('action.sales.cancelBill', 'ยกเลิกมัดจำ')) return
-    setSaving(true)
-    setMessage('')
-    try {
-      await updateDoc(doc(db, COLLECTIONS.DEPOSITS, deposit.id), {
-        status: 'cancelled',
-        cancelReason: reason,
-        cancelledBy: userId,
-        cancelledByName: userName || null,
-        cancelledAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      })
-      setMessage(`ยกเลิกมัดจำ ${deposit.depositNo} แล้ว`)
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'ยกเลิกมัดจำไม่สำเร็จ')
-    } finally {
-      setSaving(false)
-    }
-  }
 
   const printPickupReceipt = (dep: Deposit, paid: number, method: string) => {
-    const methodLabel: Record<string,string> = { cash:'เงินสด', transfer:'โอนเงิน', card:'บัตรเครดิต/เดบิต', promptpay:'พร้อมเพย์' }
+    const methodLabel: Record<string,string> = { cash:'เงินสด', transfer:'โอนเงิน', card:'บัตรเครดิต/เดบิต', credit_card:'บัตรเครดิต/เดบิต', qr:'QR', promptpay:'พร้อมเพย์' }
     const change = Math.max(paid - dep.remainingAmount, 0)
     const receiptInfo = dep.receiptInfo
     const branchName = receiptInfo?.branchName || dep.branchName || ''
@@ -526,7 +501,22 @@ export default function DepositsPage() {
                       <td className="px-4 py-3.5"><p className="font-medium text-sm">{dep.customerName}</p></td>
                       <td className="px-4 py-3.5 hidden md:table-cell"><p className="text-sm text-[var(--text-secondary)]">{itemName}</p></td>
                       <td className="px-4 py-3.5 text-right"><p className="font-semibold text-sm">{formatCurrency(dep.totalAmount)}</p></td>
-                      <td className="px-4 py-3.5 text-right"><p className="font-semibold text-sm text-blue-600">{formatCurrency(dep.depositAmount)}</p></td>
+                      <td className="px-4 py-3.5 text-right"><p className="font-semibold text-sm text-blue-600">{formatCurrency(depositPaid(dep))}</p>
+                        <details className="mt-1 text-left text-xs"><summary className="cursor-pointer text-[var(--text-muted)]">ประวัติรับเงิน</summary>
+                          <div className="mt-2 space-y-2 min-w-48">{depositPayments(dep).map(payment => <div key={payment.id} className="border-b pb-2">
+                            <p>{payment.receivedAt ? formatDate(payment.receivedAt) : 'ข้อมูลเดิม ไม่ระบุวันที่'} · {formatCurrency(payment.amount)}</p>
+                            <p>{payment.method} · {payment.receivedByName || '-'} · {payment.confirmed ? 'ยืนยันแล้ว' : 'รอยืนยัน'}</p>
+                            {!payment.confirmed && dep.status !== 'cancelled' && !dep.closedBySaleId && <button disabled={saving} onClick={async () => {
+                              if (!await ensurePermission('action.sales.confirmPayment', 'ยืนยันรับเงินมัดจำ')) return
+                              if (!window.confirm(`ยืนยันตรวจสอบและรับเงิน ${formatCurrency(payment.amount)} แล้ว?`)) return
+                              setSaving(true)
+                              try { await receiveDepositPayment(dep, { ...payment, confirmed: true, receivedAt: new Date(), receivedBy: userId, receivedByName: userName }) }
+                              catch (error) { alert(error instanceof Error ? error.message : 'ยืนยันไม่สำเร็จ') }
+                              finally { setSaving(false) }
+                            }} className="mt-1 text-emerald-700 underline disabled:opacity-50">ยืนยันรับเงิน</button>}
+                          </div>)}</div>
+                        </details>
+                      </td>
                       <td className="px-4 py-3.5 text-right hidden lg:table-cell">
                         <p className={`font-semibold text-sm ${dep.remainingAmount > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
                           {dep.remainingAmount > 0 ? formatCurrency(dep.remainingAmount) : '✓ ครบ'}
@@ -537,20 +527,14 @@ export default function DepositsPage() {
                       </td>
                       <td className="px-4 py-3.5">
                         <div className="flex items-center gap-1.5">
-                          {dep.status === 'deposited' && dep.remainingAmount > 0 && (
+                          {dep.status !== 'cancelled' && !dep.closedBySaleId && dep.remainingAmount > 0 && (
                             <button onClick={() => { setShowPayModal(dep); setPayAmount(String(dep.remainingAmount)) }}
                               className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-medium hover:bg-emerald-100 transition-all whitespace-nowrap">
                               รับชำระ
                             </button>
                           )}
-                          {(dep.status === 'pending' || dep.status === 'deposited') && (
-                            <button
-                              onClick={() => cancelDeposit(dep)}
-                              disabled={saving}
-                              className="px-2.5 py-1 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium hover:bg-red-100 transition-all whitespace-nowrap disabled:opacity-40">
-                              ยกเลิก
-                            </button>
-                          )}
+                          {dep.customerId && !dep.closedBySaleId && dep.status !== 'cancelled' && <Link href={`/pos?depositId=${dep.id}`} className="px-2 py-1 text-xs text-blue-700 underline whitespace-nowrap">เปิดบิลปิดมัดจำ</Link>}
+                          <CancelFinancialDocument target={{ kind: 'deposit', record: dep }} />
                         </div>
                       </td>
                     </tr>

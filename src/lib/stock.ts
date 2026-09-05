@@ -1,4 +1,4 @@
-import { doc, getDoc, increment, serverTimestamp, setDoc } from 'firebase/firestore'
+import { doc, getDoc, increment, serverTimestamp, writeBatch } from 'firebase/firestore'
 import { db } from './firebase'
 import { COLLECTIONS } from './firestore'
 
@@ -34,8 +34,10 @@ type AdjustBranchStockOptions = {
 
 export async function adjustBranchStock(opts: AdjustBranchStockOptions): Promise<void> {
   const { companyId, productId, productName, branchId, delta, type } = opts
+  if (!Number.isFinite(delta) || !companyId || !branchId || !productId) throw new Error('ข้อมูลปรับสต๊อกไม่ถูกต้อง')
+  const batch = writeBatch(db)
 
-  await setDoc(doc(db, COLLECTIONS.INVENTORY, invId(productId, branchId)), {
+  batch.set(doc(db, COLLECTIONS.INVENTORY, invId(productId, branchId)), {
     companyId,
     productId,
     branchId,
@@ -44,7 +46,7 @@ export async function adjustBranchStock(opts: AdjustBranchStockOptions): Promise
     updatedAt: serverTimestamp(),
   }, { merge: true })
 
-  await setDoc(doc(db, COLLECTIONS.STOCK_MOVEMENTS, `${Date.now()}_${productId}_${type}_${Math.random().toString(36).slice(2, 7)}`), {
+  batch.set(doc(db, COLLECTIONS.STOCK_MOVEMENTS, crypto.randomUUID()), {
     companyId,
     branchId,
     productId,
@@ -58,4 +60,5 @@ export async function adjustBranchStock(opts: AdjustBranchStockOptions): Promise
     performedBy: opts.performedBy ?? null,
     createdAt: serverTimestamp(),
   }, { merge: true })
+  await batch.commit()
 }

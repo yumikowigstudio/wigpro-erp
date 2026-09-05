@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app'
-import { getAuth } from 'firebase/auth'
-import { getFirestore } from 'firebase/firestore'
+import { connectAuthEmulator, getAuth } from 'firebase/auth'
+import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
 
 const firebaseConfig = {
@@ -12,10 +12,16 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 }
 
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp()
+const isNewApp = getApps().length === 0
+const app = isNewApp ? initializeApp(firebaseConfig) : getApp()
 
 export const auth = getAuth(app)
 export const db = getFirestore(app)
+
+if (isNewApp && process.env.NEXT_PUBLIC_FIREBASE_EMULATORS === 'true' && firebaseConfig.projectId?.startsWith('demo-')) {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9096', { disableWarnings: true })
+  connectFirestoreEmulator(db, '127.0.0.1', 8086)
+}
 
 export const storage = getStorage(app)
 

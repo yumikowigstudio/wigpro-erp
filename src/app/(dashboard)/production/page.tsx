@@ -1,6 +1,7 @@
 'use client'
 /* eslint-disable @next/next/no-img-element */
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import {
   Plus, Search, Clock, AlertTriangle, Factory, Package,
@@ -101,6 +102,8 @@ export default function ProductionPage() {
   const [orders, setOrders]             = useState<WorkOrder[]>([])
   const [loading, setLoading]           = useState(true)
   const [search, setSearch]             = useState('')
+  const searchParams = useSearchParams()
+  useEffect(() => { setSearch(searchParams.get('q') ?? '') }, [searchParams])
   const [filterStatus, setFilterStatus] = useState('')
   const [showModal, setShowModal]       = useState(false)
   const [saving, setSaving]             = useState(false)

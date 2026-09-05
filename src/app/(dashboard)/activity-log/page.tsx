@@ -1,13 +1,13 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
+import { usePagedCollection } from '@/hooks/usePagedCollection'
+import { LoadMore } from '@/components/LoadMore'
 import { formatDateTime } from '@/lib/utils'
 import {
   Search, BookOpen, User, ShoppingCart, Edit, Trash2, LogIn, LogOut,
   Loader2, Package, CreditCard, Ban, ArrowLeftRight, Factory,
   ImageIcon, ShieldCheck, DatabaseBackup, RotateCcw, Wrench,
 } from 'lucide-react'
-import { collection, onSnapshot, query, where, limit } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
 import { COLLECTIONS } from '@/lib/firestore'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -47,32 +47,14 @@ interface ActivityLog {
 
 export default function ActivityLogPage() {
   const { companyId } = useAuth()
-  const [logs, setLogs]               = useState<ActivityLog[]>([])
-  const [loading, setLoading]         = useState(true)
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const page = usePagedCollection<ActivityLog>(COLLECTIONS.ACTIVITY_LOGS, companyId, { from, to })
+  const { items: logs, loading } = page
   const [search, setSearch]           = useState('')
   const [filterModule, setFilterModule] = useState('')
   const [filterAction, setFilterAction] = useState('')
 
-  useEffect(() => {
-    if (!companyId || companyId === 'demo_company') { setLoading(false); return }
-    const q = query(
-      collection(db, COLLECTIONS.ACTIVITY_LOGS),
-      where('companyId', '==', companyId),
-      limit(200)
-    )
-    const unsub = onSnapshot(q, snap => {
-      const list = snap.docs.map(d => {
-        const data = d.data()
-        const createdAt = data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt ?? Date.now())
-        return { id: d.id, ...data, createdAt } as ActivityLog
-      })
-      // Sort newest-first client-side (avoids composite index)
-      list.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      setLogs(list)
-      setLoading(false)
-    }, () => setLoading(false))
-    return unsub
-  }, [companyId])
 
   const modules = Array.from(new Set(logs.map(l => l.module).filter(Boolean)))
 
@@ -101,6 +83,10 @@ export default function ActivityLogPage() {
       </div>
 
       {/* Filters */}
+      <div className="flex flex-wrap gap-3 text-sm">
+        <label>ตั้งแต่<input aria-label="วันที่เริ่มต้น" type="date" value={from} onChange={event => setFrom(event.target.value)} className="ml-2 rounded-lg border p-2" /></label>
+        <label>ถึง<input aria-label="วันที่สิ้นสุด" type="date" value={to} onChange={event => setTo(event.target.value)} className="ml-2 rounded-lg border p-2" /></label>
+      </div>
       <div className="bg-white rounded-2xl border border-[var(--border-light)] p-4 flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
@@ -160,6 +146,7 @@ export default function ActivityLogPage() {
           })}
         </div>
       )}
+      <LoadMore hasMore={page.hasMore} loading={page.loadingMore} onClick={page.loadMore} error={page.error} />
     </div>
   )
 }

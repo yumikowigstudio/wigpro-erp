@@ -1,6 +1,8 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
+import { PosDrafts } from '@/components/PosDrafts'
 import {
   Search, Plus, Minus, X, ShoppingCart, Tag,
   Banknote, Smartphone, QrCode, CreditCard, Package,
@@ -8,17 +10,17 @@ import {
   UserRound, FileText, ImagePlus, Factory,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import { addDocument, COLLECTIONS, convertTimestamps, generateBranchDocumentNo, generateWigOrderNo } from '@/lib/firestore'
-import { Sale, Product, Service, Deposit, WorkOrder, Employee, Branch, ReceiptShopSnapshot } from '@/types'
-import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, updateDoc, serverTimestamp, setDoc } from 'firebase/firestore'
+import { COLLECTIONS, convertTimestamps, generateBranchDocumentNo, generateWigOrderNo } from '@/lib/firestore'
+import { Product, Service, Deposit, Employee, Branch, ReceiptShopSnapshot } from '@/types'
+import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, serverTimestamp, setDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { uploadToCloudinary } from '@/lib/cloudinary'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
-import { adjustBranchStock } from '@/lib/stock'
+import { commitCheckout } from '@/lib/checkout'
+import { depositCredit, money } from '@/lib/money'
 import { findCatalogMainBranch, getLegacyBranchStockFallback, isCatalogVisibleInBranch } from '@/lib/catalogScope'
-import { writeActivityLog } from '@/lib/activityLog'
 
 type ProductWithStock = Product & { stockQty?: number }
 type PosMode = 'sale' | 'deposit'
@@ -131,6 +133,14 @@ const uniqTexts = (values: string[]) =>
   Array.from(new Set(values.map(v => v.trim()).filter(Boolean)))
 
 export default function POSPage() {
+  const { companyId, branchId, userId } = useAuth()
+  return <POSContent key={`${companyId}:${branchId}:${userId}`} />
+}
+
+function POSContent() {
+  const checkoutAttempt = useRef<{ id: string; no: string; mode: PosMode } | null>(null)
+  const [attemptSnapshot, setAttemptSnapshot] = useState<{ id: string; no: string; mode: PosMode } | null>(null)
+  const checkoutBusy = useRef(false)
   const { companyId, branchId, userId, currentBranch, user, branches } = useAuth()
   const cashierName = user?.displayName?.trim() || user?.email?.trim() || userId
   const { ensurePermission, hasPermission } = usePermissionAction()
@@ -179,6 +189,55 @@ export default function POSPage() {
   const [appliedDepositId, setAppliedDepositId] = useState('')     // มัดจำที่เลือกหักในบิลนี้
   const [createWorkOrder, setCreateWorkOrder] = useState(true)
   const [wigSpec, setWigSpec]         = useState({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
+  const searchParams = useSearchParams()
+  const requestedDepositId = searchParams.get('depositId') ?? ''
+  const loadedDeposit = useRef('')
+  const pendingDeposit = useRef('')
+  const draft = { cart, mode, customerId, customerName, customerPhone, discount, discountType, receiptNote, depositNote, pickupDate, depositInput, wigSpec, createWorkOrder, appliedDepositId, showVatOnReceipt, payMethod, attempt: attemptSnapshot }
+  const setCheckoutAttempt = (attempt: typeof attemptSnapshot) => {
+    checkoutAttempt.current = attempt; setAttemptSnapshot(attempt)
+    try {
+      const key = `yumiko-pos:${companyId}:${branchId}:${userId}`
+      const saved = JSON.parse(localStorage.getItem(key) ?? '{}')
+      localStorage.setItem(key, JSON.stringify({ drafts: saved.drafts ?? [], active: attempt ? { id: 'active', name: customerName || 'ลูกค้าทั่วไป', savedAt: new Date().toISOString(), value: { ...draft, attempt } } : null }))
+    } catch {}
+  }
+  const clearDraft = () => {
+    setCart([]); setCustomerId(''); setCustomerName(''); setCustomerPhone(''); setDiscount(0); setDiscountType('percent')
+    setReceiptNote(''); setDepositNote(''); setPickupDate(''); setDepositInput(''); setAppliedDepositId('')
+    setCash(''); setSlipUrl(''); setPaymentVerified(false); setCouponCode(''); setAppliedCoupon(''); setPosMsg(null)
+    setCheckoutAttempt(null)
+  }
+  const restoreDraft = (value: typeof draft) => {
+    if (!Array.isArray(value.cart)) { setPosMsg({ type: 'err', text: 'บิลที่พักไว้ไม่สมบูรณ์' }); return }
+    clearDraft()
+    setCart(value.cart); setMode(value.mode); setCustomerId(value.customerId); setCustomerName(value.customerName); setCustomerPhone(value.customerPhone)
+    setDiscount(value.discount); setDiscountType(value.discountType); setReceiptNote(value.receiptNote); setDepositNote(value.depositNote)
+    setPickupDate(value.pickupDate); setDepositInput(value.depositInput); setWigSpec(value.wigSpec); setCreateWorkOrder(value.createWorkOrder)
+    setShowVatOnReceipt(value.showVatOnReceipt); pendingDeposit.current = value.appliedDepositId
+    setPayMethod(value.payMethod ?? 'cash'); setCheckoutAttempt(value.attempt ?? null)
+    setPosMsg({ type: 'ok', text: 'เรียกบิลแล้ว กรุณาตรวจราคา สต๊อก และการรับเงินก่อนยืนยัน' })
+  }
+  useEffect(() => {
+    if (!requestedDepositId || loadedDeposit.current === requestedDepositId || !companyId || !branchId) return
+    let active = true
+    getDoc(doc(db, COLLECTIONS.DEPOSITS, requestedDepositId)).then(snap => {
+      if (!active) return
+      if (!snap.exists()) throw new Error('ไม่พบใบมัดจำ')
+      const deposit = { id: snap.id, ...convertTimestamps(snap.data()) } as Deposit
+      if (deposit.companyId !== companyId || deposit.branchId !== branchId) throw new Error('กรุณาเลือกสาขาของใบมัดจำก่อน')
+      if (depositCredit(deposit) <= 0) throw new Error('ใบมัดจำนี้ยังไม่ยืนยันรับเงิน หรือถูกปิดบิล/ยกเลิกแล้ว')
+      const lines = deposit.items as Array<{ type?: 'product' | 'service'; productId?: string; serviceId?: string; name: string; quantity: number; unitPrice: number; note?: string }>
+      if (lines.some(item => !item.productId && !item.serviceId)) throw new Error('ใบมัดจำเดิมยังไม่ผูกสินค้า กรุณาเลือกรายการใน POS และเลือกมัดจำด้วยตนเอง')
+      setCart(lines.map(item => ({ id: item.productId || item.serviceId!, type: item.type ?? (item.productId ? 'product' : 'service'), name: item.name, price: item.unitPrice, originalPrice: item.unitPrice, quantity: item.quantity, taxType: 'vat', note: item.note ?? '' })))
+      setCustomerId(deposit.customerId); setCustomerName(deposit.customerName); setCustomerPhone(String(snap.data().customerPhone ?? ''))
+      setDiscountType('amount'); setDiscount(Math.max(0, money(lines.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0) - deposit.totalAmount)))
+      setReceiptNote(String(snap.data().receiptNote ?? '')); setShowVatOnReceipt(Boolean(snap.data().showVatOnReceipt))
+      setMode('sale'); setCreateWorkOrder(false); pendingDeposit.current = deposit.id; loadedDeposit.current = deposit.id
+      setPosMsg({ type: 'ok', text: `โหลด ${deposit.depositNo} แล้ว กรุณาตรวจรายการก่อนรับยอดคงเหลือ` })
+    }).catch(error => { if (active) setPosMsg({ type: 'err', text: error instanceof Error ? error.message : 'โหลดมัดจำไม่สำเร็จ' }) })
+    return () => { active = false }
+  }, [requestedDepositId, companyId, branchId])
 
   useEffect(() => {
     if (!companyId) return
@@ -348,13 +407,18 @@ export default function POSPage() {
     const unsub = onSnapshot(q, snap => {
       setOpenDeposits(
         snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) }) as Deposit)
-          .filter(d => d.status === 'deposited' && (d.remainingAmount ?? 0) > 0)
+          .filter(d => d.branchId === branchId && depositCredit(d) > 0)
       )
     }, () => setOpenDeposits([]))
     return unsub
-  }, [customerId, companyId])
+  }, [customerId, companyId, branchId])
 
   const appliedDeposit  = openDeposits.find(d => d.id === appliedDepositId) || null
+  useEffect(() => {
+    if (pendingDeposit.current && openDeposits.some(deposit => deposit.id === pendingDeposit.current)) {
+      setAppliedDepositId(pendingDeposit.current); pendingDeposit.current = ''
+    }
+  }, [openDeposits])
 
   /* ─── พนักงานขาย / คอมมิชชั่น ─── */
   const empLabel = (e: Employee) => e.nickname || `${e.firstName} ${e.lastName ?? ''}`.trim()
@@ -435,20 +499,19 @@ export default function POSPage() {
   const taxableAfterDisc = Math.max(taxableSubtotal - taxableDiscount, 0)
   const nonTaxableAfterDisc = Math.max((subtotal - taxableSubtotal) - (discountAmt - taxableDiscount), 0)
   const afterDisc   = taxableAfterDisc + nonTaxableAfterDisc
-  const vatAmt      = showVatOnReceipt ? taxableAfterDisc - (taxableAfterDisc / (1 + VAT_RATE)) : 0
-  const preVatAmount = showVatOnReceipt ? afterDisc - vatAmt : afterDisc
-  const total       = afterDisc
+  const vatAmt      = money(taxableAfterDisc - (taxableAfterDisc / (1 + VAT_RATE)))
+  const preVatAmount = money(afterDisc - vatAmt)
+  const total       = money(afterDisc)
   const lineSubtotal = (c: CartItem) => c.price * c.quantity
   const lineDiscount = (c: CartItem) => subtotal > 0 ? Math.min(lineSubtotal(c), discountAmt * (lineSubtotal(c) / subtotal)) : 0
   const lineTax = (c: CartItem) => {
-    if (!showVatOnReceipt) return 0
     const taxableLineTotal = Math.max(lineSubtotal(c) - lineDiscount(c), 0)
-    return taxableLineTotal - (taxableLineTotal / (1 + VAT_RATE))
+    return money(taxableLineTotal - (taxableLineTotal / (1 + VAT_RATE)))
   }
   const depositAmt  = Math.min(parseFloat(depositInput) || 0, total)
   const remaining   = total - depositAmt
   // หักมัดจำเดิม (เฉพาะโหมดขาย) — หักได้ไม่เกินยอดบิล
-  const depositDeduct = mode === 'sale' && appliedDeposit ? Math.min(appliedDeposit.depositAmount ?? 0, total) : 0
+  const depositDeduct = mode === 'sale' && appliedDeposit ? Math.min(depositCredit(appliedDeposit), total) : 0
   const netDue      = total - depositDeduct   // ยอดที่ต้องชำระจริงหลังหักมัดจำ
   const payNow      = mode === 'sale' ? netDue : depositAmt
   const rawCashAmount = parseFloat(cash)
@@ -524,7 +587,7 @@ export default function POSPage() {
 
   /* ─── Checkout (ขายปกติ) ─── */
   const handleCheckout = async () => {
-    if (cart.length === 0 || saving) return
+    if (cart.length === 0 || saving || checkoutBusy.current) return
     // กันบันทึกยอดขายผิดบริษัท: ถ้า user ยังโหลดไม่เสร็จ companyId จะเป็น fallback
     if (!companyId || companyId === 'demo_company' || !branchId || branchId === 'demo_branch') {
       setPosMsg({ type: 'err', text: 'ระบบกำลังโหลดข้อมูลผู้ใช้ กรุณารอสักครู่แล้วลองใหม่' })
@@ -549,11 +612,14 @@ export default function POSPage() {
     if (paymentConfirmed && !await ensurePermission('action.sales.confirmPayment', 'ยืนยันการชำระเงิน')) return
     setSaving(true)
     setPosMsg({ type: 'ok', text: 'กำลังบันทึกการขาย...' })
+    checkoutBusy.current = true
     let receiptNo: string
     try {
-      receiptNo = await generateBranchDocumentNo(companyId, branchId, 'receipt')
+      if (!checkoutAttempt.current || checkoutAttempt.current.mode !== 'sale') setCheckoutAttempt({ id: crypto.randomUUID(), no: await generateBranchDocumentNo(companyId, branchId, 'receipt'), mode: 'sale' })
+      receiptNo = checkoutAttempt.current!.no
     } catch (err) {
       setPosMsg({ type: 'err', text: 'สร้างเลขที่ใบเสร็จไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'ลองใหม่อีกครั้ง') })
+      checkoutBusy.current = false
       setSaving(false)
       return
     }
@@ -582,7 +648,7 @@ export default function POSPage() {
         const isNegativeStockSale = stockAfter !== null && stockAfter < 0
         const itemNote = c.note?.trim()
         return {
-          type: c.type, productId: c.type === 'product' ? c.id : null, name: c.name, sku: c.sku ?? null,
+          type: c.type, productId: c.type === 'product' ? c.id : null, serviceId: c.type === 'service' ? c.id : null, name: c.name, sku: c.sku ?? null,
           isWigProduct: c.isWigProduct ?? false, wigType: c.wigType ?? null,
           quantity: c.quantity, unitPrice: c.price, originalUnitPrice: c.originalPrice ?? c.price,
           isPriceEdited: (c.originalPrice ?? c.price) !== c.price,
@@ -621,6 +687,7 @@ export default function POSPage() {
     if (customerPhone)  saleData.customerPhone  = customerPhone.trim()
     if (receiptNoteText) saleData.receiptNote = receiptNoteText
     if (depositDeduct > 0) saleData.depositDeducted = depositDeduct
+    if (appliedDeposit) saleData.depositId = appliedDeposit.id
     if (hasNegativeStockSale) {
       saleData.hasNegativeStockSale = true
       saleData.negativeStockReason = negativeReason
@@ -629,19 +696,10 @@ export default function POSPage() {
       saleData.negativeStockItems = stockShortages
     }
 
-    // รอผลบันทึกจริงก่อนออกใบเสร็จ — ถ้าพลาดจะได้แจ้ง ไม่ใช่ยอดขายหายเงียบ
-    let saleId: string
-    try {
-      saleId = await addDocument<Sale>(COLLECTIONS.SALES, saleData as Omit<Sale, 'id'>)
-    } catch (err) {
-      console.error('Sale save error:', err)
-      setPosMsg({ type: 'err', text: 'บันทึกการขายไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'ลองใหม่อีกครั้ง') })
-      setSaving(false)
-      return
-    }
-
+    const saleId = checkoutAttempt.current!.id
+    const preparedOrders: { id: string; data: Record<string, unknown> }[] = []
     let createdWorkOrderCount = 0
-    const wigItems = cart.filter(c => c.type === 'product' && c.isWigProduct)
+    const wigItems = appliedDeposit ? [] : cart.filter(c => c.type === 'product' && c.isWigProduct)
     if (wigItems.length > 0) {
       setPosMsg({ type: 'ok', text: 'กำลังสร้างใบสั่งผลิตจากบิลขาย...' })
       for (const item of wigItems) {
@@ -681,81 +739,31 @@ export default function POSPage() {
           if (wigSpec.wigLength) woData.wigLength = wigSpec.wigLength
           if (wigSpec.wigModel) woData.wigModel = wigSpec.wigModel
           if (wigSpec.manufacturer) woData.manufacturer = wigSpec.manufacturer
-          await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, woData as Omit<WorkOrder, 'id'>)
+          preparedOrders.push({ id: doc(collection(db, COLLECTIONS.WORK_ORDERS)).id, data: woData })
           createdWorkOrderCount += 1
         } catch (err) {
-          console.error('WorkOrder from sale error:', err)
+          setPosMsg({ type: 'err', text: err instanceof Error ? err.message : 'เตรียมงานผลิตไม่สำเร็จ' })
+          setSaving(false); checkoutBusy.current = false
+          return
         }
       }
     }
 
-    // ตัดสต๊อกสินค้า (เฉพาะ product) + บันทึกการเคลื่อนไหว 'out' (best-effort — ขายบันทึกแล้ว)
-    cart.filter(c => c.type === 'product').forEach(c => {
-      const previousQty = typeof c.stockQty === 'number' ? c.stockQty : 0
-      const newQty = previousQty - c.quantity
-      const isNegativeStock = newQty < 0
-      adjustBranchStock({
-        companyId,
-        branchId,
-        productId: c.id,
-        productName: c.name,
-        delta: -c.quantity,
-        type: 'out',
-        costPrice: c.costPrice ?? 0,
-        referenceType: 'sale',
-        referenceNo: receiptNo,
-        performedBy: userId,
-        notes: isNegativeStock
-          ? `ขายบิล ${receiptNo} · สต๊อกติดลบจาก ${previousQty} เป็น ${newQty}${negativeReason ? ` · เหตุผล: ${negativeReason}` : ''}`
-          : `ขายบิล ${receiptNo} · สต๊อกสาขาจาก ${previousQty} เป็น ${newQty}`,
-      }).catch(err => console.error('Branch stock decrement error:', err))
-    })
-
-    // เขียน commission_records ต่อรายการที่ระบุพนักงานขาย (best-effort — ขายบันทึกแล้ว)
     const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-    cart.filter(c => c.staffId && itemCommission(c) > 0).forEach(c => {
-      addDocument(COLLECTIONS.COMMISSION_RECORDS, {
-        companyId, branchId, employeeId: c.staffId!, saleId,
-        type: c.type, itemName: c.name, saleAmount: c.price * c.quantity,
-        commissionRate: c.commissionRate ?? null,
-        commissionAmount: itemCommission(c),
-        status: 'pending', month: monthKey,
-      } as never).catch(err => console.error('Commission record error:', err))
-    })
-
-    // ปิดมัดจำที่ถูกหัก (best-effort — ขายบันทึกแล้ว)
-    if (appliedDeposit && depositDeduct > 0) {
-      updateDoc(doc(db, COLLECTIONS.DEPOSITS, appliedDeposit.id), {
-        status: 'paid_full', remainingAmount: 0,
-        paidAmount: (appliedDeposit.totalAmount ?? appliedDeposit.depositAmount ?? 0),
-        closedBySaleId: saleId, updatedAt: serverTimestamp(),
-      }).catch(err => console.error('Close deposit error:', err))
+    const commissions = cart.filter(c => c.staffId && itemCommission(c) > 0).map(c => ({
+      companyId, branchId, employeeId: c.staffId!, saleId,
+      type: c.type, itemName: c.name, saleAmount: c.price * c.quantity,
+      commissionRate: c.commissionRate ?? null, commissionAmount: itemCommission(c),
+      status: 'pending', month: monthKey,
+    }))
+    try {
+      await commitCheckout({ id: saleId, mode: 'sale', data: saleData, orders: preparedOrders, commissions, deposit: appliedDeposit,
+        allowNegativeStock: stockPolicy.allowNegativeStock && (!stockPolicy.requireNegativeStockReason || Boolean(negativeReason)), userName: cashierName, mainBranchId: mainCatalogBranchId })
+    } catch (err) {
+      setPosMsg({ type: 'err', text: 'บันทึกขายไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'กรุณาลองใหม่') })
+      setSaving(false); checkoutBusy.current = false
+      return
     }
-
-    await writeActivityLog({
-      companyId,
-      branchId,
-      userId,
-      userName: cashierName,
-      action: 'sale',
-      module: 'POS',
-      description: `บันทึกขาย ${receiptNo} ยอด ${formatCurrency(total)}${createdWorkOrderCount > 0 ? ` และสร้างใบสั่งผลิต ${createdWorkOrderCount} รายการ` : ''}`,
-      recordId: saleId,
-      recordType: 'sale',
-      metadata: {
-        receiptNo,
-        totalAmount: total,
-        netDue,
-        itemCount: cart.length,
-        paymentMethod: payMethod,
-        paymentStatus: paymentConfirmed ? 'confirmed' : 'pending',
-        showVatOnReceipt,
-        workOrderCreatedCount: createdWorkOrderCount,
-        hasNegativeStockSale,
-        negativeStockReason: hasNegativeStockSale ? negativeReason : undefined,
-        depositDeducted: depositDeduct > 0 ? depositDeduct : undefined,
-      },
-    })
 
     // Show receipt after confirmed save
     setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', customerPhone: customerPhone.trim() || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
@@ -767,11 +775,12 @@ export default function POSPage() {
     setPaymentConfirm(null); setPaymentVerified(false)
     setPosMsg({ type: 'ok', text: `บันทึกการขายสำเร็จ เลขที่ ${receiptNo}${createdWorkOrderCount > 0 ? ` · สร้างใบสั่งผลิต ${createdWorkOrderCount} รายการ` : ''}` })
     setSaving(false)
+    checkoutBusy.current = false; setCheckoutAttempt(null)
   }
 
   /* ─── รับมัดจำ ─── */
   const handleDeposit = async () => {
-    if (cart.length === 0 || saving) return
+    if (cart.length === 0 || saving || checkoutBusy.current) return
     if (depositAmt <= 0) {
       setPosMsg({ type: 'err', text: 'กรุณาระบุยอดมัดจำก่อนบันทึก' })
       return
@@ -787,11 +796,14 @@ export default function POSPage() {
     if (paymentConfirmed && !await ensurePermission('action.sales.confirmPayment', 'ยืนยันการชำระเงิน')) return
     setSaving(true)
     setPosMsg({ type: 'ok', text: 'กำลังบันทึกมัดจำ...' })
+    checkoutBusy.current = true
     let depositNo: string
     try {
-      depositNo = await generateBranchDocumentNo(companyId, branchId, 'deposit')
+      if (!checkoutAttempt.current || checkoutAttempt.current.mode !== 'deposit') setCheckoutAttempt({ id: crypto.randomUUID(), no: await generateBranchDocumentNo(companyId, branchId, 'deposit'), mode: 'deposit' })
+      depositNo = checkoutAttempt.current!.no
     } catch (err) {
       setPosMsg({ type: 'err', text: 'สร้างเลขที่มัดจำไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'ลองใหม่อีกครั้ง') })
+      checkoutBusy.current = false
       setSaving(false)
       return
     }
@@ -809,7 +821,7 @@ export default function POSPage() {
       branchCode: shopInfo.branchCode || currentBranch?.code || '',
     }
 
-    // Fire-and-forget — ไม่รอ
+    // Prepare every related record before committing the transaction.
     const depData: Record<string, unknown> = {
       companyId, branchId, depositNo,
       branchName: receiptInfo.branchName ?? '',
@@ -840,9 +852,11 @@ export default function POSPage() {
       taxAmount: vatAmt,
       taxIncluded: true,
       showVatOnReceipt,
-      totalAmount: total, depositAmount: depositAmt, paidAmount: depositAmt,
-      remainingAmount: remaining, status: remaining <= 0 ? 'paid_full' : 'deposited',
+      totalAmount: total, depositAmount: depositAmt, paidAmount: paymentConfirmed ? depositAmt : 0,
+      remainingAmount: paymentConfirmed ? remaining : total, status: paymentConfirmed ? (remaining <= 0 ? 'paid_full' : 'deposited') : 'pending',
+      pickupDate: pickupDate || null,
       paymentMethod: payMethod,
+      paymentHistory: [{ id: 'initial', amount: depositAmt, method: payMethod, confirmed: paymentConfirmed, receivedAt: now, receivedBy: userId, receivedByName: cashierName, ...(slipUrl ? { slipUrl } : {}) }],
       paymentStatus: paymentConfirmed ? 'confirmed' : 'pending',
       createdBy: userId,
       createdByName: cashierName,
@@ -857,16 +871,8 @@ export default function POSPage() {
     if (notesStr) depData.notes = notesStr
     if (receiptNoteText) depData.receiptNote = receiptNoteText
     if (slipUrl)  depData.slipUrl = slipUrl
-    // รอผลบันทึกมัดจำจริง (ยอดเงิน) ก่อนออกใบ
-    let depositId: string
-    try {
-      depositId = await addDocument<Deposit>(COLLECTIONS.DEPOSITS, depData as Omit<Deposit, 'id'>)
-    } catch (err) {
-      console.error('Deposit save error:', err)
-      setPosMsg({ type: 'err', text: 'บันทึกมัดจำไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'ลองใหม่อีกครั้ง') })
-      setSaving(false)
-      return
-    }
+    const depositId = checkoutAttempt.current!.id
+    const preparedOrders: { id: string; data: Record<string, unknown> }[] = []
 
     let createdDepositWorkOrder = false
     if (createWorkOrder) {
@@ -892,38 +898,22 @@ export default function POSPage() {
         if (wigSpec.manufacturer) woData.manufacturer = wigSpec.manufacturer
         if (depositNote)          woData.notes        = depositNote
         if (pickupDate)           woData.expectedDate = new Date(pickupDate)
-        await addDocument<WorkOrder>(COLLECTIONS.WORK_ORDERS, woData as Omit<WorkOrder, 'id'>)
+        preparedOrders.push({ id: doc(collection(db, COLLECTIONS.WORK_ORDERS)).id, data: woData })
         createdDepositWorkOrder = true
       } catch (err) {
-        console.error('WorkOrder save error:', err)
-        setPosMsg({ type: 'err', text: 'บันทึกมัดจำแล้ว แต่สร้างใบสั่งผลิตไม่สำเร็จ กรุณาไปสร้างในหน้างานผลิตวิก' })
+        setPosMsg({ type: 'err', text: err instanceof Error ? err.message : 'เตรียมงานผลิตไม่สำเร็จ' })
+        setSaving(false); checkoutBusy.current = false
+        return
       }
     }
 
-    await writeActivityLog({
-      companyId,
-      branchId,
-      userId,
-      userName: cashierName,
-      action: 'deposit',
-      module: 'POS',
-      description: `บันทึกมัดจำ ${depositNo} ยอดมัดจำ ${formatCurrency(depositAmt)}${createdDepositWorkOrder ? ' และสร้างใบสั่งผลิตแล้ว' : ''}`,
-      recordId: depositId,
-      recordType: 'deposit',
-      metadata: {
-        depositNo,
-        totalAmount: total,
-        depositAmount: depositAmt,
-        remainingAmount: remaining,
-        itemCount: cart.length,
-        paymentMethod: payMethod,
-        paymentStatus: paymentConfirmed ? 'confirmed' : 'pending',
-        showVatOnReceipt,
-        workOrderCreated: createdDepositWorkOrder,
-        createWorkOrder,
-        pickupDate: pickupDate || undefined,
-      },
-    })
+    try {
+      await commitCheckout({ id: depositId, mode: 'deposit', data: depData, orders: preparedOrders, allowNegativeStock: false, userName: cashierName, mainBranchId: mainCatalogBranchId })
+    } catch (err) {
+      setPosMsg({ type: 'err', text: 'บันทึกมัดจำไม่สำเร็จ: ' + (err instanceof Error ? err.message : 'กรุณาลองใหม่') })
+      setSaving(false); checkoutBusy.current = false
+      return
+    }
 
     // Show receipt immediately — ไม่ต้องรอ
     setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, customerPhone: custPhone || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: createdDepositWorkOrder ? 1 : 0, receiverName: cashierName })
@@ -936,6 +926,7 @@ export default function POSPage() {
       setPosMsg({ type: 'ok', text: `บันทึกมัดจำสำเร็จ เลขที่ ${depositNo}${createdDepositWorkOrder ? ' · สร้างใบสั่งผลิตแล้ว' : ''}` })
     }
     setSaving(false)
+    checkoutBusy.current = false; setCheckoutAttempt(null)
   }
 
   /* ─── อัปโหลดสลิป ─── */
@@ -1062,7 +1053,7 @@ export default function POSPage() {
               )}
             </h2>
             {cart.length > 0 && (
-              <button onClick={() => setCart([])} className="text-xs text-red-400 hover:text-red-500 font-medium">ล้างทั้งหมด</button>
+              <button disabled={saving} onClick={() => { if (window.confirm('ล้างตะกร้าปัจจุบัน?')) clearDraft() }} className="text-xs text-red-400 hover:text-red-500 font-medium">ล้างทั้งหมด</button>
             )}
           </div>
 
@@ -1110,6 +1101,8 @@ export default function POSPage() {
             placeholder={mode === 'deposit' ? 'ค้นหาลูกค้า (แนะนำสำหรับมัดจำ)' : 'ค้นหาลูกค้า (ไม่บังคับ)'}
           />
         </div>
+
+        <PosDrafts storageKey={`yumiko-pos:${companyId}:${branchId}:${userId}`} value={draft} itemCount={cart.length} customerName={customerName} disabled={saving || checkoutOpen} onRestore={restoreDraft} onClear={clearDraft} />
 
         {/* Items */}
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
@@ -1607,7 +1600,7 @@ export default function POSPage() {
                   <input type="checkbox" checked={appliedDepositId === d.id}
                     onChange={() => setAppliedDepositId(appliedDepositId === d.id ? '' : d.id)}
                     className="accent-amber-500" />
-                  <span className="flex-1 truncate">{d.depositNo} · มัดจำ {formatCurrency(d.depositAmount)}</span>
+                  <span className="flex-1 truncate">{d.depositNo} · ยอดรับสะสมที่ใช้ได้ {formatCurrency(depositCredit(d))}</span>
                 </label>
               ))}
             </div>

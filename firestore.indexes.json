@@ -127,6 +127,198 @@
         { "fieldPath": "companyId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "customers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "firstName", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "customers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "lastName", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "customers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "nickname", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "customers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "phone", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "customers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "customerId", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "products",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "name", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "products",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "sku", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "sales",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "receiptNo", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "deposits",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "depositNo", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "work_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "orderNo", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "work_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "customerName", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "sales",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "paymentStatus", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "appointments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "date", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "work_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "deposits",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "transfer_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "permission_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "products",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "isActive", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "inventory",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "branchId", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "returns",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "originalSaleId", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "deposits",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "closedBySaleId", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "commission_records",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "saleId", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "work_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "companyId", "order": "ASCENDING"},
+        {"fieldPath": "saleOrderId", "order": "ASCENDING"}
+      ]
     }
   ],
   "fieldOverrides": []

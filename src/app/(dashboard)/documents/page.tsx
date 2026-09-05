@@ -1,20 +1,22 @@
 'use client'
+import { CancelFinancialDocument } from '@/components/CancelFinancialDocument'
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import {
-  AlertTriangle, CheckCircle2, Download, Eye, FileText, Loader2,
+  CheckCircle2, Download, Eye, FileText, Loader2,
   Pencil, Printer, Receipt, Search, X,
 } from 'lucide-react'
-import { collection, doc, getDocs, increment, onSnapshot, query, runTransaction, serverTimestamp, updateDoc, where, writeBatch } from 'firebase/firestore'
+import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
-import { invId } from '@/lib/stock'
 import { uploadToCloudinary } from '@/lib/cloudinary'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { Deposit, DepositStatus, PaymentMethod, PaymentStatus, Sale, SaleStatus } from '@/types'
 import Link from 'next/link'
 import { writeActivityLog } from '@/lib/activityLog'
+import { attachSaleSlip, confirmSalePayment } from '@/lib/salePayments'
 
 const docTypeConfig = {
   quotation:       { label: 'ใบเสนอราคา',     color: 'bg-blue-100 text-blue-700'       },
@@ -55,16 +57,6 @@ const depositStatusConfig: Record<DepositStatus, { label: string; color: string 
 const uniqReceiptTexts = (values: string[]) =>
   Array.from(new Set(values.map(v => v.trim()).filter(Boolean)))
 
-const restorableSaleItems = (sale: Sale) =>
-  (sale.items ?? [])
-    .flatMap((item, lineIndex) => item.type === 'product' && item.productId && item.quantity > 0 ? [{
-      lineIndex,
-      productId: item.productId!,
-      name: item.name,
-      sku: item.sku,
-      quantity: Number(item.quantity ?? 0),
-    }] : [])
-
 const escapeHtml = (value: string | number | null | undefined) =>
   String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -93,10 +85,11 @@ export default function DocumentsPage() {
   const [docs, setDocs] = useState<DocItem[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const searchParams = useSearchParams()
+  useEffect(() => { setSearch(searchParams.get('q') ?? '') }, [searchParams])
   const [filterType, setFilterType] = useState('')
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null)
   const [editForm, setEditForm] = useState({ customerName: '', customerPhone: '', receiptNote: '', notes: '' })
-  const [cancelReason, setCancelReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [message, setMessage] = useState('')
@@ -194,7 +187,6 @@ export default function DocumentsPage() {
       receiptNote: sale.receiptNote ?? '',
       notes: sale.notes ?? '',
     })
-    setCancelReason('')
     setMessage('')
   }
 
@@ -205,10 +197,6 @@ export default function DocumentsPage() {
   const canEditBill = hasPermission('action.sales.editBill')
   const canAttachSlip = hasPermission('action.sales.attachSlip')
   const canConfirmPayment = hasPermission('action.sales.confirmPayment')
-  const canCancelBill = hasPermission('action.sales.cancelBill')
-  const activeSaleRestoreItems = activeSale ? restorableSaleItems(activeSale) : []
-  const activeSaleRestoreQty = activeSaleRestoreItems.reduce((sum, item) => sum + item.quantity, 0)
-  const activeSaleRestoredQty = activeSale?.stockRestoreItems?.reduce((sum, item) => sum + (item.quantity ?? 0), 0) ?? 0
 
   const saveSaleText = async () => {
     if (!activeSale) return
@@ -252,28 +240,8 @@ export default function DocumentsPage() {
     setMessage('')
     try {
       const slipUrl = await uploadToCloudinary(file, 'wigpro/slips')
-      const payments = [...(activeSale.payments ?? [])]
-      const base = payments[0] ?? { method: 'transfer' as PaymentMethod, amount: activeSale.totalAmount ?? 0 }
-      payments[0] = { ...base, slipUrl }
-      await updateDoc(doc(db, COLLECTIONS.SALES, activeSale.id), {
-        payments,
-        paymentStatus: 'pending',
-        status: activeSale.status === 'cancelled' ? 'cancelled' : 'pending',
-        updatedAt: serverTimestamp(),
-      })
-      await writeActivityLog({
-        companyId,
-        branchId: activeSale.branchId || branchId,
-        userId,
-        userName,
-        action: 'payment',
-        module: 'ประวัติบิล',
-        description: `แนบ/เปลี่ยนสลิปบิล ${activeSale.receiptNo ?? activeSale.id}`,
-        recordId: activeSale.id,
-        recordType: 'sale',
-        metadata: { receiptNo: activeSale.receiptNo, totalAmount: activeSale.totalAmount },
-      })
-      setMessage('แนบสลิปแล้ว รอการยืนยันชำระเงิน')
+      await attachSaleSlip(activeSale, slipUrl, { userId, userName })
+      setMessage('แนบสลิปแล้ว')
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'อัปโหลดสลิปไม่สำเร็จ')
     } finally {
@@ -287,29 +255,7 @@ export default function DocumentsPage() {
     setSaving(true)
     setMessage('')
     try {
-      const payments = (activeSale.payments ?? []).map((p, index) => index === 0
-        ? { ...p, approvedBy: userId, approvedAt: new Date() }
-        : p)
-      await updateDoc(doc(db, COLLECTIONS.SALES, activeSale.id), {
-        payments,
-        paymentStatus: 'confirmed',
-        paymentConfirmedBy: userId,
-        paymentConfirmedAt: serverTimestamp(),
-        status: activeSale.status === 'cancelled' ? 'cancelled' : 'completed',
-        updatedAt: serverTimestamp(),
-      })
-      await writeActivityLog({
-        companyId,
-        branchId: activeSale.branchId || branchId,
-        userId,
-        userName,
-        action: 'payment',
-        module: 'ประวัติบิล',
-        description: `ยืนยันชำระเงินบิล ${activeSale.receiptNo ?? activeSale.id}`,
-        recordId: activeSale.id,
-        recordType: 'sale',
-        metadata: { receiptNo: activeSale.receiptNo, totalAmount: activeSale.totalAmount },
-      })
+      await confirmSalePayment(activeSale, { userId, userName })
       setMessage('ยืนยันการชำระเงินแล้ว')
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'ยืนยันไม่สำเร็จ')
@@ -318,181 +264,6 @@ export default function DocumentsPage() {
     }
   }
 
-  const cancelBill = async () => {
-    if (!activeSale || !cancelReason.trim()) {
-      setMessage('กรุณาระบุเหตุผลการยกเลิกบิล')
-      return
-    }
-    if (activeSale.status === 'cancelled') {
-      setMessage('บิลนี้ถูกยกเลิกแล้ว')
-      return
-    }
-    if (!await ensurePermission('action.sales.cancelBill', 'ยกเลิกบิล')) return
-    setSaving(true)
-    setMessage('')
-    try {
-      const saleBranchId = activeSale.branchId || branchId
-      let restoredQty = 0
-      await runTransaction(db, async transaction => {
-        const saleRef = doc(db, COLLECTIONS.SALES, activeSale.id)
-        const saleSnap = await transaction.get(saleRef)
-        if (!saleSnap.exists()) throw new Error('ไม่พบบิลนี้')
-
-        const liveSale = convertTimestamps(saleSnap.data()) as Sale
-        if (liveSale.status === 'cancelled') throw new Error('บิลนี้ถูกยกเลิกแล้ว')
-        const liveRestoreItems = liveSale.stockRestoredOnCancel ? [] : restorableSaleItems(liveSale)
-        const liveSaleBranchId = liveSale.branchId || saleBranchId
-        restoredQty = liveRestoreItems.reduce((sum, item) => sum + item.quantity, 0)
-
-        const stockChanges = []
-        for (const item of liveRestoreItems) {
-          const inventoryRef = doc(db, COLLECTIONS.INVENTORY, invId(item.productId, liveSaleBranchId))
-          stockChanges.push({ item, inventoryRef })
-        }
-
-        for (const change of stockChanges) {
-          const movementRef = doc(collection(db, COLLECTIONS.STOCK_MOVEMENTS))
-          transaction.set(change.inventoryRef, {
-            companyId,
-            productId: change.item.productId,
-            branchId: liveSaleBranchId,
-            quantity: increment(change.item.quantity),
-            updatedAt: serverTimestamp(),
-          }, { merge: true })
-          transaction.set(movementRef, {
-            companyId,
-            branchId: liveSaleBranchId,
-            productId: change.item.productId,
-            productName: change.item.name,
-            type: 'cancel_return',
-            quantity: change.item.quantity,
-            previousQty: null,
-            newQty: null,
-            referenceType: 'sale_cancel',
-            referenceNo: liveSale.receiptNo,
-            costPrice: 0,
-            notes: `คืนสต๊อกจากการยกเลิกบิล ${liveSale.receiptNo} · เหตุผล: ${cancelReason.trim()}`,
-            performedBy: userId,
-            performedByName: userName || null,
-            createdAt: serverTimestamp(),
-          }, { merge: true })
-        }
-
-        transaction.update(saleRef, {
-          status: 'cancelled',
-          paymentStatus: 'rejected',
-          cancelReason: cancelReason.trim(),
-          cancelledBy: userId,
-          cancelledByName: userName || null,
-          cancelledAt: serverTimestamp(),
-          stockRestoredOnCancel: liveSale.stockRestoredOnCancel || liveRestoreItems.length > 0,
-          ...(liveRestoreItems.length > 0 ? {
-            stockRestoredBy: userId,
-            stockRestoredByName: userName || null,
-            stockRestoredAt: serverTimestamp(),
-            stockRestoreItems: liveRestoreItems,
-          } : {}),
-          updatedAt: serverTimestamp(),
-        })
-      })
-      try {
-        const commissionSnap = await getDocs(query(
-          collection(db, COLLECTIONS.COMMISSION_RECORDS),
-          where('companyId', '==', companyId),
-          where('saleId', '==', activeSale.id),
-        ))
-        if (!commissionSnap.empty) {
-          const batch = writeBatch(db)
-          commissionSnap.docs.forEach(record => {
-            batch.update(record.ref, {
-              status: 'cancelled',
-              cancelledBy: userId,
-              cancelledAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            })
-          })
-          await batch.commit()
-        }
-      } catch (commissionErr) {
-        console.error('Commission cancel sync error:', commissionErr)
-      }
-      await writeActivityLog({
-        companyId,
-        branchId: activeSale.branchId || branchId,
-        userId,
-        userName,
-        action: 'cancel',
-        module: 'ประวัติบิล',
-        description: `ยกเลิกบิล ${activeSale.receiptNo ?? activeSale.id}${restoredQty > 0 ? ` และคืนสต๊อก ${restoredQty} ชิ้น` : ''}`,
-        recordId: activeSale.id,
-        recordType: 'sale',
-        metadata: {
-          receiptNo: activeSale.receiptNo,
-          totalAmount: activeSale.totalAmount,
-          reason: cancelReason.trim(),
-          restoredQty,
-        },
-      })
-      setMessage(restoredQty > 0
-        ? `ยกเลิกบิลแล้ว และคืนสต๊อก ${restoredQty} ชิ้น`
-        : 'ยกเลิกบิลแล้ว')
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'ยกเลิกบิลไม่สำเร็จ')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const cancelDeposit = async (deposit: Deposit) => {
-    if (deposit.status === 'cancelled') {
-      setMessage('ใบมัดจำนี้ถูกยกเลิกแล้ว')
-      return
-    }
-    if (deposit.status === 'paid_full') {
-      setMessage('ใบมัดจำนี้ชำระครบแล้ว หากต้องการแก้ไขให้จัดการจากประวัติการรับชำระ')
-      return
-    }
-    const reason = window.prompt(`ระบุเหตุผลการยกเลิกมัดจำ ${deposit.depositNo}`)?.trim()
-    if (!reason) {
-      setMessage('กรุณาระบุเหตุผลการยกเลิกมัดจำ')
-      return
-    }
-    if (!await ensurePermission('action.sales.cancelBill', 'ยกเลิกมัดจำ')) return
-    setSaving(true)
-    setMessage('')
-    try {
-      await updateDoc(doc(db, COLLECTIONS.DEPOSITS, deposit.id), {
-        status: 'cancelled',
-        cancelReason: reason,
-        cancelledBy: userId,
-        cancelledByName: userName || null,
-        cancelledAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      })
-      await writeActivityLog({
-        companyId,
-        branchId: deposit.branchId || branchId,
-        userId,
-        userName,
-        action: 'cancel',
-        module: 'มัดจำ',
-        description: `ยกเลิกมัดจำ ${deposit.depositNo ?? deposit.id}`,
-        recordId: deposit.id,
-        recordType: 'deposit',
-        metadata: {
-          depositNo: deposit.depositNo,
-          depositAmount: deposit.depositAmount,
-          remainingAmount: deposit.remainingAmount,
-          reason,
-        },
-      })
-      setMessage(`ยกเลิกมัดจำ ${deposit.depositNo} แล้ว`)
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'ยกเลิกมัดจำไม่สำเร็จ')
-    } finally {
-      setSaving(false)
-    }
-  }
 
   const printSale = (sale: Sale) => {
     const win = window.open('', '_blank', 'width=420,height=720,scrollbars=yes')
@@ -722,12 +493,7 @@ export default function DocumentsPage() {
                       <Printer className="w-4 h-4" />
                     </button>
                   )}
-                  {item.deposit && item.deposit.status !== 'cancelled' && item.deposit.status !== 'paid_full' && (
-                    <button onClick={() => cancelDeposit(item.deposit!)} disabled={saving}
-                      className="p-2 rounded-lg hover:bg-red-50 text-[var(--text-muted)] hover:text-red-600 transition-all disabled:opacity-40" title={canCancelBill ? 'ยกเลิกมัดจำ' : 'ต้องขอสิทธิ์ยกเลิกบิล'}>
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
+                  {item.deposit && <CancelFinancialDocument target={{ kind: 'deposit', record: item.deposit }} />}
                   <button disabled
                     className="p-2 rounded-lg text-[var(--text-muted)] opacity-40" title="ดาวน์โหลด PDF (กำลังเตรียม)">
                     <Download className="w-4 h-4" />
@@ -852,42 +618,9 @@ export default function DocumentsPage() {
                 ))}
               </div>
 
-              <div className="rounded-2xl border border-red-100 bg-red-50 p-4 space-y-3">
-                <h4 className="text-sm font-bold text-red-700 flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4" /> ยกเลิกบิล
-                </h4>
-                {activeSale.status === 'cancelled' ? (
-                  <div className="space-y-2 text-sm text-red-700">
-                    <p>บิลนี้ถูกยกเลิกแล้ว: {activeSale.cancelReason || '-'}</p>
-                    {(activeSale.cancelledByName || activeSale.cancelledBy || activeSale.cancelledAt) && (
-                      <p className="rounded-xl border border-red-100 bg-white px-3 py-2 text-xs font-semibold">
-                        ยกเลิกโดย {activeSale.cancelledByName || activeSale.cancelledBy || '-'}
-                        {activeSale.cancelledAt ? ` · ${formatDate(activeSale.cancelledAt)}` : ''}
-                      </p>
-                    )}
-                    {activeSale.stockRestoredOnCancel && (
-                      <p className="rounded-xl border border-red-100 bg-white px-3 py-2 text-xs font-semibold">
-                        คืนสต๊อกอัตโนมัติแล้ว {activeSaleRestoredQty} ชิ้น
-                        {activeSale.stockRestoredByName ? ` โดย ${activeSale.stockRestoredByName}` : ''}
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    {activeSaleRestoreQty > 0 && (
-                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
-                        เมื่อยกเลิกบิล ระบบจะคืนสต๊อกกลับสาขาเดิมอัตโนมัติ {activeSaleRestoreQty} ชิ้น
-                      </div>
-                    )}
-                    <input value={cancelReason} onChange={e => setCancelReason(e.target.value)}
-                      placeholder="เหตุผลการยกเลิก เช่น ลูกค้าชำระผิด/ออกบิลผิด"
-                      className="w-full px-3 py-2.5 bg-white rounded-xl text-sm focus:outline-none border border-red-100" />
-                    <button onClick={cancelBill} disabled={saving} title={canCancelBill ? 'ยกเลิกบิล' : 'ต้องขอสิทธิ์ยกเลิกบิล'}
-                      className="px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-semibold disabled:opacity-50">
-                      ยกเลิกบิลนี้
-                    </button>
-                  </>
-                )}
+              <div className="border-t pt-4">
+                <CancelFinancialDocument target={{ kind: 'sale', record: activeSale }} />
+                {activeSale.cancelReason && <p className="mt-2 text-xs text-red-600">{activeSale.cancelReason}</p>}
               </div>
             </div>
 
