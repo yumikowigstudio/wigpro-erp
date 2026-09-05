@@ -1,9 +1,9 @@
 'use client'
 import { useCallback, useEffect } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
-import { doc, onSnapshot, setDoc, serverTimestamp, collection, addDoc } from 'firebase/firestore'
+import { doc, onSnapshot, setDoc, serverTimestamp, collection, addDoc, query, where } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
-import { getCollection, COLLECTIONS, where } from '@/lib/firestore'
+import { COLLECTIONS } from '@/lib/firestore'
 import { getEffectivePermissions, PermissionKey } from '@/lib/permissions'
 import { useAuthStore } from '@/store/authStore'
 import { User, Branch } from '@/types'
@@ -27,6 +27,40 @@ function startAuthListener() {
 
   let unsubscribeUser: (() => void) | null = null
   let profileLoadTimer: ReturnType<typeof setTimeout> | null = null
+  let unsubscribeBranches: (() => void) | null = null
+  let branchScope = ''
+
+  // Every menu uses useAuth; keep one branch subscription for the active account.
+  const syncBranches = () => {
+    const { user, supportCompanyId } = useAuthStore.getState()
+    const isSupport = user?.role === 'super_admin' && !!supportCompanyId
+    const companyId = isSupport ? supportCompanyId : user?.companyId
+    const nextScope = user && companyId ? JSON.stringify([user.id, companyId, user.branchId, user.role, isSupport]) : ''
+    if (nextScope === branchScope) return
+    branchScope = nextScope
+    unsubscribeBranches?.()
+    unsubscribeBranches = null
+    if (!user || !companyId) return
+    unsubscribeBranches = onSnapshot(query(collection(db, COLLECTIONS.BRANCHES),
+      where('companyId', '==', companyId), where('status', '==', 'active')),
+    snapshot => {
+      if (branchScope !== nextScope) return
+      const branchList = snapshot.docs.map(branch => ({ id: branch.id, ...branch.data() })) as Branch[]
+      const selectedBranchId = ['super_admin', 'owner'].includes(user.role)
+        ? useAuthStore.getState().currentBranch?.id : user.branchId
+      const preferredBranchId = isSupport ? branchList[0]?.id : user.branchId
+      const branch = branchList.find(item => item.id === selectedBranchId)
+        || branchList.find(item => item.id === preferredBranchId) || branchList[0] || null
+      useAuthStore.setState({ branches: branchList, currentBranch: branch })
+    }, error => {
+      if (branchScope !== nextScope) return
+      console.error('Error loading branches:', error)
+      useAuthStore.setState({ branches: [], currentBranch: null })
+      toast.error('โหลดสาขาไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วเข้าสู่ระบบใหม่')
+    })
+  }
+  useAuthStore.subscribe(syncBranches)
+  syncBranches()
 
   const clearProfileLoadTimer = () => {
     if (profileLoadTimer) {
@@ -80,25 +114,6 @@ function startAuthListener() {
             }
 
             setUser(userData)
-
-            // โหลดสาขาถ้ายังไม่มี
-            if (useAuthStore.getState().branches.length === 0) {
-              try {
-                const branchList = await getCollection<Branch>(COLLECTIONS.BRANCHES, [
-                  where('companyId', '==', userData.companyId),
-                  where('status', '==', 'active'),
-                ])
-                setBranches(branchList)
-                if (userData.branchId) {
-                  const branch = branchList.find(b => b.id === userData.branchId) || null
-                  setCurrentBranch(branch)
-                } else if (branchList.length > 0) {
-                  setCurrentBranch(branchList[0])
-                }
-              } catch (err) {
-                console.error('Error loading branches:', err)
-              }
-            }
           } else {
             // ── ไม่มีโปรไฟล์ผู้ใช้ ──
             const founderEmail = (process.env.NEXT_PUBLIC_SUPER_ADMIN_EMAIL || 'yumikosystem@gmail.com').toLowerCase()
@@ -156,7 +171,7 @@ function startAuthListener() {
 export function useAuth() {
   const {
     user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated,
-    supportCompanyId, supportCompanyName, setCurrentBranch, setBranches,
+    supportCompanyId, supportCompanyName, setCurrentBranch,
     setSupportCompany, clearSupportCompany, logout: storeLogout,
   } = useAuthStore()
 
@@ -182,28 +197,6 @@ export function useAuth() {
 
   const isSupportMode = !!user && user.role === 'super_admin' && !!supportCompanyId
   const companyId = isSupportMode ? supportCompanyId : user?.companyId ?? ''
-
-  useEffect(() => {
-    if (!user || !companyId) return
-    let cancelled = false
-    getCollection<Branch>(COLLECTIONS.BRANCHES, [
-      where('companyId', '==', companyId),
-      where('status', '==', 'active'),
-    ]).then(branchList => {
-      if (cancelled) return
-      setBranches(branchList)
-      const preferredBranchId = isSupportMode ? branchList[0]?.id : user.branchId
-      const branch = branchList.find(b => b.id === preferredBranchId) || branchList[0] || null
-      setCurrentBranch(branch)
-    }).catch((err) => {
-      console.error('Error loading branches:', err)
-      if (!cancelled) {
-        setBranches([])
-        setCurrentBranch(null)
-      }
-    })
-    return () => { cancelled = true }
-  }, [companyId, isSupportMode, setBranches, setCurrentBranch, user])
 
   const enterSupportCompany = (nextCompanyId: string, nextCompanyName: string) => {
     if (user?.role !== 'super_admin') return

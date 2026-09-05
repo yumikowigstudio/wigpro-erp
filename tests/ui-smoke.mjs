@@ -16,6 +16,7 @@ await env.withSecurityRulesDisabled(async context => {
     [`users/${signup.localId}`]: { companyId: 'co', branchId: 'main', email: 'qa@example.test', displayName: 'QA Cashier', role: 'owner', isActive: true, permissions: [] },
     'companies/co': { name: 'QA Store', status: 'active' },
     'branches/main': { companyId: 'co', name: 'Yumiko Wig Studio QA', code: '00', isMainBranch: true, status: 'active' },
+    'branches/second': { companyId: 'co', name: 'QA Second Branch', code: '01', isMainBranch: false, status: 'active' },
     'system_settings/co': { companyId: 'co', nameTh: 'ร้านทดสอบ', allowNegativeStock: false },
     'system_settings/co_tax': { companyId: 'co' },
     'products/p': { companyId: 'co', branchId: 'main', name: 'สินค้าทดสอบ', sku: 'QA001', sellingPrice: 100, costPrice: 20, isActive: true, stockQty: 10, minStockAlert: 2, images: [], createdAt: now },
@@ -30,6 +31,9 @@ const browser = await chromium.launch({ headless: true, channel: 'chrome' })
 const page = await browser.newPage({ viewport: { width: 1440, height: 960 } })
 const errors = []
 page.on('pageerror', error => errors.push(error.message))
+page.on('console', message => {
+  if (message.type() === 'error' && /Maximum update depth|Error loading branches|permission.denied/i.test(message.text())) errors.push(message.text())
+})
 page.on('dialog', dialog => dialog.accept())
 try {
   await page.goto('http://localhost:3106/login')
@@ -70,13 +74,29 @@ try {
   await page.goto('http://localhost:3106/activity-log')
   await page.getByRole('heading', { name: 'บันทึกกิจกรรม' }).waitFor()
   await page.screenshot({ path: 'test-results/activity-log.png', fullPage: true })
+  const branchSelector = page.getByRole('banner').getByTitle('เลือกสาขาที่ต้องการดู')
+  await branchSelector.selectOption('second')
+  await page.locator('a[href="/pos"]').first().click()
+  await page.waitForURL('**/pos')
+  await page.getByRole('button', { name: 'พักบิล', exact: true }).waitFor()
+  await page.waitForTimeout(1000)
+  assert.equal(await branchSelector.inputValue(), 'second', 'Navigating must retain the selected branch')
+  await page.locator('a[href="/accounting"]').first().click()
+  await page.waitForURL('**/accounting')
+  await page.getByRole('heading', { name: 'บัญชีการเงิน' }).waitFor()
+  await page.waitForTimeout(1000)
+  assert.equal(await branchSelector.inputValue(), 'second', 'Accounting must retain the selected branch')
+  await branchSelector.selectOption('main')
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('http://localhost:3106/pos')
   await page.getByRole('button', { name: 'พักบิล', exact: true }).waitFor()
+  await page.getByText('สินค้าทดสอบ', { exact: true }).first().waitFor()
+  await page.getByRole('button', { name: 'เรียกคืน', exact: true }).click()
+  assert.equal(await page.locator('#pos-cart-panel').getByText('สินค้าทดสอบ', { exact: true }).count(), 1)
   await page.screenshot({ path: 'test-results/pos-mobile.png', fullPage: true })
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'Mobile page must not overflow horizontally')
   assert.deepEqual(errors, [])
-  console.log('UI smoke passed: park/recover, global search, deposit checkout, reports, activity log, mobile layout')
+  console.log('UI smoke passed: park/recover, global search, deposit checkout, reports, accounting, activity log, branch navigation, mobile layout')
 } finally {
   await browser.close()
   await env.cleanup()
