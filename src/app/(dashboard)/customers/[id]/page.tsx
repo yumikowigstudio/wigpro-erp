@@ -1,6 +1,6 @@
 'use client'
 /* eslint-disable @next/next/no-img-element */
-import { useState, use, useEffect, useRef } from 'react'
+import { useState, use, useEffect, useRef, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import {
@@ -9,6 +9,7 @@ import {
   Upload, Trash2, ChevronRight, Clock, Package, AlertTriangle,
   X, ZoomIn, FileText, FilePlus, Ruler, Phone as PhoneIcon,
   MessageSquare, MapPin, StickyNote, Plus, CheckCircle2, Scissors,
+  Search, MoreHorizontal, ChevronDown, Columns2, Grid2X2, Grid3X3,
 } from 'lucide-react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { getDocument, COLLECTIONS } from '@/lib/firestore'
@@ -283,7 +284,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const tabs = [
     { id: 'overview',  label: 'ภาพรวม' },
     { id: 'timeline',  label: `Timeline${sales.length + workOrders.length + deposits.length + images.length + documents.length + contacts.length + serviceRecords.length + appointments.length ? ` (${sales.length + workOrders.length + deposits.length + images.length + documents.length + contacts.length + serviceRecords.length + appointments.length})` : ''}` },
-    { id: 'photos',    label: `เคส/รูปภาพ${workCases.length || images.length ? ` (${workCases.length}/${images.length})` : ''}` },
+    { id: 'photos',    label: `อัลบั้ม${workCases.length ? ` (${workCases.length})` : ''}` },
     { id: 'documents', label: `เอกสาร${documents.length ? ` (${documents.length})` : ''}` },
     { id: 'history',   label: `ประวัติบริการ${sales.length ? ` (${sales.length})` : ''}` },
     { id: 'services',  label: `ผลบริการ${serviceRecords.length ? ` (${serviceRecords.length})` : ''}` },
@@ -373,7 +374,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       </div>
 
       {/* ── Tabs ── */}
-      <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] overflow-hidden">
+      <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)]">
         <div className="flex overflow-x-auto border-b border-[var(--border-light)]">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id)}
@@ -692,6 +693,26 @@ function OverviewTab({ customer, levelCfg }: { customer: Customer; levelCfg: { l
 
 // ─── Tab 2: รูปภาพ ─────────────────────────────────────────────────────────────
 
+function AlbumDialog({ label, children, onClose, fullscreen = false }: {
+  label: string; children: ReactNode; onClose: () => void; fullscreen?: boolean
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const dialog = dialogRef.current
+    dialog?.showModal()
+    return () => dialog?.close()
+  }, [])
+  return (
+    <dialog ref={dialogRef} aria-label={label} aria-modal="true"
+      onCancel={event => { event.preventDefault(); onClose() }}
+      className={`m-auto border-0 bg-white p-0 shadow-2xl backdrop:bg-black/50 open:flex flex-col ${fullscreen
+        ? 'h-[100dvh] max-h-[100dvh] w-full max-w-none sm:h-[90dvh] sm:max-h-[90dvh] sm:max-w-6xl sm:rounded-lg'
+        : 'max-h-[90dvh] w-[calc(100%_-_2rem)] max-w-xl rounded-lg'}`}>
+      {children}
+    </dialog>
+  )
+}
+
 function PhotosTab({
   images,
   workCases,
@@ -747,6 +768,12 @@ function PhotosTab({
   const [galleryCategory, setGalleryCategory] = useState<ImgCat | 'all'>('all')
   const [galleryDate, setGalleryDate] = useState('all')
   const [galleryLayout, setGalleryLayout] = useState<'compare' | 'grid4' | 'grid5'>('compare')
+  const [caseSearch, setCaseSearch] = useState('')
+  const [caseTypeFilter, setCaseTypeFilter] = useState<CustomerWorkCaseType | 'all'>('all')
+  const [caseMenuId, setCaseMenuId] = useState<string | null>(null)
+  const [showGeneralImages, setShowGeneralImages] = useState(false)
+  const [galleryUploadOpen, setGalleryUploadOpen] = useState(false)
+  const [galleryUploadCat, setGalleryUploadCat] = useState<ImgCat>('before')
   const [generalUploadCat, setGeneralUploadCat] = useState<ImgCat>('before')
   const [movingImageId, setMovingImageId] = useState<string | null>(null)
   const [moveTargetByImage, setMoveTargetByImage] = useState<Record<string, string>>({})
@@ -754,7 +781,24 @@ function PhotosTab({
   const [imageNoteModalId, setImageNoteModalId] = useState<string | null>(null)
   const [imageNoteDrafts, setImageNoteDrafts] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
+  const caseMenuRef = useRef<HTMLDivElement>(null)
   const uploadTargetRef = useRef<{ caseId?: string; category: ImgCat }>({ category: 'before' })
+
+  useEffect(() => {
+    if (!caseMenuId) return
+    const closeOutside = (event: PointerEvent) => {
+      if (!caseMenuRef.current?.contains(event.target as Node)) setCaseMenuId(null)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setCaseMenuId(null)
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [caseMenuId])
 
   const getCaseType = (type: CustomerWorkCaseType) => workCaseTypes.find(t => t.id === type) ?? workCaseTypes[0]
   const getRepairLabel = (type: CustomerRepairWorkType) => repairWorkTypes.find(t => t.id === type)?.label ?? type
@@ -780,6 +824,7 @@ function PhotosTab({
   }
 
   const openEditCase = (workCase: CustomerWorkCase) => {
+    setCaseMenuId(null)
     setEditingCaseId(workCase.id)
     setCaseForm({
       type: workCase.type,
@@ -792,6 +837,7 @@ function PhotosTab({
   }
 
   const closeCaseForm = () => {
+    if (savingCase) return
     setShowCaseForm(false)
     setEditingCaseId(null)
     setCaseForm(blankCaseForm())
@@ -927,6 +973,10 @@ function PhotosTab({
           recordType: 'customer_work_case',
           metadata: { customerId, type: caseForm.type },
         })
+        setCaseSearch('')
+        setCaseTypeFilter('all')
+        openCaseGallery(caseRef.id)
+        setGalleryUploadOpen(true)
       }
       closeCaseForm()
     } catch (err) {
@@ -976,6 +1026,8 @@ function PhotosTab({
       relatedImages.forEach(image => batch.delete(doc(db, COLLECTIONS.CUSTOMER_IMAGES, image.id)))
       batch.delete(doc(db, COLLECTIONS.CUSTOMER_WORK_CASES, workCaseId))
       await batch.commit()
+      if (galleryCaseId === workCaseId) setGalleryCaseId(null)
+      setCaseMenuId(null)
       await writeActivityLog({
         companyId,
         branchId,
@@ -1106,6 +1158,10 @@ function PhotosTab({
   }
 
   const generalImages = images.filter(image => !image.workCaseId)
+  const filteredWorkCases = workCases.filter(workCase =>
+    (caseTypeFilter === 'all' || workCase.type === caseTypeFilter)
+    && workCase.title.toLocaleLowerCase().includes(caseSearch.trim().toLocaleLowerCase())
+  )
   const filteredGeneralImages = activeImgCat === 'all'
     ? generalImages
     : generalImages.filter(image => image.category === activeImgCat)
@@ -1135,39 +1191,39 @@ function PhotosTab({
     notes: caseImages.filter(image => (image.notes ?? '').trim()).length,
   })
   const activeGalleryStats = activeGalleryCase ? caseImageStats(activeGalleryImages) : null
-  const totalImageNotes = images.filter(image => (image.notes ?? '').trim()).length
+
   const noteModalImage = imageNoteModalId ? images.find(image => image.id === imageNoteModalId) ?? null : null
   const noteModalCategory = noteModalImage ? getImageCategory(noteModalImage.category) : null
   const shouldShowGalleryCategory = (categoryId: ImgCat) => galleryCategory === 'all' || galleryCategory === categoryId
   const galleryDocCategories = activeGalleryCase
-    ? caseImageCategories(activeGalleryCase.type).filter(category => docCategoryIds.includes(category.id) && shouldShowGalleryCategory(category.id))
+    ? caseImageCategories(activeGalleryCase.type).filter(category => docCategoryIds.includes(category.id) && shouldShowGalleryCategory(category.id)
+      && (galleryCategory === category.id || galleryImages.some(image => image.category === category.id)))
     : []
   const galleryPhaseCategories = activeGalleryCase
     ? caseImageCategories(activeGalleryCase.type).filter(category => phaseCategoryIds.includes(category.id) && shouldShowGalleryCategory(category.id))
     : []
   const galleryImagesByCategory = (categoryId: ImgCat) => galleryImages.filter(image => image.category === categoryId)
   const openCaseGallery = (workCaseId: string) => {
+    setCaseMenuId(null)
     setGalleryCaseId(workCaseId)
     setGalleryCategory('all')
     setGalleryDate('all')
+    setGalleryUploadCat('before')
+    setGalleryUploadOpen(false)
   }
   const renderImageTile = (image: CustomerImage, aspectClass = 'aspect-square') => {
     const category = getImageCategory(image.category)
     return (
-      <div key={image.id} className="rounded-2xl border border-[var(--border-light)] bg-white p-2 space-y-2">
-        <div className={`relative group ${aspectClass} rounded-xl overflow-hidden bg-[var(--bg-base)]`}>
-          <CustomerPhoto src={image.url} alt={image.caption || category.label} />
-          <span className={`absolute left-2 top-2 text-[9px] px-2 py-0.5 rounded-full border font-semibold ${category.color}`}>{category.label}</span>
-          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-            <button type="button" onClick={() => setLightbox(image.url)} className="p-1.5 bg-white/90 rounded-lg hover:bg-white">
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-            <button type="button" onClick={() => handleDeleteImage(image.id)} className="p-1.5 bg-white/90 rounded-lg text-red-500 hover:bg-white">
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-          <div className="absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
-            <p className="text-white text-[9px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
+      <div key={image.id} className="rounded-lg border border-[var(--border-light)] bg-white p-2 space-y-2">
+        <div className={`relative ${aspectClass} rounded-lg overflow-hidden bg-[var(--bg-base)]`}>
+          <button type="button" onClick={() => setLightbox(image.url)} aria-label={`ดูรูป ${image.caption || category.label}`} className="absolute inset-0 w-full h-full">
+            <CustomerPhoto src={image.url} alt={image.caption || category.label} />
+          </button>
+          <span className={`pointer-events-none absolute left-2 top-2 text-[10px] px-2 py-0.5 rounded border font-semibold ${category.color}`}>{category.label}</span>
+          <button type="button" onClick={() => handleDeleteImage(image.id)} title="ลบรูป" aria-label="ลบรูป"
+            className="absolute right-1 bottom-6 h-8 w-8 flex items-center justify-center bg-white/95 rounded-lg text-red-500 shadow-sm hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
+            <p className="text-white text-[10px]">{formatDate(image.imageDate ?? image.createdAt)}</p>
           </div>
         </div>
         {renderImageNoteAction(image)}
@@ -1175,15 +1231,36 @@ function PhotosTab({
     )
   }
 
+
+  const renderGallerySection = (category: typeof imgCategories[number], gridClass = 'grid-cols-2 sm:grid-cols-3') => {
+    if (!activeGalleryCase) return null
+    const categoryImages = galleryImagesByCategory(category.id)
+    return (
+      <section key={category.id} className="min-w-0 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className={`rounded-md border px-2 py-1 text-xs font-semibold ${category.color}`}>{category.label} ({categoryImages.length})</h4>
+          <button type="button" onClick={() => openUpload(category.id, activeGalleryCase.id)} disabled={Boolean(uploading)}
+            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-base)] disabled:opacity-50"><Plus className="h-3.5 w-3.5" /> เพิ่มรูป</button>
+        </div>
+        {categoryImages.length ? (
+          <div className={`grid ${gridClass} gap-3`}>{categoryImages.map(image => renderImageTile(image, 'aspect-[4/5]'))}</div>
+        ) : (
+          <button type="button" onClick={() => openUpload(category.id, activeGalleryCase.id)} disabled={Boolean(uploading)}
+            className="flex min-h-24 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--border-light)] text-xs text-[var(--text-muted)] hover:bg-[var(--bg-base)] disabled:opacity-50"><Plus className="h-4 w-4" /> เพิ่มรูป{category.label}</button>
+        )}
+      </section>
+    )
+  }
+
   return (
     <div className="space-y-5">
       <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleUpload} />
 
-      <div className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-4 space-y-4">
+      <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h3 className="font-semibold text-[var(--text-primary)] text-sm">ชิ้นงาน / รูปลูกค้า</h3>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">{workCases.length} ชิ้นงาน · {images.length} รูป · {totalImageNotes} โน้ต</p>
+            <h3 className="font-semibold text-[var(--text-primary)] text-base">อัลบั้มชิ้นงาน</h3>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{caseSearch || caseTypeFilter !== 'all' ? `พบ ${filteredWorkCases.length} จาก ${workCases.length} ชิ้นงาน` : `${workCases.length} ชิ้นงาน`}</p>
           </div>
           <button
             type="button"
@@ -1194,7 +1271,8 @@ function PhotosTab({
         </div>
 
         {showCaseForm && (
-          <form onSubmit={handleSaveCase} className="rounded-2xl border border-[var(--border-light)] bg-white p-4 space-y-4">
+          <AlbumDialog label={editingCaseId ? 'แก้ไขชิ้นงาน' : 'สร้างชิ้นงานใหม่'} onClose={closeCaseForm}>
+          <form onSubmit={handleSaveCase} className="min-h-0 overflow-y-auto p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <h4 className="font-semibold text-sm text-[var(--text-primary)]">
@@ -1224,8 +1302,8 @@ function PhotosTab({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ชื่อชิ้นงาน / อัลบั้ม</label>
-                <input
+                <label htmlFor="album-case-title" className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ชื่อชิ้นงาน / อัลบั้ม</label>
+                <input id="album-case-title" autoFocus
                   value={caseForm.title}
                   onChange={e => setCaseForm(current => ({ ...current, title: e.target.value }))}
                   placeholder="เช่น ชิ้นที่ 1 ฟูวิก, วิกกึ่งฟูรอบใหม่, งานซ่อมหน้าม้า"
@@ -1280,137 +1358,62 @@ function PhotosTab({
               {savingCase ? 'กำลังบันทึก...' : editingCaseId ? 'บันทึกการแก้ไขชิ้นงาน' : 'บันทึกชิ้นงาน'}
             </button>
           </form>
+          </AlbumDialog>
         )}
       </div>
 
-      {workCases.length === 0 ? (
-        <div className="py-12 text-center space-y-2 rounded-2xl border border-dashed border-[var(--border-light)]">
-          <ImageIcon className="w-10 h-10 text-[var(--pink-100)] mx-auto" />
-          <p className="text-sm text-[var(--text-muted)]">ยังไม่มีชิ้นงานของลูกค้าคนนี้</p>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative flex-1 min-w-0">
+          <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-[var(--text-muted)]" />
+          <input value={caseSearch} onChange={event => setCaseSearch(event.target.value)} aria-label="ค้นหาชื่อเคส" placeholder="ค้นหาชื่อเคส / ชิ้นงาน" className={inputCls + ' pl-9 pr-9'} />
+          {caseSearch && <button type="button" onClick={() => setCaseSearch('')} title="ล้างการค้นหา" aria-label="ล้างการค้นหา" className="absolute right-1 top-1 h-8 w-8 flex items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--pink-50)]"><X className="h-4 w-4" /></button>}
+        </div>
+        <select value={caseTypeFilter} onChange={event => setCaseTypeFilter(event.target.value as CustomerWorkCaseType | 'all')} aria-label="ประเภทเคส" className={inputCls + ' sm:w-44'}>
+          <option value="all">ทุกประเภทงาน</option>
+          {workCaseTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}
+        </select>
+      </div>
+      {filteredWorkCases.length === 0 ? (
+        <div className="py-10 text-center space-y-3 border-y border-[var(--border-light)]">
+          <p className="text-sm text-[var(--text-muted)]">{workCases.length ? 'ไม่พบชิ้นงานที่ค้นหา' : 'ยังไม่มีชิ้นงานของลูกค้าคนนี้'}</p>
+          {workCases.length > 0 && <button type="button" onClick={() => { setCaseSearch(''); setCaseTypeFilter('all') }} className="text-sm font-semibold text-[var(--pink-600)] underline underline-offset-4">แสดงชิ้นงานทั้งหมด</button>}
         </div>
       ) : (
-        <div className="space-y-4">
-          {workCases.map(workCase => {
-            const type = getCaseType(workCase.type)
-            const caseImages = images.filter(image => image.workCaseId === workCase.id)
-            const categories = caseImageCategories(workCase.type)
-            const stats = caseImageStats(caseImages)
-
+        <ul aria-label="รายการอัลบั้มชิ้นงาน" className="border-y border-[var(--border-light)]">
+          {filteredWorkCases.map(workCase => {
+            const count = images.filter(image => image.workCaseId === workCase.id).length
             return (
-              <div key={workCase.id} className="rounded-2xl border border-[var(--border-light)] bg-white overflow-hidden">
-                <div className="p-4 border-b border-[var(--border-light)] flex flex-col lg:flex-row lg:items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${type.color}`}>{type.label}</span>
-                      <h4 className="font-bold text-[var(--text-primary)]">{workCase.title}</h4>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-[var(--text-muted)]">
-                      <span>{formatDate(workCase.caseDate)}</span>
-                      <span>·</span>
-                      <span>{caseImages.length} รูป</span>
-                      {workCase.type === 'repair' && workCase.repairTypes?.length ? (
-                        <>
-                          <span>·</span>
-                          <span>{workCase.repairTypes.map(getRepairLabel).join(', ')}</span>
-                        </>
-                      ) : null}
-                    </div>
-                    {workCase.notes && <p className="text-xs text-[var(--text-secondary)] mt-2 whitespace-pre-line">{workCase.notes}</p>}
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-3 max-w-3xl">
-                      {[
-                        ['Before', stats.before, 'text-orange-700 bg-orange-50 border-orange-100'],
-                        ['After', stats.after, 'text-emerald-700 bg-emerald-50 border-emerald-100'],
-                        ['เอกสาร', stats.documents, 'text-blue-700 bg-blue-50 border-blue-100'],
-                        ['งานเสร็จ', stats.finished, 'text-pink-700 bg-pink-50 border-pink-100'],
-                        ['โน้ต', stats.notes, 'text-amber-700 bg-amber-50 border-amber-100'],
-                      ].map(([label, count, color]) => (
-                        <div key={label} className={`rounded-xl border px-3 py-2 ${color}`}>
-                          <p className="text-[10px] font-semibold opacity-80">{label}</p>
-                          <p className="text-sm font-black">{count} รูป</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="self-start flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openCaseGallery(workCase.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white text-xs font-semibold hover:opacity-90 transition-all shadow-sm">
-                      <ZoomIn className="w-3.5 h-3.5" /> ดูอัลบั้ม
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openUpload('before', workCase.id)}
-                      disabled={Boolean(uploading)}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] text-xs font-semibold text-[var(--text-secondary)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)] transition-all disabled:opacity-50">
-                      <Upload className="w-3.5 h-3.5" /> เพิ่มรูป
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openEditCase(workCase)}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[var(--border-light)] bg-white text-xs font-semibold text-[var(--text-secondary)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)] transition-all">
-                      <Edit className="w-3.5 h-3.5" /> แก้ไข
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteCase(workCase.id)}
-                      className="p-2 rounded-xl text-[var(--text-muted)] hover:text-red-500 hover:bg-red-50 transition-all">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+              <li key={workCase.id} className="flex items-center gap-2 sm:gap-4 py-3 border-b last:border-b-0 border-[var(--border-light)]">
+                <button type="button" onClick={() => openCaseGallery(workCase.id)} aria-label={`เปิดอัลบั้ม ${workCase.title}`} className="min-w-0 flex-1 text-left rounded-lg px-2 py-1 hover:bg-[var(--bg-base)] focus-visible:outline-2 focus-visible:outline-[var(--pink-400)]">
+                  <span className="block font-semibold text-sm text-[var(--text-primary)] break-words [overflow-wrap:anywhere]">{workCase.title}</span>
+                  <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-[var(--text-muted)]">
+                    <span>{formatDate(workCase.caseDate)}</span><span>·</span><span>{getCaseType(workCase.type).label}</span><span>·</span><span>{count} รูป</span>
+                  </span>
+                </button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button type="button" onClick={() => openCaseGallery(workCase.id)} aria-label={`ดูอัลบั้ม ${workCase.title}`} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--pink-100)] px-2.5 sm:px-3 text-xs font-semibold text-[var(--pink-600)] hover:bg-[var(--pink-50)]"><ImageIcon className="h-4 w-4" /> ดูอัลบั้ม</button>
+                  <div className="relative" ref={caseMenuId === workCase.id ? caseMenuRef : undefined}>
+                    <button type="button" title="จัดการชิ้นงาน" aria-label={`จัดการชิ้นงาน ${workCase.title}`} aria-expanded={caseMenuId === workCase.id} onClick={() => setCaseMenuId(current => current === workCase.id ? null : workCase.id)} className="h-10 w-9 flex items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-base)]"><MoreHorizontal className="h-5 w-5" /></button>
+                    {caseMenuId === workCase.id && <div className="absolute right-0 top-full z-20 mt-1 w-40 rounded-lg border border-[var(--border-light)] bg-white p-1 shadow-lg">
+                      <button type="button" onClick={() => { openCaseGallery(workCase.id); setGalleryUploadOpen(true) }} className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-sm hover:bg-[var(--bg-base)]"><Upload className="h-4 w-4" /> เพิ่มรูป</button>
+                      <button type="button" onClick={() => openEditCase(workCase)} className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-sm hover:bg-[var(--bg-base)]"><Edit className="h-4 w-4" /> แก้ไขชิ้นงาน</button>
+                      <button type="button" onClick={() => { setCaseMenuId(null); handleDeleteCase(workCase.id) }} className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"><Trash2 className="h-4 w-4" /> ลบชิ้นงาน</button>
+                    </div>}
                   </div>
                 </div>
-
-                <div className="p-4 space-y-4">
-                  {categories.map(category => {
-                    const groupedImages = caseImages.filter(image => image.category === category.id)
-                    const key = `${workCase.id}:${category.id}`
-                    const isUploading = uploading === key
-                    return (
-                      <section key={category.id} className="space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${category.color}`}>
-                            {category.label} ({groupedImages.length})
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => openUpload(category.id, workCase.id)}
-                            disabled={Boolean(uploading)}
-                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] text-[11px] font-semibold text-[var(--text-secondary)] hover:border-[var(--pink-200)] disabled:opacity-50">
-                            {isUploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
-                            เพิ่มรูป
-                          </button>
-                        </div>
-
-                        {groupedImages.length === 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => openUpload(category.id, workCase.id)}
-                            disabled={Boolean(uploading)}
-                            className="w-full h-24 rounded-2xl border-2 border-dashed border-[var(--border-light)] bg-[var(--bg-base)] text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)] transition-all disabled:opacity-50">
-                            เพิ่มรูป{category.label}
-                          </button>
-                        ) : (
-                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                            {groupedImages.map(image => renderImageTile(image))}
-                          </div>
-                        )}
-                      </section>
-                    )
-                  })}
-                </div>
-              </div>
+              </li>
             )
           })}
-        </div>
+        </ul>
       )}
 
-      <div className="rounded-2xl border border-[var(--border-light)] bg-white p-4 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h3 className="font-semibold text-[var(--text-primary)] text-sm">รูปทั่วไป / รูปเดิม</h3>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">{generalImages.length} รูปที่ยังไม่ได้ผูกกับชิ้นงาน</p>
-          </div>
-          <div className="flex gap-2">
+      <section className="border-b border-[var(--border-light)] pb-4">
+        <button type="button" onClick={() => setShowGeneralImages(current => !current)} aria-expanded={showGeneralImages} aria-controls="general-album-images" className="flex w-full items-center justify-between gap-3 rounded-lg p-2 text-left hover:bg-[var(--bg-base)]">
+          <span><span className="block text-sm font-semibold text-[var(--text-primary)]">รูปทั่วไป / รูปเดิม</span><span className="mt-1 block text-xs text-[var(--text-muted)]">{generalImages.length} รูปที่ยังไม่ได้ผูกกับชิ้นงาน</span></span>
+          <ChevronDown className={`h-4 w-4 shrink-0 text-[var(--text-muted)] transition-transform ${showGeneralImages ? 'rotate-180' : ''}`} />
+        </button>
+        {showGeneralImages && <div id="general-album-images" className="space-y-4 pt-4">
+          <div className="flex flex-wrap gap-2">
             <select
               value={generalUploadCat}
               onChange={e => setGeneralUploadCat(e.target.value as ImgCat)}
@@ -1426,8 +1429,6 @@ function PhotosTab({
               เพิ่มรูป
             </button>
           </div>
-        </div>
-
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -1508,91 +1509,61 @@ function PhotosTab({
             })}
           </div>
         )}
-      </div>
+
+        </div>}
+      </section>
 
       {activeGalleryCase && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5">
-          <div className="bg-white w-full max-w-6xl max-h-[92vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col">
-            <div className="shrink-0 border-b border-[var(--border-light)] p-4 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[11px] font-bold text-[var(--pink-600)] uppercase tracking-wide">อัลบั้ม Before & After</p>
-                  <h3 className="text-lg font-bold text-[var(--text-primary)] truncate">{activeGalleryCase.title}</h3>
-                  <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                    {formatDate(activeGalleryCase.caseDate)} · {activeGalleryImages.length} รูป · {activeGalleryStats?.notes ?? 0} โน้ต · {getCaseType(activeGalleryCase.type).label}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setGalleryCaseId(null)}
-                  className="h-9 w-9 shrink-0 rounded-xl border border-[var(--border-light)] flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-base)]">
-                  <X className="w-4 h-4" />
-                </button>
+        <AlbumDialog label={`อัลบั้ม ${activeGalleryCase.title}`} onClose={() => setGalleryCaseId(null)} fullscreen>
+          <div className="shrink-0 max-h-[52dvh] overflow-y-auto border-b border-[var(--border-light)] p-3 sm:p-4 space-y-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-[var(--text-primary)] break-words [overflow-wrap:anywhere]">{activeGalleryCase.title}</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">{formatDate(activeGalleryCase.caseDate)} · {getCaseType(activeGalleryCase.type).label} · {activeGalleryImages.length} รูป · {activeGalleryStats?.notes ?? 0} โน้ต</p>
               </div>
-
-              {activeGalleryStats && (
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                  {[
-                    ['Before', activeGalleryStats.before, 'bg-orange-50 text-orange-700 border-orange-100'],
-                    ['After', activeGalleryStats.after, 'bg-emerald-50 text-emerald-700 border-emerald-100'],
-                    ['เอกสาร', activeGalleryStats.documents, 'bg-blue-50 text-blue-700 border-blue-100'],
-                    ['งานเสร็จ', activeGalleryStats.finished, 'bg-pink-50 text-pink-700 border-pink-100'],
-                    ['มีโน้ต', activeGalleryStats.notes, 'bg-amber-50 text-amber-700 border-amber-100'],
-                  ].map(([label, count, color]) => (
-                    <div key={label} className={`rounded-xl border px-3 py-2 ${color}`}>
-                      <p className="text-[10px] font-semibold opacity-75">{label}</p>
-                      <p className="text-sm font-black">{count}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-[1.2fr_1fr_1fr_auto] gap-2">
-                <select
-                  value={galleryCaseId ?? ''}
-                  onChange={e => {
-                    setGalleryCaseId(e.target.value)
-                    setGalleryCategory('all')
-                    setGalleryDate('all')
-                  }}
-                  className="px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
-                  {workCases.map(workCase => <option key={workCase.id} value={workCase.id}>{workCase.title} · {formatDate(workCase.caseDate)}</option>)}
-                </select>
-                <select
-                  value={galleryCategory}
-                  onChange={e => setGalleryCategory(e.target.value as ImgCat | 'all')}
-                  className="px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
-                  <option value="all">ทุกหมวดรูป</option>
-                  {caseImageCategories(activeGalleryCase.type).map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
-                </select>
-                <select
-                  value={galleryDate}
-                  onChange={e => setGalleryDate(e.target.value)}
-                  className="px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
-                  <option value="all">ทุกวันที่</option>
-                  {galleryDateOptions.map(date => <option key={date} value={date}>{formatDate(new Date(`${date}T00:00:00`))}</option>)}
-                </select>
-                <div className="flex rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-1">
-                  {[
-                    ['compare', 'เทียบ'],
-                    ['grid4', '4 ช่อง'],
-                    ['grid5', '5 ช่อง'],
-                  ].map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setGalleryLayout(value as 'compare' | 'grid4' | 'grid5')}
-                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
-                        galleryLayout === value ? 'bg-white text-[var(--pink-600)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-                      }`}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
+              <div className="flex shrink-0 gap-1">
+                <button type="button" title="แก้ไขชิ้นงาน" aria-label="แก้ไขชิ้นงาน" onClick={() => openEditCase(activeGalleryCase)} className="h-9 w-9 flex items-center justify-center rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-secondary)]"><Edit className="h-4 w-4" /></button>
+                <button type="button" title="ปิดอัลบั้ม" aria-label="ปิดอัลบั้ม" onClick={() => setGalleryCaseId(null)} className="h-9 w-9 flex items-center justify-center rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-secondary)]"><X className="h-4 w-4" /></button>
               </div>
             </div>
-
-            <div className="flex-1 overflow-y-auto bg-[var(--bg-base)] p-4">
+            <div className="flex flex-wrap gap-2">
+              <select aria-label="เลือกชิ้นงานในอัลบั้ม" value={galleryCaseId ?? ''} onChange={event => openCaseGallery(event.target.value)} className={inputCls + ' min-w-0 flex-1 sm:max-w-sm'}>
+                {workCases.map(workCase => <option key={workCase.id} value={workCase.id}>{workCase.title}</option>)}
+              </select>
+              <button type="button" onClick={() => setGalleryUploadOpen(current => !current)} aria-expanded={galleryUploadOpen} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--pink-500)] px-3 py-2 text-xs font-semibold text-white hover:opacity-90"><Upload className="h-4 w-4" /> เพิ่มรูป</button>
+            </div>
+            {galleryUploadOpen && <div className="flex flex-wrap gap-2 rounded-lg bg-[var(--bg-base)] p-2">
+              <select aria-label="หมวดรูปที่จะเพิ่ม" value={galleryUploadCat} onChange={event => setGalleryUploadCat(event.target.value as ImgCat)} className={inputCls + ' min-w-0 flex-1'}>
+                {caseImageCategories(activeGalleryCase.type).map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
+              </select>
+              <button type="button" onClick={() => openUpload(galleryUploadCat, activeGalleryCase.id)} disabled={Boolean(uploading)} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-light)] bg-white px-3 py-2 text-xs font-semibold disabled:opacity-50">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} เลือกรูป</button>
+            </div>}
+            <div className="flex flex-wrap items-center gap-2">
+              <select aria-label="หมวดรูปในอัลบั้ม" value={galleryCategory} onChange={event => setGalleryCategory(event.target.value as ImgCat | 'all')} className={inputCls + ' w-auto min-w-0 flex-1 sm:flex-none sm:max-w-48'}>
+                <option value="all">ทุกหมวดรูป</option>
+                {caseImageCategories(activeGalleryCase.type).map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
+              </select>
+              {galleryDateOptions.length > 1 && <select aria-label="วันที่รูปในอัลบั้ม" value={galleryDate} onChange={event => setGalleryDate(event.target.value)} className={inputCls + ' w-auto min-w-0 flex-1 sm:flex-none sm:max-w-40'}>
+                <option value="all">ทุกวันที่</option>
+                {galleryDateOptions.map(date => <option key={date} value={date}>{formatDate(new Date(`${date}T00:00:00`))}</option>)}
+              </select>}
+              <div className="ml-auto flex shrink-0 gap-1" role="group" aria-label="รูปแบบอัลบั้ม">
+                {([
+                  { value: 'compare', label: 'เปรียบเทียบ Before / After', icon: Columns2 },
+                  { value: 'grid4', label: 'ตาราง 4 คอลัมน์', icon: Grid2X2 },
+                  { value: 'grid5', label: 'ตาราง 5 คอลัมน์', icon: Grid3X3 },
+                ] as const).map(({ value, label, icon: Icon }) => (
+                  <button key={value} type="button" title={label} aria-label={label} aria-pressed={galleryLayout === value} onClick={() => setGalleryLayout(value)} className={`flex h-9 w-9 items-center justify-center rounded-lg border ${galleryLayout === value ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] text-[var(--text-muted)] hover:bg-[var(--bg-base)]'}`}><Icon className="h-4 w-4" /></button>
+                ))}
+              </div>
+            </div>
+          </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white p-4">
+              {Boolean(activeGalleryCase.notes || activeGalleryCase.repairTypes?.length) && <details className="mb-4 border-b border-[var(--border-light)] pb-3">
+                <summary className="cursor-pointer text-sm font-semibold text-[var(--text-secondary)]">รายละเอียดชิ้นงาน</summary>
+                {activeGalleryCase.repairTypes?.length ? <p className="mt-2 text-sm">{activeGalleryCase.repairTypes.map(getRepairLabel).join(', ')}</p> : null}
+                {activeGalleryCase.notes && <p className="mt-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed text-[var(--text-secondary)]">{activeGalleryCase.notes}</p>}
+              </details>}
               {galleryImages.length === 0 && galleryLayout !== 'compare' ? (
                 <div className="min-h-[20rem] flex flex-col items-center justify-center gap-2 text-center">
                   <ImageIcon className="w-10 h-10 text-[var(--pink-200)]" />
@@ -1600,115 +1571,21 @@ function PhotosTab({
                   <p className="text-xs text-[var(--text-muted)]">เลือกวันที่/หมวดอื่น หรือกดเพิ่มรูปด้านบน</p>
                 </div>
               ) : galleryLayout === 'compare' ? (
-                <div className="space-y-4">
-                  {galleryDocCategories.length > 0 && (
-                    <section className="rounded-2xl border border-[var(--border-light)] bg-white p-3 space-y-3">
-                      <div>
-                        <h4 className="text-sm font-bold text-[var(--text-primary)]">เอกสารของชิ้นงาน</h4>
-                        <p className="text-xs text-[var(--text-muted)] mt-0.5">ใบเสร็จ ใบออเดอร์วิก เอกสาร และรูปประกอบอื่นๆ ของชิ้นนี้</p>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                        {galleryDocCategories.map(category => {
-                          const categoryImages = galleryImagesByCategory(category.id)
-                          return (
-                            <div key={category.id} className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-3 space-y-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${category.color}`}>
-                                  {category.label} ({categoryImages.length})
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => openUpload(category.id, activeGalleryCase.id)}
-                                  disabled={Boolean(uploading)}
-                                  className="px-2.5 py-1.5 rounded-xl bg-white border border-[var(--border-light)] text-[11px] font-semibold text-[var(--text-secondary)] disabled:opacity-50">
-                                  เพิ่มรูป
-                                </button>
-                              </div>
-                              {categoryImages.length === 0 ? (
-                                <button
-                                  type="button"
-                                  onClick={() => openUpload(category.id, activeGalleryCase.id)}
-                                  className="w-full h-24 rounded-2xl border-2 border-dashed border-[var(--border-light)] bg-white text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]">
-                                  ยังไม่มีรูปหมวดนี้
-                                </button>
-                              ) : (
-                                <div className="grid grid-cols-2 gap-2">
-                                  {categoryImages.map(image => renderImageTile(image, 'aspect-[4/5]'))}
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </section>
-                  )}
-
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {(['before', 'after'] as ImgCat[]).filter(shouldShowGalleryCategory).map(categoryId => {
-                      const category = getImageCategory(categoryId)
-                      const categoryImages = galleryImagesByCategory(categoryId)
-                      return (
-                        <section key={categoryId} className="rounded-2xl border border-[var(--border-light)] bg-white p-3 space-y-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${category.color}`}>
-                              {category.label} ({categoryImages.length})
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => openUpload(categoryId, activeGalleryCase.id)}
-                              disabled={Boolean(uploading)}
-                              className="px-2.5 py-1.5 rounded-xl bg-[var(--bg-base)] border border-[var(--border-light)] text-[11px] font-semibold text-[var(--text-secondary)] disabled:opacity-50">
-                              เพิ่มรูป
-                            </button>
-                          </div>
-                          {categoryImages.length === 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => openUpload(categoryId, activeGalleryCase.id)}
-                              className="w-full h-44 rounded-2xl border-2 border-dashed border-[var(--border-light)] text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]">
-                              ยังไม่มีรูปหมวดนี้
-                            </button>
-                          ) : (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                              {categoryImages.map(image => renderImageTile(image, 'aspect-[4/5]'))}
-                            </div>
-                          )}
-                        </section>
-                      )
-                    })}
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {(['before', 'after'] as ImgCat[]).filter(shouldShowGalleryCategory).map(categoryId =>
+                      renderGallerySection(getImageCategory(categoryId))
+                    )}
                   </div>
-
-                  {galleryPhaseCategories.filter(category => category.id === 'finished').map(category => {
-                    const categoryImages = galleryImagesByCategory(category.id)
-                    return (
-                      <section key={category.id} className="rounded-2xl border border-[var(--border-light)] bg-white p-3 space-y-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${category.color}`}>
-                            {category.label} ({categoryImages.length})
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => openUpload(category.id, activeGalleryCase.id)}
-                            disabled={Boolean(uploading)}
-                            className="px-2.5 py-1.5 rounded-xl bg-[var(--bg-base)] border border-[var(--border-light)] text-[11px] font-semibold text-[var(--text-secondary)] disabled:opacity-50">
-                            เพิ่มรูป
-                          </button>
-                        </div>
-                        {categoryImages.length === 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => openUpload(category.id, activeGalleryCase.id)}
-                            className="w-full h-32 rounded-2xl border-2 border-dashed border-[var(--border-light)] text-xs text-[var(--text-muted)] hover:border-[var(--pink-200)] hover:bg-[var(--pink-50)]">
-                            ยังไม่มีรูปหมวดนี้
-                          </button>
-                        ) : (
-                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                            {categoryImages.map(image => renderImageTile(image, 'aspect-square'))}
-                          </div>
-                        )}
-                      </section>
-                    )
-                  })}
+                  {galleryPhaseCategories.filter(category => category.id === 'finished'
+                    && (galleryCategory === category.id || galleryImages.some(image => image.category === category.id)))
+                    .map(category => renderGallerySection(category, 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'))}
+                  {galleryDocCategories.length > 0 && (
+                    <div className="border-t border-[var(--border-light)] pt-4 space-y-4">
+                      <h4 className="text-sm font-semibold text-[var(--text-primary)]">เอกสารของชิ้นงาน</h4>
+                      {galleryDocCategories.map(category => renderGallerySection(category, 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'))}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className={`grid ${galleryGridClass} gap-3`}>
@@ -1716,13 +1593,13 @@ function PhotosTab({
                 </div>
               )}
             </div>
-          </div>
-        </div>
+
+        </AlbumDialog>
       )}
 
       {noteModalImage && noteModalCategory && (
-        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-white shadow-2xl overflow-hidden">
+        <AlbumDialog label="หมายเหตุรูป" onClose={() => { if (!savingImageNoteId) closeImageNoteEditor() }}>
+          <div className="min-h-0 overflow-y-auto">
             <div className="flex items-start justify-between gap-3 border-b border-[var(--border-light)] p-4">
               <div>
                 <p className="text-[11px] font-bold text-[var(--pink-600)] uppercase tracking-wide">หมายเหตุรูป</p>
@@ -1778,16 +1655,16 @@ function PhotosTab({
               </div>
             </div>
           </div>
-        </div>
+        </AlbumDialog>
       )}
 
       {lightbox && (
-        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" onClick={() => setLightbox(null)}>
-          <button type="button" className="absolute top-4 right-4 text-white/70 hover:text-white p-2"><X className="w-6 h-6" /></button>
-          <div className="relative max-w-2xl max-h-[85vh] w-full h-full">
-            <CustomerPhoto src={lightbox} alt="preview" fit="contain" />
+        <AlbumDialog label="ดูรูปขนาดใหญ่" onClose={() => setLightbox(null)} fullscreen>
+          <div className="relative min-h-0 flex-1 bg-black">
+            <div className="absolute inset-4 sm:inset-8"><CustomerPhoto src={lightbox} alt="รูปขนาดใหญ่" fit="contain" /></div>
+            <button type="button" title="ปิดรูป" aria-label="ปิดรูป" onClick={() => setLightbox(null)} className="absolute top-3 right-3 h-10 w-10 rounded-lg bg-black/70 text-white flex items-center justify-center"><X className="w-6 h-6" /></button>
           </div>
-        </div>
+        </AlbumDialog>
       )}
     </div>
   )

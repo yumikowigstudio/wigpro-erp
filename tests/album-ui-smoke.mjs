@@ -1,0 +1,151 @@
+import assert from 'node:assert/strict'
+import { readFile, mkdir } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { initializeTestEnvironment } from '@firebase/rules-unit-testing'
+
+if (process.env.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8086') throw new Error('Emulator required')
+const require = createRequire(import.meta.url)
+const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || 'playwright')
+const env = await initializeTestEnvironment({ projectId: 'demo-yumiko-qa', firestore: { host: '127.0.0.1', port: 8086, rules: await readFile('firestore.rules', 'utf8') } })
+const signup = await fetch('http://127.0.0.1:9096/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-emulator-key', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email: 'album-qa@example.test', password: 'OnlyForEmulator123!', returnSecureToken: true }),
+}).then(response => response.json())
+if (!signup.localId) throw new Error(JSON.stringify(signup))
+const now = new Date()
+const originalTitle = 'ชิ้นที่ 1 วิกกึ่งฟู'
+const imageUrl = 'http://localhost:3106/icon-192.png?album-qa=fixture'
+await env.withSecurityRulesDisabled(async context => {
+  const db = context.firestore()
+  const seed = {
+    [`users/${signup.localId}`]: { companyId: 'co', branchId: 'main', email: 'album-qa@example.test', displayName: 'QA Album', role: 'owner', isActive: true, permissions: [] },
+    'companies/co': { name: 'QA Store', status: 'active' },
+    'branches/main': { companyId: 'co', name: 'Yumiko QA', code: '00', isMainBranch: true, status: 'active' },
+    'system_settings/co': { companyId: 'co', nameTh: 'ร้านทดสอบ' },
+    'customers/customer': { companyId: 'co', branchId: 'main', firstName: 'ทดสอบ', lastName: 'อัลบั้ม', phone: '0800000000', customerId: 'C-QA001', caseTypes: [], status: 'active', createdAt: now },
+  }
+  for (let i = 0; i < 24; i++) {
+    seed[`customer_work_cases/case-${i}`] = {
+      companyId: 'co', customerId: 'customer', branchId: 'main', title: i === 0 ? originalTitle : `ชิ้นที่ ${i + 1} ${i % 3 === 2 ? 'ซ่อมและแก้ทรง' : 'วิกสำหรับออกงาน'}`,
+      type: ['custom_wig', 'ready_made', 'repair'][i % 3], notes: 'หมายเหตุชิ้นงานที่ต้องอ่านภายในอัลบั้ม',
+      caseDate: new Date(now.getTime() - i * 86400000), status: 'active', createdBy: signup.localId, createdAt: now, updatedAt: now,
+    }
+  }
+  for (const [i, category] of ['before', 'after', 'receipt'].entries()) {
+    seed[`customer_images/photo-${i}`] = { companyId: 'co', customerId: 'customer', workCaseId: 'case-0', category, url: `${imageUrl}-${i}`, notes: i === 0 ? 'โน้ตก่อนทำ' : '', caption: `QA ${category}`, imageDate: now, createdAt: now }
+  }
+  seed['customer_images/general'] = { companyId: 'co', customerId: 'customer', category: 'other', url: `${imageUrl}-general`, caption: 'QA general', imageDate: now, createdAt: now }
+  for (const [path, data] of Object.entries(seed)) await db.doc(path).set(data)
+})
+await mkdir('test-results', { recursive: true })
+const browser = await chromium.launch({ headless: true, channel: 'chrome' })
+const page = await browser.newPage({ viewport: { width: 1440, height: 960 } })
+const errors = []
+let acceptDelete = false
+page.on('pageerror', error => errors.push(error.message))
+page.on('dialog', dialog => acceptDelete ? dialog.accept() : dialog.dismiss())
+await page.route('https://api.cloudinary.com/**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ secure_url: `${imageUrl}-upload` }) }))
+try {
+  await page.goto('http://localhost:3106/login')
+  await page.locator('input[type=email]').fill('album-qa@example.test')
+  await page.locator('input[type=password]').fill('OnlyForEmulator123!')
+  await page.locator('button[type=submit]').click()
+  await page.waitForURL('**/dashboard', { timeout: 60000 })
+  await page.goto('http://localhost:3106/customers/customer?tab=photos')
+  const list = page.getByRole('list', { name: 'รายการอัลบั้มชิ้นงาน' })
+  await list.getByRole('listitem').last().waitFor()
+  assert.equal(await list.getByRole('listitem').count(), 24)
+  assert.equal(await page.locator('img[src*="album-qa"]').count(), 0, 'Overview must not render case or general photos')
+  assert.equal(await page.getByText('หมายเหตุชิ้นงานที่ต้องอ่านภายในอัลบั้ม', { exact: true }).count(), 0)
+  await page.getByLabel('ค้นหาชื่อเคส').fill('กึ่งฟู')
+  assert.equal(await list.getByRole('listitem').count(), 1)
+  await page.getByLabel('ล้างการค้นหา').click()
+  await page.getByLabel('ประเภทเคส', { exact: true }).selectOption('repair')
+  assert.equal(await list.getByRole('listitem').count(), 8)
+  await page.getByLabel('ประเภทเคส', { exact: true }).selectOption('all')
+  await page.getByRole('heading', { name: 'อัลบั้มชิ้นงาน' }).scrollIntoViewIfNeeded()
+  await page.screenshot({ path: 'test-results/albums-desktop.png' })
+  const pageUrl = page.url()
+  await page.getByRole('button', { name: `ดูอัลบั้ม ${originalTitle}`, exact: true }).click()
+  const gallery = page.getByRole('dialog', { name: `อัลบั้ม ${originalTitle}`, exact: true })
+  await gallery.waitFor()
+  await gallery.locator('img').first().waitFor()
+  assert.equal(await gallery.locator('img').count(), 3)
+  await page.waitForFunction(() => [...document.querySelectorAll('dialog[open] img')].every(image => image.complete && image.naturalWidth > 0))
+  await page.screenshot({ path: 'test-results/album-open-desktop.png' })
+  await gallery.getByRole('button', { name: 'ดูรูป QA before', exact: true }).click()
+  await page.getByRole('dialog', { name: 'ดูรูปขนาดใหญ่' }).waitFor()
+  await page.keyboard.press('Escape')
+  assert.equal(await gallery.isVisible(), true, 'Closing a photo must keep the album open')
+  await gallery.getByRole('button', { name: 'โน้ต: โน้ตก่อนทำ' }).click()
+  const noteDialog = page.getByRole('dialog', { name: 'หมายเหตุรูป', exact: true })
+  await noteDialog.locator('textarea').fill('หมายเหตุยาวสำหรับช่าง\nให้ตรวจแนวผมและทรงก่อนส่งมอบ '.repeat(5))
+  await noteDialog.getByRole('button', { name: 'บันทึกหมายเหตุ' }).click()
+  await noteDialog.waitFor({ state: 'detached' })
+  await gallery.getByRole('button', { name: 'แก้ไขชิ้นงาน', exact: true }).click()
+  const edit = page.getByRole('dialog', { name: 'แก้ไขชิ้นงาน', exact: true })
+  const updatedTitle = `${originalTitle} รอบใหม่`
+  await edit.getByLabel('ชื่อชิ้นงาน / อัลบั้ม').fill(updatedTitle)
+  await edit.getByRole('button', { name: 'บันทึกการแก้ไขชิ้นงาน' }).click()
+  await edit.waitFor({ state: 'detached' })
+  const updatedGallery = page.getByRole('dialog', { name: `อัลบั้ม ${updatedTitle}`, exact: true })
+  await updatedGallery.getByRole('heading', { name: updatedTitle, exact: true }).waitFor()
+  assert.equal(page.url(), pageUrl)
+  await updatedGallery.getByRole('button', { name: 'เพิ่มรูป', exact: true }).first().click()
+  await updatedGallery.getByLabel('หมวดรูปที่จะเพิ่ม').selectOption('after')
+  const chooser = page.waitForEvent('filechooser')
+  await updatedGallery.getByRole('button', { name: 'เลือกรูป', exact: true }).click()
+  await (await chooser).setFiles('public/icon-192.png')
+  await updatedGallery.getByRole('button', { name: `ดูรูป After / หลังทำ - ${updatedTitle}`, exact: true }).waitFor()
+  await updatedGallery.getByRole('button', { name: 'ปิดอัลบั้ม' }).click()
+  assert.equal(await page.locator('img[src*="album-qa"]').count(), 0)
+  await page.getByRole('button', { name: /รูปทั่วไป \/ รูปเดิม/ }).click()
+  await page.locator('#general-album-images img').waitFor()
+  await page.getByRole('button', { name: /รูปทั่วไป \/ รูปเดิม/ }).click()
+  await page.getByRole('button', { name: 'จัดการชิ้นงาน ชิ้นที่ 24 ซ่อมและแก้ทรง', exact: true }).click()
+  await page.getByRole('button', { name: 'ลบชิ้นงาน', exact: true }).click()
+  assert.equal(await list.getByRole('listitem').count(), 24, 'Dismissed deletion must keep the case')
+  acceptDelete = true
+  await page.getByRole('button', { name: 'จัดการชิ้นงาน ชิ้นที่ 24 ซ่อมและแก้ทรง', exact: true }).click()
+  await page.getByRole('button', { name: 'ลบชิ้นงาน', exact: true }).click()
+  await page.getByRole('button', { name: 'ดูอัลบั้ม ชิ้นที่ 24 ซ่อมและแก้ทรง', exact: true }).waitFor({ state: 'detached' })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByLabel('ค้นหาชื่อเคส').fill('ชิ้นที่ 1 ')
+  const filteredCount = await list.getByRole('listitem').count()
+  await page.getByRole('heading', { name: 'อัลบั้มชิ้นงาน' }).scrollIntoViewIfNeeded()
+  await page.screenshot({ path: 'test-results/albums-mobile.png' })
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false)
+  await page.getByRole('button', { name: `ดูอัลบั้ม ${updatedTitle}`, exact: true }).click()
+  await updatedGallery.waitFor()
+  await page.screenshot({ path: 'test-results/album-open-mobile.png' })
+  const box = await updatedGallery.boundingBox()
+  assert.ok(box.width >= 389 && box.height >= 843, 'Mobile album must use the full viewport')
+  assert.equal(await updatedGallery.evaluate(element => element.scrollWidth > element.clientWidth + 1), false)
+  await page.keyboard.press('Escape')
+  await updatedGallery.waitFor({ state: 'detached' })
+  assert.equal(await list.getByRole('listitem').count(), filteredCount, 'Closing must retain the list filter')
+  await env.withSecurityRulesDisabled(async context => {
+    const db = context.firestore()
+    const photos = await db.collection('customer_images').get()
+    assert.equal(photos.size, 5)
+    const uploaded = photos.docs.find(photo => photo.data().url.endsWith('-upload')).data()
+    assert.equal(uploaded.workCaseId, 'case-0')
+    assert.equal(uploaded.category, 'after')
+    assert.match((await db.doc('customer_images/photo-0').get()).data().notes, /ตรวจแนวผม/)
+  })
+  await page.getByRole('button', { name: 'สร้างชิ้นงาน', exact: true }).click()
+  const create = page.getByRole('dialog', { name: 'สร้างชิ้นงานใหม่', exact: true })
+  await create.getByLabel('ชื่อชิ้นงาน / อัลบั้ม').fill('วิกชิ้นใหม่สำหรับงานแต่ง')
+  await create.getByRole('button', { name: 'บันทึกชิ้นงาน', exact: true }).click()
+  await create.waitFor({ state: 'detached' })
+  const newGallery = page.getByRole('dialog', { name: 'อัลบั้ม วิกชิ้นใหม่สำหรับงานแต่ง', exact: true })
+  await newGallery.getByLabel('หมวดรูปที่จะเพิ่ม').waitFor()
+  await newGallery.getByRole('button', { name: 'ปิดอัลบั้ม' }).click()
+  assert.equal(await page.getByLabel('ค้นหาชื่อเคส').inputValue(), '')
+  assert.equal(await list.getByRole('listitem').count(), 24)
+  assert.deepEqual(errors, [])
+  console.log('Album UI passed: compact 24-case list, search/filter, nested dialogs, notes, edit, category upload, general photos, deletion confirmation, mobile layout')
+} finally {
+  await browser.close()
+  await env.cleanup()
+}
