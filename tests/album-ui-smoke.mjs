@@ -22,7 +22,8 @@ await env.withSecurityRulesDisabled(async context => {
     'companies/co': { name: 'QA Store', status: 'active' },
     'branches/main': { companyId: 'co', name: 'Yumiko QA', code: '00', isMainBranch: true, status: 'active' },
     'system_settings/co': { companyId: 'co', nameTh: 'ร้านทดสอบ' },
-    'customers/customer': { companyId: 'co', branchId: 'main', firstName: 'ทดสอบ', lastName: 'อัลบั้ม', phone: '0800000000', customerId: 'C-QA001', caseTypes: [], status: 'active', createdAt: now },
+    'customers/customer': { companyId: 'co', branchId: 'main', firstName: 'เขมิกา', lastName: 'ศรีวัฒนา', nickname: 'เขม', phone: '0800000000', customerId: 'C-QA001', caseTypes: ['thin_hair'], memberLevel: 'silver', totalPurchase: 18570, points: 300, lineId: 'customer-qa', headCircumference: 54, headFrontBack: 33, status: 'active', createdAt: now },
+    'customers/customer-long': { companyId: 'co', branchId: 'main', firstName: 'กัญญ์ณัฏฐ์ธัญญาภรณ์'.repeat(3), lastName: 'ศรีสุวรรณวัฒนกุล'.repeat(3), nickname: 'ชื่อเล่นสำหรับตรวจการตัดบรรทัด'.repeat(2), phone: '0800000000', customerId: 'CUS-' + '1234567890'.repeat(6), caseTypes: ['thin_hair'], memberLevel: 'gold', totalPurchase: 123456789.12, points: 987654321, notes: 'หมายเหตุลูกค้าแบบยาวโดยไม่มีช่องว่าง'.repeat(10), status: 'active', createdAt: now },
   }
   for (let i = 0; i < 24; i++) {
     seed[`customer_work_cases/case-${i}`] = {
@@ -51,6 +52,45 @@ try {
   await page.locator('input[type=password]').fill('OnlyForEmulator123!')
   await page.locator('button[type=submit]').click()
   await page.waitForURL('**/dashboard', { timeout: 60000 })
+  const assertProfileLayout = async () => {
+    const heading = page.locator('#customer-name')
+    await heading.waitFor()
+    await page.evaluate(() => document.fonts.ready)
+    await page.waitForFunction(() => !document.getAnimations().some(animation => animation instanceof CSSTransition && animation.playState === 'running'))
+    const header = page.locator('header[aria-labelledby="customer-name"]')
+    assert.equal(await header.locator('.luxury-gradient').count(), 0)
+    const geometry = await heading.evaluate(element => {
+      const bounds = element.getBoundingClientRect()
+      const parent = element.closest('header').getBoundingClientRect()
+      const stats = element.closest('header').querySelector('dl').getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return { inside: bounds.left >= parent.left && bounds.right <= parent.right && bounds.top >= parent.top,
+        aboveStats: bounds.bottom <= stats.top, wraps: style.whiteSpace === 'normal',
+        fits: element.scrollWidth <= element.clientWidth + 1 && element.scrollHeight <= element.clientHeight + 1 }
+    })
+    if (!geometry.fits) {
+      console.log('Heading geometry', await heading.evaluate(element => ({ client: [element.clientWidth, element.clientHeight], scroll: [element.scrollWidth, element.scrollHeight], lineHeight: getComputedStyle(element).lineHeight, font: getComputedStyle(element).fontFamily, text: element.textContent })))
+      await page.screenshot({ path: 'test-results/customer-profile-overflow.png' })
+    }
+    assert.deepEqual(geometry, { inside: true, aboveStats: true, wraps: true, fits: true })
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false)
+    assert.equal(await header.evaluate(element => element.scrollWidth > element.clientWidth + 1), false)
+  }
+  await page.goto('http://localhost:3106/customers/customer')
+  await assertProfileLayout()
+  await page.screenshot({ path: 'test-results/customer-profile-desktop.png' })
+  assert.equal(await page.getByRole('link', { name: 'แก้ไขข้อมูล', exact: true }).getAttribute('href'), '/customers/customer/edit')
+  assert.equal(await page.getByRole('link', { name: 'โทร', exact: true }).getAttribute('href'), 'tel:0800000000')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await assertProfileLayout()
+  await page.screenshot({ path: 'test-results/customer-profile-mobile.png' })
+  await page.goto('http://localhost:3106/customers/customer-long')
+  for (const width of [320, 390, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 960 })
+    await assertProfileLayout()
+    if (width === 320 || width === 1440) await page.screenshot({ path: `test-results/customer-profile-long-${width}.png` })
+  }
+  await page.setViewportSize({ width: 1440, height: 960 })
   await page.goto('http://localhost:3106/customers/customer?tab=photos')
   const list = page.getByRole('list', { name: 'รายการอัลบั้มชิ้นงาน' })
   await list.getByRole('listitem').last().waitFor()
@@ -144,7 +184,7 @@ try {
   assert.equal(await page.getByLabel('ค้นหาชื่อเคส').inputValue(), '')
   assert.equal(await list.getByRole('listitem').count(), 24)
   assert.deepEqual(errors, [])
-  console.log('Album UI passed: compact 24-case list, search/filter, nested dialogs, notes, edit, category upload, general photos, deletion confirmation, mobile layout')
+  console.log('Customer UI passed: profile layout at 320-1440px with long Thai names, compact 24-case list, search/filter, nested dialogs, notes, edit, category upload, general photos, deletion confirmation, mobile layout')
 } finally {
   await browser.close()
   await env.cleanup()

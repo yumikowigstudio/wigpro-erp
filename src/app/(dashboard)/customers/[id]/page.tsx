@@ -4,12 +4,12 @@ import { useState, use, useEffect, useRef, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import {
-  ArrowLeft, Phone, MessageCircle, Calendar, Star, Edit,
+  ArrowLeft, Phone, MessageCircle, Calendar, Edit,
   ShoppingCart, Factory, CreditCard, Loader2, ImageIcon,
   Upload, Trash2, ChevronRight, Clock, Package, AlertTriangle,
   X, ZoomIn, FileText, FilePlus, Ruler, Phone as PhoneIcon,
   MessageSquare, MapPin, StickyNote, Plus, CheckCircle2, Scissors,
-  Search, MoreHorizontal, ChevronDown, Columns2, Grid2X2, Grid3X3,
+  Search, MoreHorizontal, ChevronDown, Columns2, Grid2X2, Grid3X3, UserRound,
 } from 'lucide-react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { getDocument, COLLECTIONS } from '@/lib/firestore'
@@ -294,100 +294,89 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   ]
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      <Link href="/customers" className="inline-flex items-center gap-2 text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+    <div className="mx-auto max-w-6xl space-y-4 text-zinc-800 [--text-primary:#27272a] [--text-secondary:#52525b] [--text-muted:#71717a] [--border-light:#e4e4e7] [--bg-base:#fafafa] [--radius-lg:8px] [--radius-md:6px]">
+      <Link href="/customers" className="inline-flex items-center gap-2 py-1 text-sm text-zinc-500 hover:text-zinc-900 transition-colors">
         <ArrowLeft className="w-4 h-4" /> กลับไปรายการลูกค้า
       </Link>
 
-      {/* ── Header ── */}
-      <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] overflow-hidden">
-        <div className="h-20 luxury-gradient" />
-        <div className="px-6 pb-5">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-4 -mt-8 mb-4">
-            <div className="w-16 h-16 rounded-2xl luxury-gradient border-4 border-white flex items-center justify-center text-white font-bold text-2xl shadow-lg">
-              {customer.firstName.charAt(0)}
+      <div className="bg-white">
+        <header aria-labelledby="customer-name" className="px-4 pt-5 sm:px-6 sm:pt-6">
+          <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-4 sm:gap-x-4 lg:grid-cols-[auto_minmax(0,1fr)_auto]">
+            <div aria-hidden="true" className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-500 sm:h-14 sm:w-14">
+              <UserRound className="h-6 w-6" strokeWidth={1.5} />
             </div>
-            <div className="flex-1 pt-2 sm:pt-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-xl font-bold text-[var(--text-primary)]">
-                  {customer.firstName} {customer.lastName}
-                </h1>
-                {customer.nickname && <span className="text-sm text-[var(--text-muted)]">({customer.nickname})</span>}
-                {levelCfg && <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${levelCfg.color}`}>{levelCfg.label}</span>}
+            <div className="min-w-0">
+              <h1 id="customer-name" className="break-words text-xl font-semibold leading-relaxed text-zinc-900 [overflow-wrap:anywhere] sm:text-2xl">
+                {customer.firstName} {customer.lastName}
+              </h1>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm leading-relaxed text-zinc-500">
+                <span className="min-w-0 break-words [overflow-wrap:anywhere]">{customer.customerId}</span>
+                {customer.nickname && <span className="min-w-0 break-words [overflow-wrap:anywhere]">ชื่อเล่น {customer.nickname}</span>}
+                {levelCfg && <span className={`rounded px-2 py-0.5 text-xs font-medium ${levelCfg.color}`}>{levelCfg.label}</span>}
               </div>
-              <p className="text-sm text-[var(--text-muted)]">{customer.customerId}</p>
             </div>
-            <div className="flex gap-2 flex-wrap">
+            <div className="col-span-2 flex flex-wrap items-center gap-2 lg:col-span-1 lg:pt-1">
               {customer.phone && (
-                <a href={`tel:${customer.phone}`} className="flex items-center gap-1.5 px-3 py-2 bg-[var(--bg-base)] rounded-xl text-sm text-[var(--text-secondary)] hover:bg-[var(--border-light)] transition-all">
-                  <Phone className="w-3.5 h-3.5" /> โทร
+                <a href={`tel:${customer.phone}`} className="inline-flex min-h-10 items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50">
+                  <Phone className="h-4 w-4 shrink-0" /> โทร
                 </a>
               )}
               {customer.lineId && (
                 <a href={`https://line.me/ti/p/${customer.lineId}`} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-2 bg-green-500 rounded-xl text-sm text-white hover:bg-green-600 transition-all">
-                  <MessageCircle className="w-3.5 h-3.5" /> LINE
+                  className="inline-flex min-h-10 items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50">
+                  <MessageCircle className="h-4 w-4 shrink-0" /> LINE
                 </a>
               )}
               <Link href={`/customers/${id}/edit`}
-                className="flex items-center gap-1.5 px-3 py-2 luxury-gradient rounded-xl text-sm text-white hover:opacity-90 transition-all">
-                <Edit className="w-3.5 h-3.5" /> แก้ไข
+                className="inline-flex min-h-10 items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:border-[var(--pink-300)] hover:text-[var(--pink-600)]">
+                <Edit className="h-4 w-4 shrink-0" /> แก้ไขข้อมูล
               </Link>
             </div>
           </div>
 
-          {/* Stats */}
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            <div className="bg-[var(--bg-base)] rounded-xl p-3 text-center">
-              <p className="text-xl font-bold text-[var(--pink-500)]">{formatCurrency(customer.totalPurchase ?? 0)}</p>
-              <p className="text-xs text-[var(--text-muted)]">ยอดซื้อสะสม</p>
+          <dl aria-label="สรุปข้อมูลลูกค้า" className="mt-5 grid grid-cols-1 divide-y divide-zinc-100 border-t border-zinc-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+            <div className="flex min-w-0 items-baseline justify-between gap-3 py-3 sm:block sm:pr-5 sm:py-4">
+              <dt className="shrink-0 text-xs leading-relaxed text-zinc-500">ยอดซื้อสะสม</dt>
+              <dd className="min-w-0 break-words text-lg font-semibold leading-relaxed text-[var(--pink-600)] tabular-nums [overflow-wrap:anywhere] sm:mt-1 sm:text-xl">{formatCurrency(customer.totalPurchase ?? 0)}</dd>
             </div>
-            <div className="bg-[var(--bg-base)] rounded-xl p-3 text-center">
-              <p className="text-xl font-bold text-amber-600 flex items-center justify-center gap-1">
-                <Star className="w-4 h-4" /> {(customer.points ?? 0).toLocaleString()}
-              </p>
-              <p className="text-xs text-[var(--text-muted)]">คะแนนสะสม</p>
+            <div className="flex min-w-0 items-baseline justify-between gap-3 py-3 sm:block sm:px-5 sm:py-4">
+              <dt className="shrink-0 text-xs leading-relaxed text-zinc-500">คะแนนสะสม</dt>
+              <dd className="min-w-0 break-words text-lg font-semibold leading-relaxed text-zinc-800 tabular-nums [overflow-wrap:anywhere] sm:mt-1 sm:text-xl">{(customer.points ?? 0).toLocaleString()}</dd>
             </div>
-            <div className="bg-[var(--bg-base)] rounded-xl p-3 text-center">
-              <p className="text-xl font-bold text-blue-600">{sales.length + workOrders.length}</p>
-              <p className="text-xs text-[var(--text-muted)]">ครั้งที่ใช้บริการ</p>
+            <div className="flex min-w-0 items-baseline justify-between gap-3 py-3 sm:block sm:pl-5 sm:py-4">
+              <dt className="shrink-0 text-xs leading-relaxed text-zinc-500">ครั้งที่ใช้บริการ</dt>
+              <dd className="min-w-0 break-words text-lg font-semibold leading-relaxed text-zinc-800 tabular-nums [overflow-wrap:anywhere] sm:mt-1 sm:text-xl">{sales.length + workOrders.length}</dd>
             </div>
-          </div>
+          </dl>
 
-          {/* Case types */}
           {customer.caseTypes?.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              {customer.caseTypes.map(ct => (
-                <span key={ct} className="text-xs px-2.5 py-1 bg-pink-100 text-pink-700 rounded-full font-medium">
-                  {caseTypeLabels[ct] ?? ct}
-                </span>
-              ))}
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-zinc-100 py-3 text-sm leading-relaxed">
+              <span className="text-xs text-zinc-500">ประเภทเคส</span>
+              <span className="min-w-0 break-words text-zinc-700 [overflow-wrap:anywhere]">{customer.caseTypes.map(ct => caseTypeLabels[ct] ?? ct).join(', ')}</span>
             </div>
           )}
-          {customer.otherCaseNote && <p className="text-xs text-[var(--text-muted)] italic mb-2">อื่นๆ: {customer.otherCaseNote}</p>}
+          {customer.otherCaseNote && <p className="mb-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-600 [overflow-wrap:anywhere]">อื่นๆ: {customer.otherCaseNote}</p>}
           {customer.notes && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-[var(--text-muted)]">
-              📝 {customer.notes}
-            </div>
+            <p className="mb-4 border-l-2 border-amber-300 bg-amber-50/60 px-3 py-2 text-sm leading-relaxed text-zinc-700">
+              <span className="mb-0.5 flex items-center gap-1.5 font-medium"><StickyNote className="h-3.5 w-3.5" /> หมายเหตุลูกค้า</span>
+              <span className="block whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{customer.notes}</span>
+            </p>
           )}
-        </div>
-      </div>
+        </header>
 
-      {/* ── Tabs ── */}
-      <div className="bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)]">
-        <div className="flex overflow-x-auto border-b border-[var(--border-light)]">
+        <nav aria-label="ข้อมูลลูกค้า" className="flex overflow-x-auto border-y border-zinc-200 px-4 sm:px-6">
           {tabs.map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id)}
-              className={`px-4 py-3 text-xs font-medium whitespace-nowrap border-b-2 transition-all ${
+            <button key={t.id} onClick={() => setActiveTab(t.id)} aria-pressed={activeTab === t.id}
+              className={`shrink-0 px-3 py-3.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-[var(--pink-500)] ${
                 activeTab === t.id
                   ? 'border-[var(--pink-500)] text-[var(--pink-600)]'
-                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                  : 'border-transparent text-zinc-500 hover:text-zinc-900'
               }`}>
               {t.label}
             </button>
           ))}
-        </div>
-        <div className="p-5">
+        </nav>
+        <div className="p-4 sm:p-6">
           {activeTab === 'overview'    && <OverviewTab customer={customer} levelCfg={levelCfg} />}
           {activeTab === 'timeline'    && <UnifiedTimelineTab sales={sales} workOrders={workOrders} deposits={deposits} images={images} documents={documents} contacts={contacts} serviceRecords={serviceRecords} workCases={workCases} appointments={appointments} />}
           {activeTab === 'photos'      && <PhotosTab images={images} workCases={workCases} customerId={id} companyId={companyId} branchId={branchId} userId={userId} />}
@@ -619,10 +608,10 @@ function UnifiedTimelineTab({
 function OverviewTab({ customer, levelCfg }: { customer: Customer; levelCfg: { label: string; color: string } | null }) {
   const hasMeasurements = customer.headCircumference || customer.headFrontBack || customer.headEarToEar || customer.headLeftRight
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-      <div className="space-y-4">
-        <div className="space-y-0 text-sm divide-y divide-[var(--border-light)]">
-          <h3 className="font-semibold text-[var(--text-primary)] text-sm pb-2">ข้อมูลส่วนตัว</h3>
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] lg:gap-10">
+      <section aria-labelledby="customer-personal-info" className="min-w-0">
+        <h2 id="customer-personal-info" className="mb-3 text-sm font-semibold text-zinc-900">ข้อมูลส่วนตัว</h2>
+        <dl className="divide-y divide-zinc-100 text-sm">
           {[
             { label: 'รหัสลูกค้า',      value: customer.customerId },
             { label: 'ชื่อเล่น',         value: customer.nickname ?? '—' },
@@ -632,60 +621,60 @@ function OverviewTab({ customer, levelCfg }: { customer: Customer; levelCfg: { l
             { label: 'ระดับสมาชิก',      value: levelCfg?.label ?? 'Silver' },
             { label: 'วันที่เป็นสมาชิก', value: formatDate(new Date(customer.createdAt)) },
           ].map(r => (
-            <div key={r.label} className="flex justify-between py-2">
-              <span className="text-[var(--text-muted)]">{r.label}</span>
-              <span className="font-medium text-[var(--text-primary)] text-right max-w-[60%] break-words">{r.value}</span>
+            <div key={r.label} className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-2.5 leading-relaxed sm:grid-cols-[8rem_minmax(0,1fr)]">
+              <dt className="text-zinc-500">{r.label}</dt>
+              <dd className="min-w-0 break-words font-medium text-zinc-800 [overflow-wrap:anywhere]">{r.value}</dd>
             </div>
           ))}
-        </div>
+          {customer.address && (
+            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-2.5 leading-relaxed sm:grid-cols-[8rem_minmax(0,1fr)]">
+              <dt className="text-zinc-500">ที่อยู่</dt>
+              <dd className="min-w-0 whitespace-pre-wrap break-words text-zinc-800 [overflow-wrap:anywhere]">{customer.address}</dd>
+            </div>
+          )}
+        </dl>
+      </section>
 
-        {customer.address && (
-          <div className="flex items-start gap-2 p-3 bg-[var(--bg-base)] rounded-xl text-sm">
-            <MapPin className="w-4 h-4 text-[var(--text-muted)] mt-0.5 shrink-0" />
-            <p className="text-[var(--text-secondary)]">{customer.address}</p>
+      <div className="min-w-0 space-y-6">
+        <section aria-labelledby="customer-actions">
+          <h2 id="customer-actions" className="mb-3 text-sm font-semibold text-zinc-900">ทำรายการ</h2>
+          <div className="divide-y divide-zinc-100 border-y border-zinc-100">
+            {[
+              { label: 'สร้างนัดหมาย', icon: Calendar, href: '/appointments' },
+              { label: 'เปิดบิลขาย', icon: ShoppingCart, href: '/pos' },
+              { label: 'สั่งผลิตวิก', icon: Factory, href: '/production' },
+              { label: 'รับมัดจำ', icon: CreditCard, href: '/deposits' },
+            ].map(action => (
+              <Link key={action.label} href={action.href}
+                className="group flex min-h-12 items-center gap-3 px-1 py-3 text-sm font-medium text-zinc-700 transition-colors hover:text-[var(--pink-600)] focus-visible:outline-2 focus-visible:outline-[var(--pink-500)]">
+                <action.icon className="h-4 w-4 shrink-0 text-zinc-400 group-hover:text-[var(--pink-500)]" />
+                <span className="flex-1">{action.label}</span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
+              </Link>
+            ))}
           </div>
-        )}
-      </div>
+        </section>
 
-      <div className="space-y-4">
-        {/* Head measurements */}
         {hasMeasurements && (
-          <div className="p-4 bg-purple-50 border border-purple-100 rounded-xl space-y-2">
-            <h4 className="text-xs font-bold text-purple-700 flex items-center gap-1.5">
-              <Ruler className="w-3.5 h-3.5" /> ข้อมูลการวัดศีรษะ
-            </h4>
-            <div className="grid grid-cols-2 gap-2">
+          <section aria-labelledby="customer-measurements">
+            <h2 id="customer-measurements" className="mb-3 flex items-center gap-2 text-sm font-semibold text-zinc-900">
+              <Ruler className="h-4 w-4 text-zinc-400" /> ข้อมูลการวัดศีรษะ
+            </h2>
+            <dl className="grid grid-cols-1 gap-x-5 sm:grid-cols-2">
               {[
                 ['รอบศีรษะ', customer.headCircumference],
                 ['หน้า-หลัง', customer.headFrontBack],
                 ['หู-หู', customer.headEarToEar],
                 ['ซ้าย-ขวา', customer.headLeftRight],
               ].filter(([, v]) => v).map(([lbl, val]) => (
-                <div key={String(lbl)} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2">
-                  <span className="text-purple-500">{lbl}</span>
-                  <span className="font-bold text-purple-700">{val} cm</span>
+                <div key={String(lbl)} className="flex min-w-0 justify-between gap-3 border-b border-zinc-100 py-2.5 text-sm">
+                  <dt className="text-zinc-500">{lbl}</dt>
+                  <dd className="min-w-0 break-words font-medium text-zinc-800 [overflow-wrap:anywhere]">{val} cm</dd>
                 </div>
               ))}
-            </div>
-          </div>
+            </dl>
+          </section>
         )}
-
-        {/* Quick actions */}
-        <div className="space-y-2">
-          <h3 className="font-semibold text-[var(--text-primary)] text-sm">การดำเนินการ</h3>
-          {[
-            { label: 'สร้างนัดหมาย', icon: Calendar,     href: `/appointments`, color: 'text-blue-600 bg-blue-50'    },
-            { label: 'เปิดบิลขาย',   icon: ShoppingCart, href: `/pos`,          color: 'text-green-600 bg-green-50'  },
-            { label: 'สั่งผลิตวิก',  icon: Factory,      href: `/production`,   color: 'text-purple-600 bg-purple-50'},
-            { label: 'รับมัดจำ',     icon: CreditCard,   href: `/deposits`,     color: 'text-amber-600 bg-amber-50'  },
-          ].map(a => (
-            <Link key={a.label} href={a.href}
-              className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all hover:opacity-80 ${a.color}`}>
-              <a.icon className="w-4 h-4" /> {a.label}
-              <ChevronRight className="w-3.5 h-3.5 ml-auto" />
-            </Link>
-          ))}
-        </div>
       </div>
     </div>
   )
