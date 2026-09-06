@@ -9,7 +9,7 @@ import {
   Upload, Trash2, ChevronRight, Clock, Package, AlertTriangle,
   X, ZoomIn, FileText, FilePlus, Ruler, Phone as PhoneIcon,
   MessageSquare, MapPin, StickyNote, Plus, CheckCircle2, Scissors,
-  Search, MoreHorizontal, ChevronDown, Columns2, Grid2X2, Grid3X3, UserRound,
+  Search, ChevronDown, Columns2, Grid2X2, Grid3X3, UserRound,
 } from 'lucide-react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { getDocument, COLLECTIONS } from '@/lib/firestore'
@@ -718,6 +718,7 @@ function PhotosTab({
   userId: string
 }) {
   type ImgCat = CustomerImage['category']
+  type AlbumSide = NonNullable<CustomerImage['albumSide']>
   type CaseForm = {
     type: CustomerWorkCaseType
     title: string
@@ -759,50 +760,34 @@ function PhotosTab({
   const [galleryLayout, setGalleryLayout] = useState<'compare' | 'grid4' | 'grid5'>('compare')
   const [caseSearch, setCaseSearch] = useState('')
   const [caseTypeFilter, setCaseTypeFilter] = useState<CustomerWorkCaseType | 'all'>('all')
-  const [caseMenuId, setCaseMenuId] = useState<string | null>(null)
   const [showGeneralImages, setShowGeneralImages] = useState(false)
   const [galleryUploadOpen, setGalleryUploadOpen] = useState(false)
   const [galleryUploadCat, setGalleryUploadCat] = useState<ImgCat>('before')
+  const [galleryUploadSide, setGalleryUploadSide] = useState<AlbumSide>('before')
   const [generalUploadCat, setGeneralUploadCat] = useState<ImgCat>('before')
   const [movingImageId, setMovingImageId] = useState<string | null>(null)
   const [moveTargetByImage, setMoveTargetByImage] = useState<Record<string, string>>({})
   const [savingImageNoteId, setSavingImageNoteId] = useState<string | null>(null)
   const [imageNoteModalId, setImageNoteModalId] = useState<string | null>(null)
   const [imageNoteDrafts, setImageNoteDrafts] = useState<Record<string, string>>({})
+  const [imageSideDraft, setImageSideDraft] = useState<AlbumSide>('shared')
   const fileRef = useRef<HTMLInputElement>(null)
-  const caseMenuRef = useRef<HTMLDivElement>(null)
-  const uploadTargetRef = useRef<{ caseId?: string; category: ImgCat }>({ category: 'before' })
+  const uploadTargetRef = useRef<{ caseId?: string; category: ImgCat; side?: AlbumSide }>({ category: 'before' })
 
-  useEffect(() => {
-    if (!caseMenuId) return
-    const closeOutside = (event: PointerEvent) => {
-      if (!caseMenuRef.current?.contains(event.target as Node)) setCaseMenuId(null)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setCaseMenuId(null)
-    }
-    document.addEventListener('pointerdown', closeOutside)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOutside)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [caseMenuId])
+  const isDocumentCategory = (category: ImgCat) => !['before', 'after', 'finished'].includes(category)
+  const getImageSide = (image: Pick<CustomerImage, 'category' | 'albumSide'>): AlbumSide => {
+    if (image.category === 'before') return 'before'
+    if (image.category === 'after' || image.category === 'finished') return 'after'
+    return image.albumSide ?? 'shared'
+  }
 
   const getCaseType = (type: CustomerWorkCaseType) => workCaseTypes.find(t => t.id === type) ?? workCaseTypes[0]
   const getRepairLabel = (type: CustomerRepairWorkType) => repairWorkTypes.find(t => t.id === type)?.label ?? type
   const getImageCategory = (category: ImgCat) => imgCategories.find(c => c.id === category) ?? imgCategories[0]
-  const caseImageCategories = (type: CustomerWorkCaseType) => {
-    const allowed: ImgCat[] = type === 'custom_wig'
-      ? ['receipt', 'wig_order', 'before', 'after', 'finished', 'document', 'other']
-      : type === 'repair'
-        ? ['before', 'after', 'finished', 'document', 'other']
-        : ['before', 'after', 'receipt', 'other']
-    return allowed.map(id => getImageCategory(id))
-  }
 
-  const openUpload = (category: ImgCat, caseId?: string) => {
-    uploadTargetRef.current = { category, caseId }
+  const openUpload = (category: ImgCat, caseId?: string, side?: AlbumSide) => {
+    if (uploading) return
+    uploadTargetRef.current = { category, caseId, side }
     fileRef.current?.click()
   }
 
@@ -813,7 +798,6 @@ function PhotosTab({
   }
 
   const openEditCase = (workCase: CustomerWorkCase) => {
-    setCaseMenuId(null)
     setEditingCaseId(workCase.id)
     setCaseForm({
       type: workCase.type,
@@ -872,6 +856,7 @@ function PhotosTab({
           customerId,
           companyId,
           category: target.category,
+          albumSide: getImageSide({ category: target.category, albumSide: target.side }),
           url,
           caption: `${categoryLabel} - ${workCase?.title ?? 'รูปทั่วไป'}`,
           imageDate: serverTimestamp(),
@@ -889,7 +874,7 @@ function PhotosTab({
           description: `เพิ่มรูป${categoryLabel}ให้ลูกค้า`,
           recordId: imageRef.id,
           recordType: 'customer_image',
-          metadata: { customerId, workCaseId: target.caseId, category: target.category },
+          metadata: { customerId, workCaseId: target.caseId, category: target.category, albumSide: imageData.albumSide },
         })
       }
     } catch (err) {
@@ -998,6 +983,7 @@ function PhotosTab({
   }
 
   const handleDeleteCase = async (workCaseId: string) => {
+    if (uploading || savingCase) return
     const workCase = workCases.find(item => item.id === workCaseId)
     const relatedImages = images.filter(image => image.workCaseId === workCaseId)
     const warning = [
@@ -1016,7 +1002,6 @@ function PhotosTab({
       batch.delete(doc(db, COLLECTIONS.CUSTOMER_WORK_CASES, workCaseId))
       await batch.commit()
       if (galleryCaseId === workCaseId) setGalleryCaseId(null)
-      setCaseMenuId(null)
       await writeActivityLog({
         companyId,
         branchId,
@@ -1076,6 +1061,7 @@ function PhotosTab({
 
   const openImageNoteEditor = (image: CustomerImage) => {
     setImageNoteDrafts(current => ({ ...current, [image.id]: image.notes ?? '' }))
+    setImageSideDraft(getImageSide(image))
     setImageNoteModalId(image.id)
   }
 
@@ -1094,11 +1080,13 @@ function PhotosTab({
     if (savingImageNoteId) return
     const note = imageNoteValue(image).trim()
     const currentNote = (image.notes ?? '').trim()
-    if (note === currentNote) return
+    const side = isDocumentCategory(image.category) ? imageSideDraft : getImageSide(image)
+    if (note === currentNote && side === getImageSide(image)) return
     setSavingImageNoteId(image.id)
     try {
       await updateDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, image.id), {
         notes: note,
+        albumSide: side,
         updatedAt: serverTimestamp(),
       })
       await writeActivityLog({
@@ -1107,10 +1095,10 @@ function PhotosTab({
         userId,
         action: 'update',
         module: 'customers',
-        description: `แก้ไขหมายเหตุรูป${image.caption ? `: ${image.caption}` : ''}`,
+        description: `แก้ไขรูปและหมายเหตุ${image.caption ? `: ${image.caption}` : ''}`,
         recordId: image.id,
         recordType: 'customer_image',
-        metadata: { customerId, workCaseId: image.workCaseId, category: image.category },
+        metadata: { customerId, workCaseId: image.workCaseId, category: image.category, albumSide: side },
       })
       setImageNoteDrafts(current => {
         const next = { ...current }
@@ -1171,7 +1159,6 @@ function PhotosTab({
     ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
     : 'grid-cols-2 md:grid-cols-4'
   const docCategoryIds: ImgCat[] = ['receipt', 'wig_order', 'document', 'other']
-  const phaseCategoryIds: ImgCat[] = ['before', 'after', 'finished']
   const caseImageStats = (caseImages: CustomerImage[]) => ({
     before: caseImages.filter(image => image.category === 'before').length,
     after: caseImages.filter(image => image.category === 'after').length,
@@ -1185,19 +1172,19 @@ function PhotosTab({
   const noteModalCategory = noteModalImage ? getImageCategory(noteModalImage.category) : null
   const shouldShowGalleryCategory = (categoryId: ImgCat) => galleryCategory === 'all' || galleryCategory === categoryId
   const galleryDocCategories = activeGalleryCase
-    ? caseImageCategories(activeGalleryCase.type).filter(category => docCategoryIds.includes(category.id) && shouldShowGalleryCategory(category.id)
-      && (galleryCategory === category.id || galleryImages.some(image => image.category === category.id)))
+    ? imgCategories.filter(category => docCategoryIds.includes(category.id) && shouldShowGalleryCategory(category.id)
+      && galleryImages.some(image => image.category === category.id && getImageSide(image) === 'shared'))
     : []
-  const galleryPhaseCategories = activeGalleryCase
-    ? caseImageCategories(activeGalleryCase.type).filter(category => phaseCategoryIds.includes(category.id) && shouldShowGalleryCategory(category.id))
-    : []
-  const galleryImagesByCategory = (categoryId: ImgCat) => galleryImages.filter(image => image.category === categoryId)
+  const galleryImagesByCategory = (categoryId: ImgCat, side?: AlbumSide) => galleryImages.filter(image =>
+    image.category === categoryId && (!side || getImageSide(image) === side)
+  )
   const openCaseGallery = (workCaseId: string) => {
-    setCaseMenuId(null)
     setGalleryCaseId(workCaseId)
     setGalleryCategory('all')
     setGalleryDate('all')
+    setGalleryLayout('compare')
     setGalleryUploadCat('before')
+    setGalleryUploadSide('before')
     setGalleryUploadOpen(false)
   }
   const renderImageTile = (image: CustomerImage, aspectClass = 'aspect-square') => {
@@ -1208,7 +1195,9 @@ function PhotosTab({
           <button type="button" onClick={() => setLightbox(image.url)} aria-label={`ดูรูป ${image.caption || category.label}`} className="absolute inset-0 w-full h-full">
             <CustomerPhoto src={image.url} alt={image.caption || category.label} />
           </button>
-          <span className={`pointer-events-none absolute left-2 top-2 text-[10px] px-2 py-0.5 rounded border font-semibold ${category.color}`}>{category.label}</span>
+          <span className={`pointer-events-none absolute left-2 top-2 max-w-[calc(100%_-_1rem)] break-words text-[10px] px-2 py-0.5 rounded border font-semibold ${category.color}`}>{category.label}{isDocumentCategory(image.category) && ` · ${{ before: 'ก่อนทำ', after: 'หลังทำ', shared: 'รวม' }[getImageSide(image)]}`}</span>
+          <button type="button" onClick={() => openImageNoteEditor(image)} title="แก้ไขรูปและหมายเหตุ" aria-label={`แก้ไขรูป ${image.caption || category.label}`}
+            className="absolute right-10 bottom-6 h-8 w-8 flex items-center justify-center bg-white/95 rounded-lg text-[var(--text-secondary)] shadow-sm hover:bg-[var(--bg-base)]"><Edit className="w-3.5 h-3.5" /></button>
           <button type="button" onClick={() => handleDeleteImage(image.id)} title="ลบรูป" aria-label="ลบรูป"
             className="absolute right-1 bottom-6 h-8 w-8 flex items-center justify-center bg-white/95 rounded-lg text-red-500 shadow-sm hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
           <div className="pointer-events-none absolute bottom-0 left-0 right-0 bg-black/45 px-1.5 py-0.5">
@@ -1221,21 +1210,21 @@ function PhotosTab({
   }
 
 
-  const renderGallerySection = (category: typeof imgCategories[number], gridClass = 'grid-cols-2 sm:grid-cols-3') => {
+  const renderGallerySection = (category: typeof imgCategories[number], gridClass = 'grid-cols-2', side?: AlbumSide) => {
     if (!activeGalleryCase) return null
-    const categoryImages = galleryImagesByCategory(category.id)
+    const categoryImages = galleryImagesByCategory(category.id, side)
     return (
-      <section key={category.id} className="min-w-0 space-y-3">
+      <section key={`${side ?? 'all'}-${category.id}`} aria-label={`${category.label}${side ? ` ${side}` : ''}`} className="min-w-0 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <h4 className={`rounded-md border px-2 py-1 text-xs font-semibold ${category.color}`}>{category.label} ({categoryImages.length})</h4>
-          <button type="button" onClick={() => openUpload(category.id, activeGalleryCase.id)} disabled={Boolean(uploading)}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-base)] disabled:opacity-50"><Plus className="h-3.5 w-3.5" /> เพิ่มรูป</button>
+          <button type="button" onClick={() => openUpload(category.id, activeGalleryCase.id, side)} disabled={Boolean(uploading)}
+            className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[var(--border-light)] bg-white px-2 py-1.5 text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-base)] disabled:opacity-50"><Plus className="h-3.5 w-3.5" /> เพิ่มรูป</button>
         </div>
         {categoryImages.length ? (
           <div className={`grid ${gridClass} gap-3`}>{categoryImages.map(image => renderImageTile(image, 'aspect-[4/5]'))}</div>
         ) : (
-          <button type="button" onClick={() => openUpload(category.id, activeGalleryCase.id)} disabled={Boolean(uploading)}
-            className="flex min-h-24 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--border-light)] text-xs text-[var(--text-muted)] hover:bg-[var(--bg-base)] disabled:opacity-50"><Plus className="h-4 w-4" /> เพิ่มรูป{category.label}</button>
+          <button type="button" aria-label={`เพิ่มรูป${category.label}${side ? ` ${side}` : ''}`} onClick={() => openUpload(category.id, activeGalleryCase.id, side)} disabled={Boolean(uploading)}
+            className="flex min-h-28 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--border-light)] bg-white/60 text-xs text-[var(--text-muted)] hover:bg-white disabled:opacity-50">ยังไม่มีรูปหมวดนี้</button>
         )}
       </section>
     )
@@ -1372,23 +1361,17 @@ function PhotosTab({
           {filteredWorkCases.map(workCase => {
             const count = images.filter(image => image.workCaseId === workCase.id).length
             return (
-              <li key={workCase.id} className="flex items-center gap-2 sm:gap-4 py-3 border-b last:border-b-0 border-[var(--border-light)]">
+              <li key={workCase.id} className="flex flex-col items-stretch gap-2 py-3 border-b last:border-b-0 border-[var(--border-light)] sm:flex-row sm:items-center sm:gap-4">
                 <button type="button" onClick={() => openCaseGallery(workCase.id)} aria-label={`เปิดอัลบั้ม ${workCase.title}`} className="min-w-0 flex-1 text-left rounded-lg px-2 py-1 hover:bg-[var(--bg-base)] focus-visible:outline-2 focus-visible:outline-[var(--pink-400)]">
                   <span className="block font-semibold text-sm text-[var(--text-primary)] break-words [overflow-wrap:anywhere]">{workCase.title}</span>
                   <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-[var(--text-muted)]">
                     <span>{formatDate(workCase.caseDate)}</span><span>·</span><span>{getCaseType(workCase.type).label}</span><span>·</span><span>{count} รูป</span>
                   </span>
                 </button>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1.5 px-2 sm:px-0">
                   <button type="button" onClick={() => openCaseGallery(workCase.id)} aria-label={`ดูอัลบั้ม ${workCase.title}`} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--pink-100)] px-2.5 sm:px-3 text-xs font-semibold text-[var(--pink-600)] hover:bg-[var(--pink-50)]"><ImageIcon className="h-4 w-4" /> ดูอัลบั้ม</button>
-                  <div className="relative" ref={caseMenuId === workCase.id ? caseMenuRef : undefined}>
-                    <button type="button" title="จัดการชิ้นงาน" aria-label={`จัดการชิ้นงาน ${workCase.title}`} aria-expanded={caseMenuId === workCase.id} onClick={() => setCaseMenuId(current => current === workCase.id ? null : workCase.id)} className="h-10 w-9 flex items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-base)]"><MoreHorizontal className="h-5 w-5" /></button>
-                    {caseMenuId === workCase.id && <div className="absolute right-0 top-full z-20 mt-1 w-40 rounded-lg border border-[var(--border-light)] bg-white p-1 shadow-lg">
-                      <button type="button" onClick={() => { openCaseGallery(workCase.id); setGalleryUploadOpen(true) }} className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-sm hover:bg-[var(--bg-base)]"><Upload className="h-4 w-4" /> เพิ่มรูป</button>
-                      <button type="button" onClick={() => openEditCase(workCase)} className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-sm hover:bg-[var(--bg-base)]"><Edit className="h-4 w-4" /> แก้ไขชิ้นงาน</button>
-                      <button type="button" onClick={() => { setCaseMenuId(null); handleDeleteCase(workCase.id) }} className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"><Trash2 className="h-4 w-4" /> ลบชิ้นงาน</button>
-                    </div>}
-                  </div>
+                  <button type="button" onClick={() => openEditCase(workCase)} aria-label={`แก้ไขชิ้นงาน ${workCase.title}`} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--border-light)] px-2.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-base)]"><Edit className="h-4 w-4" /> แก้ไข</button>
+                  <button type="button" title="ลบชิ้นงาน" aria-label={`ลบชิ้นงาน ${workCase.title}`} disabled={Boolean(uploading) || savingCase} onClick={() => handleDeleteCase(workCase.id)} className="flex h-10 w-10 items-center justify-center rounded-lg text-red-500 hover:bg-red-50 disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
                 </div>
               </li>
             )
@@ -1505,32 +1488,39 @@ function PhotosTab({
       {activeGalleryCase && (
         <AlbumDialog label={`อัลบั้ม ${activeGalleryCase.title}`} onClose={() => setGalleryCaseId(null)} fullscreen>
           <div className="shrink-0 max-h-[52dvh] overflow-y-auto border-b border-[var(--border-light)] p-3 sm:p-4 space-y-3">
-            <div className="flex items-start justify-between gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
               <div className="min-w-0">
+                <p className="mb-1 text-xs font-semibold text-[var(--pink-600)]">BEFORE &amp; AFTER GALLERY</p>
                 <h3 className="text-base font-bold text-[var(--text-primary)] break-words [overflow-wrap:anywhere]">{activeGalleryCase.title}</h3>
                 <p className="text-xs text-[var(--text-muted)] mt-1">{formatDate(activeGalleryCase.caseDate)} · {getCaseType(activeGalleryCase.type).label} · {activeGalleryImages.length} รูป · {activeGalleryStats?.notes ?? 0} โน้ต</p>
               </div>
               <div className="flex shrink-0 gap-1">
-                <button type="button" title="แก้ไขชิ้นงาน" aria-label="แก้ไขชิ้นงาน" onClick={() => openEditCase(activeGalleryCase)} className="h-9 w-9 flex items-center justify-center rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-secondary)]"><Edit className="h-4 w-4" /></button>
+                <button type="button" title="แก้ไขชิ้นงาน" aria-label="แก้ไขชิ้นงาน" onClick={() => openEditCase(activeGalleryCase)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--border-light)] px-2.5 text-xs font-medium hover:bg-[var(--bg-base)] text-[var(--text-secondary)]"><Edit className="h-4 w-4" /> แก้ไข</button>
+                <button type="button" title="ลบชิ้นงาน" aria-label="ลบชิ้นงาน" disabled={Boolean(uploading) || savingCase} onClick={() => handleDeleteCase(activeGalleryCase.id)} className="flex h-9 w-9 items-center justify-center rounded-lg text-red-500 hover:bg-red-50 disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
                 <button type="button" title="ปิดอัลบั้ม" aria-label="ปิดอัลบั้ม" onClick={() => setGalleryCaseId(null)} className="h-9 w-9 flex items-center justify-center rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-secondary)]"><X className="h-4 w-4" /></button>
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
               <select aria-label="เลือกชิ้นงานในอัลบั้ม" value={galleryCaseId ?? ''} onChange={event => openCaseGallery(event.target.value)} className={inputCls + ' min-w-0 flex-1 sm:max-w-sm'}>
-                {workCases.map(workCase => <option key={workCase.id} value={workCase.id}>{workCase.title}</option>)}
+                {workCases.map(workCase => <option key={workCase.id} value={workCase.id}>{workCase.title} · {formatDate(workCase.caseDate)}</option>)}
               </select>
               <button type="button" onClick={() => setGalleryUploadOpen(current => !current)} aria-expanded={galleryUploadOpen} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--pink-500)] px-3 py-2 text-xs font-semibold text-white hover:opacity-90"><Upload className="h-4 w-4" /> เพิ่มรูป</button>
             </div>
             {galleryUploadOpen && <div className="flex flex-wrap gap-2 rounded-lg bg-[var(--bg-base)] p-2">
               <select aria-label="หมวดรูปที่จะเพิ่ม" value={galleryUploadCat} onChange={event => setGalleryUploadCat(event.target.value as ImgCat)} className={inputCls + ' min-w-0 flex-1'}>
-                {caseImageCategories(activeGalleryCase.type).map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
+                {imgCategories.map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
               </select>
-              <button type="button" onClick={() => openUpload(galleryUploadCat, activeGalleryCase.id)} disabled={Boolean(uploading)} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-light)] bg-white px-3 py-2 text-xs font-semibold disabled:opacity-50">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} เลือกรูป</button>
+              {isDocumentCategory(galleryUploadCat) && <select aria-label="ฝั่งของเอกสารที่จะเพิ่ม" value={galleryUploadSide} onChange={event => setGalleryUploadSide(event.target.value as AlbumSide)} className={inputCls + ' min-w-0 flex-1'}>
+                <option value="before">Before / ก่อนทำ</option>
+                <option value="after">After / หลังทำ</option>
+                <option value="shared">เอกสารรวมของชิ้นงาน</option>
+              </select>}
+              <button type="button" onClick={() => openUpload(galleryUploadCat, activeGalleryCase.id, galleryUploadSide)} disabled={Boolean(uploading)} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-light)] bg-white px-3 py-2 text-xs font-semibold disabled:opacity-50">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} เลือกรูป</button>
             </div>}
             <div className="flex flex-wrap items-center gap-2">
               <select aria-label="หมวดรูปในอัลบั้ม" value={galleryCategory} onChange={event => setGalleryCategory(event.target.value as ImgCat | 'all')} className={inputCls + ' w-auto min-w-0 flex-1 sm:flex-none sm:max-w-48'}>
                 <option value="all">ทุกหมวดรูป</option>
-                {caseImageCategories(activeGalleryCase.type).map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
+                {imgCategories.map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
               </select>
               {galleryDateOptions.length > 1 && <select aria-label="วันที่รูปในอัลบั้ม" value={galleryDate} onChange={event => setGalleryDate(event.target.value)} className={inputCls + ' w-auto min-w-0 flex-1 sm:flex-none sm:max-w-40'}>
                 <option value="all">ทุกวันที่</option>
@@ -1561,19 +1551,29 @@ function PhotosTab({
                 </div>
               ) : galleryLayout === 'compare' ? (
                 <div className="space-y-6">
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {(['before', 'after'] as ImgCat[]).filter(shouldShowGalleryCategory).map(categoryId =>
-                      renderGallerySection(getImageCategory(categoryId))
-                    )}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    {(['before', 'after'] as const).map(side => {
+                      const phase = getImageCategory(side)
+                      const categories: ImgCat[] = ['receipt', 'wig_order', side, 'other']
+                      if (side === 'after' && (galleryCategory === 'finished' || galleryImages.some(image => image.category === 'finished'))) categories.splice(3, 0, 'finished')
+                      if (galleryImages.some(image => image.category === 'document' && getImageSide(image) === side) || galleryCategory === 'document') categories.push('document')
+                      const visibleCategories = categories.filter(shouldShowGalleryCategory)
+                      if (!visibleCategories.length) return null
+                      return (
+                        <section key={side} aria-label={phase.label} className="min-w-0">
+                          <h4 className={`mb-3 inline-flex rounded-md border px-3 py-1.5 text-sm font-semibold ${phase.color}`}>{phase.label} ({galleryImagesByCategory(side).length})</h4>
+                          <div className={`space-y-5 border-t-2 p-3 sm:p-4 ${side === 'before' ? 'border-orange-200 bg-orange-50/30' : 'border-emerald-200 bg-emerald-50/30'}`}>
+                            {visibleCategories.map(categoryId => renderGallerySection(getImageCategory(categoryId), 'grid-cols-2', side))}
+                          </div>
+                        </section>
+                      )
+                    })}
                   </div>
-                  {galleryPhaseCategories.filter(category => category.id === 'finished'
-                    && (galleryCategory === category.id || galleryImages.some(image => image.category === category.id)))
-                    .map(category => renderGallerySection(category, 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'))}
                   {galleryDocCategories.length > 0 && (
-                    <div className="border-t border-[var(--border-light)] pt-4 space-y-4">
-                      <h4 className="text-sm font-semibold text-[var(--text-primary)]">เอกสารของชิ้นงาน</h4>
-                      {galleryDocCategories.map(category => renderGallerySection(category, 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'))}
-                    </div>
+                    <section aria-label="เอกสารรวมของชิ้นงาน" className="border-t border-[var(--border-light)] pt-4 space-y-4">
+                      <h4 className="text-sm font-semibold text-[var(--text-primary)]">เอกสารรวมของชิ้นงาน</h4>
+                      {galleryDocCategories.map(category => renderGallerySection(category, 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5', 'shared'))}
+                    </section>
                   )}
                 </div>
               ) : (
@@ -1592,7 +1592,7 @@ function PhotosTab({
             <div className="flex items-start justify-between gap-3 border-b border-[var(--border-light)] p-4">
               <div>
                 <p className="text-[11px] font-bold text-[var(--pink-600)] uppercase tracking-wide">หมายเหตุรูป</p>
-                <h3 className="text-base font-bold text-[var(--text-primary)]">บันทึกรายละเอียดของรูปนี้</h3>
+                <h3 className="text-base font-bold text-[var(--text-primary)]">รายละเอียดรูปและหมายเหตุ</h3>
               </div>
               <button
                 type="button"
@@ -1612,11 +1612,19 @@ function PhotosTab({
                   <span className={`inline-flex text-[11px] px-2 py-1 rounded-full border font-semibold ${noteModalCategory.color}`}>
                     {noteModalCategory.label}
                   </span>
-                  <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{noteModalImage.caption || noteModalCategory.label}</p>
+                  <p className="break-words text-sm font-semibold text-[var(--text-primary)] [overflow-wrap:anywhere]">{noteModalImage.caption || noteModalCategory.label}</p>
                   <p className="text-xs text-[var(--text-muted)]">{formatDate(noteModalImage.imageDate ?? noteModalImage.createdAt)}</p>
                 </div>
               </div>
 
+              {noteModalImage.workCaseId && isDocumentCategory(noteModalImage.category) && <label className="block space-y-1.5 text-sm font-medium text-[var(--text-secondary)]">
+                <span>ตำแหน่งในอัลบั้ม</span>
+                <select value={imageSideDraft} onChange={event => setImageSideDraft(event.target.value as AlbumSide)} className={inputCls}>
+                  <option value="before">Before / ก่อนทำ</option>
+                  <option value="after">After / หลังทำ</option>
+                  <option value="shared">เอกสารรวมของชิ้นงาน</option>
+                </select>
+              </label>}
               <textarea
                 value={imageNoteValue(noteModalImage)}
                 onChange={e => setImageNoteDrafts(current => ({ ...current, [noteModalImage.id]: e.target.value }))}
@@ -1636,10 +1644,10 @@ function PhotosTab({
                 <button
                   type="button"
                   onClick={() => handleSaveImageNote(noteModalImage)}
-                  disabled={savingImageNoteId === noteModalImage.id || imageNoteValue(noteModalImage).trim() === (noteModalImage.notes ?? '').trim()}
+                  disabled={savingImageNoteId === noteModalImage.id || (imageNoteValue(noteModalImage).trim() === (noteModalImage.notes ?? '').trim() && imageSideDraft === getImageSide(noteModalImage))}
                   className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white text-sm font-bold shadow-sm hover:opacity-90 disabled:opacity-50">
                   {savingImageNoteId === noteModalImage.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <StickyNote className="w-4 h-4" />}
-                  บันทึกหมายเหตุ
+                  บันทึกการแก้ไข
                 </button>
               </div>
             </div>

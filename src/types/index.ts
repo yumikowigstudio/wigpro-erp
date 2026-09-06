@@ -143,6 +143,7 @@ export interface CustomerImage {
   customerId: string
   workCaseId?: string
   category: 'before' | 'after' | 'finished' | 'receipt' | 'wig_order' | 'document' | 'other'
+  albumSide?: 'before' | 'after' | 'shared'
   url: string
   thumbnail?: string
   caption?: string
