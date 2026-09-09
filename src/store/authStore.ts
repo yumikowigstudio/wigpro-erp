@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { User as FirebaseUser } from 'firebase/auth'
 import { User, Branch } from '@/types'
+import { rememberBranch } from '@/lib/branchSelection'
 
 interface AuthState {
   firebaseUser: FirebaseUser | null
@@ -10,6 +11,8 @@ interface AuthState {
   supportCompanyId: string
   supportCompanyName: string
   isLoading: boolean
+  isBranchLoading: boolean
+  branchError: string
   isAuthenticated: boolean
   setFirebaseUser: (user: FirebaseUser | null) => void
   setUser: (user: User | null) => void
@@ -21,39 +24,59 @@ interface AuthState {
   logout: () => void
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+function readSupportSetting(key: string): string {
+  try { return typeof window !== 'undefined' ? window.localStorage.getItem(key) ?? '' : '' }
+  catch { return '' }
+}
+
+function saveSupportSettings(companyId = '', companyName = '') {
+  try {
+    if (typeof window === 'undefined') return
+    if (companyId) {
+      window.localStorage.setItem('supportCompanyId', companyId)
+      window.localStorage.setItem('supportCompanyName', companyName)
+    } else {
+      window.localStorage.removeItem('supportCompanyId')
+      window.localStorage.removeItem('supportCompanyName')
+    }
+  } catch { /* Support mode remains usable when browser storage is blocked. */ }
+}
+
+export const useAuthStore = create<AuthState>((set, get) => ({
   firebaseUser: null,
   user: null,
   currentBranch: null,
   branches: [],
-  supportCompanyId: typeof window !== 'undefined' ? localStorage.getItem('supportCompanyId') ?? '' : '',
-  supportCompanyName: typeof window !== 'undefined' ? localStorage.getItem('supportCompanyName') ?? '' : '',
+  supportCompanyId: readSupportSetting('supportCompanyId'),
+  supportCompanyName: readSupportSetting('supportCompanyName'),
   isLoading: true,
+  isBranchLoading: false,
+  branchError: '',
   isAuthenticated: false,
   setFirebaseUser: (firebaseUser) => set({ firebaseUser, isAuthenticated: !!firebaseUser }),
   setUser: (user) => set({ user }),
-  setCurrentBranch: (currentBranch) => set({ currentBranch }),
+  setCurrentBranch: (currentBranch) => {
+    if (!currentBranch) { set({ currentBranch: null }); return }
+    const { user, branches, supportCompanyId } = get()
+    if (!user) return
+    const companyId = user.role === 'super_admin' && supportCompanyId ? supportCompanyId : user.companyId
+    const branch = branches.find(item => item.id === currentBranch.id && item.companyId === companyId && item.status === 'active')
+    if (!branch || (!['owner', 'super_admin'].includes(user.role) && branch.id !== user.branchId)) return
+    rememberBranch(user.id, companyId, branch.id)
+    set({ currentBranch: branch })
+  },
   setBranches: (branches) => set({ branches }),
   setSupportCompany: (supportCompanyId, supportCompanyName) => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('supportCompanyId', supportCompanyId)
-      localStorage.setItem('supportCompanyName', supportCompanyName)
-    }
+    saveSupportSettings(supportCompanyId, supportCompanyName)
     set({ supportCompanyId, supportCompanyName, currentBranch: null, branches: [] })
   },
   clearSupportCompany: () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('supportCompanyId')
-      localStorage.removeItem('supportCompanyName')
-    }
+    saveSupportSettings()
     set({ supportCompanyId: '', supportCompanyName: '', currentBranch: null, branches: [] })
   },
   setLoading: (isLoading) => set({ isLoading }),
   logout: () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('supportCompanyId')
-      localStorage.removeItem('supportCompanyName')
-    }
-    set({ firebaseUser: null, user: null, currentBranch: null, branches: [], supportCompanyId: '', supportCompanyName: '', isAuthenticated: false })
+    saveSupportSettings()
+    set({ firebaseUser: null, user: null, currentBranch: null, branches: [], supportCompanyId: '', supportCompanyName: '', isAuthenticated: false, isBranchLoading: false, branchError: '' })
   },
 }))

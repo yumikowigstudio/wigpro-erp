@@ -17,7 +17,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [requesting, setRequesting] = useState(false)
   const [requested, setRequested] = useState(false)
-  const { isAuthenticated, isLoading, user, userId, companyId, hasPermission } = useAuth()
+  const { isAuthenticated, isLoading, branchError, user, userId, companyId, hasPermission, logout } = useAuth()
   const router = useRouter()
   const pathname = usePathname()
 
@@ -37,6 +37,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   if (!isAuthenticated || !user) return null
+
+  if (branchError) return (
+    <div role="alert" className="flex min-h-screen flex-col items-center justify-center gap-4 px-6 text-center">
+      <p className="text-sm text-[var(--text-primary)]">{branchError}</p>
+      <div className="flex gap-3">
+        <button onClick={() => window.location.reload()} className="rounded-lg border border-[var(--border)] bg-white px-4 py-2 text-sm">ลองใหม่</button>
+        <button onClick={() => logout()} className="rounded-lg px-4 py-2 text-sm text-[var(--text-secondary)]">ออกจากระบบ</button>
+      </div>
+    </div>
+  )
 
   const pagePermission = getPagePermission(pathname)
   const denied = pagePermission && !hasPermission(pagePermission)

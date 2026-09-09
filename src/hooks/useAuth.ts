@@ -8,6 +8,7 @@ import { getEffectivePermissions, PermissionKey } from '@/lib/permissions'
 import { useAuthStore } from '@/store/authStore'
 import { User, Branch } from '@/types'
 import { toast } from 'sonner'
+import { readPreferredBranch, rememberBranch, resolveBranchSelection } from '@/lib/branchSelection'
 
 // ───────────────────────────────────────────────────────────────
 // Auth listener เป็น "singleton" — ตั้งครั้งเดียวทั้งแอป
@@ -40,23 +41,26 @@ function startAuthListener() {
     branchScope = nextScope
     unsubscribeBranches?.()
     unsubscribeBranches = null
+    useAuthStore.setState({ branches: [], currentBranch: null, isBranchLoading: !!user && !!companyId, branchError: '' })
     if (!user || !companyId) return
     unsubscribeBranches = onSnapshot(query(collection(db, COLLECTIONS.BRANCHES),
       where('companyId', '==', companyId), where('status', '==', 'active')),
     snapshot => {
       if (branchScope !== nextScope) return
       const branchList = snapshot.docs.map(branch => ({ id: branch.id, ...branch.data() })) as Branch[]
-      const selectedBranchId = ['super_admin', 'owner'].includes(user.role)
-        ? useAuthStore.getState().currentBranch?.id : user.branchId
-      const preferredBranchId = isSupport ? branchList[0]?.id : user.branchId
-      const branch = branchList.find(item => item.id === selectedBranchId)
-        || branchList.find(item => item.id === preferredBranchId) || branchList[0] || null
-      useAuthStore.setState({ branches: branchList, currentBranch: branch })
+      const preferredId = useAuthStore.getState().currentBranch?.id ?? readPreferredBranch(user.id, companyId)
+      const branch = resolveBranchSelection(user, companyId, branchList, preferredId)
+      if (branch) rememberBranch(user.id, companyId, branch.id)
+      useAuthStore.setState({ branches: branchList, currentBranch: branch, isBranchLoading: false,
+        branchError: branch ? '' : 'ไม่พบสาขาที่เปิดใช้งานและบัญชีนี้มีสิทธิ์ กรุณาติดต่อเจ้าของร้าน' })
+      if (branch && preferredId && preferredId !== branch.id && ['owner', 'super_admin'].includes(user.role)) {
+        toast.info(`สาขาที่เลือกไว้ไม่พร้อมใช้งาน เปลี่ยนเป็น ${branch.name}`)
+      }
     }, error => {
       if (branchScope !== nextScope) return
       console.error('Error loading branches:', error)
-      useAuthStore.setState({ branches: [], currentBranch: null })
-      toast.error('โหลดสาขาไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วเข้าสู่ระบบใหม่')
+      useAuthStore.setState({ branches: [], currentBranch: null, isBranchLoading: false,
+        branchError: 'โหลดข้อมูลสาขาไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่' })
     })
   }
   useAuthStore.subscribe(syncBranches)
@@ -71,6 +75,10 @@ function startAuthListener() {
 
   onAuthStateChanged(auth, async (fbUser) => {
       clearProfileLoadTimer()
+      if (useAuthStore.getState().user?.id !== fbUser?.uid) {
+        setUser(null)
+        setLoading(!!fbUser)
+      }
       setFirebaseUser(fbUser)
 
       // ยกเลิก listener เก่าถ้ามี
@@ -92,6 +100,7 @@ function startAuthListener() {
           signOut(auth).catch(console.error)
         }, 15000)
         unsubscribeUser = onSnapshot(userRef, async (snap) => {
+          if (auth.currentUser?.uid !== fbUser.uid) return
           clearProfileLoadTimer()
           if (snap.exists()) {
             const userData = { id: snap.id, ...snap.data() } as User
@@ -170,7 +179,7 @@ function startAuthListener() {
 
 export function useAuth() {
   const {
-    user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated,
+    user, firebaseUser, currentBranch, branches, isLoading, isBranchLoading, branchError, isAuthenticated,
     supportCompanyId, supportCompanyName, setCurrentBranch,
     setSupportCompany, clearSupportCompany, logout: storeLogout,
   } = useAuthStore()
@@ -229,12 +238,12 @@ export function useAuth() {
   }
 
   // Convenience helpers
-  const branchId   = (canSwitchBranch ? currentBranch?.id : user?.branchId) ?? user?.branchId ?? ''
+  const branchId   = currentBranch?.companyId === companyId ? currentBranch.id : ''
   const userId     = user?.id         ?? ''
   const userName   = user?.displayName ?? ''
 
   return {
-    user, firebaseUser, currentBranch, branches, isLoading, isAuthenticated,
+    user, firebaseUser, currentBranch, branches, isLoading: isLoading || isBranchLoading, branchError, isAuthenticated,
     login, logout, hasPermission, canDiscount, canSwitchBranch, switchBranch,
     companyId, branchId, userId, userName,
     isSupportMode, supportCompanyId, supportCompanyName, enterSupportCompany, exitSupportCompany,
