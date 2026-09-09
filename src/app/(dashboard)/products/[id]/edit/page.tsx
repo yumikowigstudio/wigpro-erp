@@ -9,6 +9,7 @@ import {
 import { getDocument, COLLECTIONS } from '@/lib/firestore'
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
+import { writeActivityLog } from '@/lib/activityLog'
 import type { Product } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -32,11 +33,13 @@ const inputCls = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--bo
 export default function EditProductPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router  = useRouter()
-  const { companyId } = useAuth()
+  const { companyId, branchId, userId, userName } = useAuth()
 
   const [loading,    setLoading]    = useState(true)
   const [done,       setDone]       = useState(false)
   const [uploading,  setUploading]  = useState(false)
+  const [submitError, setSubmitError] = useState('')
+  const [originalProduct, setOriginalProduct] = useState<Product | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
 
   const [form, setForm] = useState({
@@ -53,6 +56,7 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
   useEffect(() => {
     getDocument<Product>(COLLECTIONS.PRODUCTS, id).then(p => {
       if (p) {
+        setOriginalProduct(p)
         setForm({
           name:          p.name,
           sku:           p.sku,
@@ -91,6 +95,18 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (done || !form.name.trim() || !form.sku.trim() || !form.sellingPrice) return
+    const sellingPrice = Number(form.sellingPrice)
+    const costPrice = form.costPrice ? Number(form.costPrice) : 0
+    const minStockAlert = form.minStockAlert ? Number(form.minStockAlert) : 0
+    if (![sellingPrice, costPrice, minStockAlert].every(Number.isFinite) || sellingPrice < 0 || costPrice < 0 || minStockAlert < 0) {
+      setSubmitError('กรุณาตรวจสอบราคาและจำนวนสต๊อกให้เป็นตัวเลขตั้งแต่ 0 ขึ้นไป')
+      return
+    }
+    if (!originalProduct || originalProduct.companyId !== companyId) {
+      setSubmitError('ไม่พบสินค้านี้ในร้านที่กำลังใช้งาน')
+      return
+    }
+    setSubmitError('')
     setDone(true)
 
     try {
@@ -107,23 +123,45 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
         code:          form.sku.trim(),
         category:      form.category || 'ทั่วไป',
         description:   form.description.trim() || null,
-        sellingPrice:  Number(form.sellingPrice),
-        costPrice:     form.costPrice ? Number(form.costPrice) : 0,
-        minStockAlert: form.minStockAlert ? Number(form.minStockAlert) : 0,
+        sellingPrice,
+        costPrice,
+        minStockAlert,
         isWigProduct:  form.isWigProduct,
         images:        finalUrl ? [finalUrl] : [],
         updatedAt:     serverTimestamp(),
       }
 
-      // Fire-and-forget
-      updateDoc(doc(db, COLLECTIONS.PRODUCTS, id), updates)
-        .catch(err => console.error('Update product error:', err))
+      await updateDoc(doc(db, COLLECTIONS.PRODUCTS, id), updates)
+      await writeActivityLog({
+        companyId,
+        branchId,
+        userId,
+        userName,
+        action: 'update',
+        module: 'สินค้าและบริการ',
+        description: `แก้ไขสินค้า ${form.name.trim()}`,
+        recordId: id,
+        recordType: 'product',
+        metadata: {
+          before: {
+            name: originalProduct.name,
+            sku: originalProduct.sku,
+            category: originalProduct.category,
+            sellingPrice: originalProduct.sellingPrice,
+            costPrice: originalProduct.costPrice,
+            minStockAlert: originalProduct.minStockAlert,
+          },
+          after: { name: form.name.trim(), sku: form.sku.trim(), category: form.category || 'ทั่วไป', sellingPrice, costPrice, minStockAlert },
+        },
+      })
 
       router.push(`/products/${id}`)
     } catch (err) {
       console.error(err)
       setDone(false)
-      alert('เกิดข้อผิดพลาด กรุณาลองใหม่')
+      setSubmitError('บันทึกสินค้าไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -223,12 +261,12 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ราคาขาย (บาท) *</label>
-              <input type="number" min="0" value={form.sellingPrice}
+              <input type="number" min="0" step="0.01" value={form.sellingPrice}
                 onChange={e => set('sellingPrice', e.target.value)} required className={inputCls} />
             </div>
             <div>
               <label className="text-xs font-medium text-[var(--text-secondary)] mb-1.5 block">ราคาทุน (บาท)</label>
-              <input type="number" min="0" value={form.costPrice}
+              <input type="number" min="0" step="0.01" value={form.costPrice}
                 onChange={e => set('costPrice', e.target.value)} placeholder="0" className={inputCls} />
             </div>
           </div>
@@ -254,6 +292,9 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
         </div>
 
         {/* Actions */}
+        {submitError && (
+          <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{submitError}</p>
+        )}
         <div className="flex gap-3 pb-6">
           <Link href={`/products/${id}`}
             className="flex-1 py-3 border border-[var(--border-light)] rounded-2xl text-center text-sm font-semibold text-[var(--text-secondary)] bg-white hover:bg-[var(--bg-base)] transition-all">
@@ -262,7 +303,7 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
           <button type="submit" disabled={done}
             className="flex-1 py-3 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-2xl text-sm font-bold shadow-md shadow-pink-200 hover:opacity-95 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2">
             {done
-              ? <><CheckCircle2 className="w-4 h-4" />{uploading ? 'กำลังอัปโหลดรูป...' : 'บันทึกแล้ว!'}</>
+              ? <><CheckCircle2 className="w-4 h-4" />{uploading ? 'กำลังอัปโหลดรูป...' : 'กำลังบันทึก...'}</>
               : <><Save className="w-4 h-4" />บันทึกการแก้ไข</>
             }
           </button>

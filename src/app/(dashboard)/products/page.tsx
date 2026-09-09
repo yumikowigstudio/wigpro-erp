@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   collection, query, where, onSnapshot,
-  addDoc, deleteDoc, doc, serverTimestamp, writeBatch,
+  addDoc, deleteDoc, deleteField, doc, serverTimestamp, updateDoc, writeBatch,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { addDocument, COLLECTIONS } from '@/lib/firestore'
@@ -234,6 +234,7 @@ export default function ProductsPage() {
   const [filterWig, setFilterWig]   = useState('')
   const [showModal, setShowModal]   = useState(false)
   const [showServiceModal, setShowServiceModal] = useState(false)
+  const [editingService, setEditingService] = useState<Service | null>(null)
   const [showCatModal, setShowCatModal] = useState(false)
   const [showServiceCatModal, setShowServiceCatModal] = useState(false)
   const [form, setForm]             = useState<ProductForm>(defaultForm)
@@ -381,7 +382,9 @@ export default function ProductsPage() {
         rows = await readSheet(file)
       }
 
-      const existingSkus = new Set(products.map(p => String(p.sku ?? '').trim().toLowerCase()).filter(Boolean))
+      const existingSkus = new Set(products
+        .filter(product => product.status !== 'deleted' && product.status !== 'archived')
+        .map(product => String(product.sku ?? '').trim().toLowerCase()).filter(Boolean))
       const parsed = parseProductImportRows(rows, existingSkus)
       if (parsed.errors.length > 0 || parsed.rows.length === 0) {
         setImportSummary({
@@ -598,7 +601,9 @@ export default function ProductsPage() {
         rows = await readSheet(file)
       }
 
-      const existingCodes = new Set(services.map(s => String(s.code ?? '').trim().toLowerCase()).filter(Boolean))
+      const existingCodes = new Set(services
+        .filter(service => service.status !== 'deleted' && service.status !== 'archived' && service.isActive !== false)
+        .map(service => String(service.code ?? '').trim().toLowerCase()).filter(Boolean))
       const parsed = parseServiceImportRows(rows, existingCodes)
       if (parsed.errors.length > 0 || parsed.rows.length === 0) {
         setServiceImportSummary({
@@ -719,9 +724,17 @@ export default function ProductsPage() {
 
   const validate = () => {
     const e: Partial<ProductForm> = {}
+    const sellingPrice = Number(form.sellingPrice)
+    const costPrice = Number(form.costPrice)
+    const minStockAlert = Number(form.minStockAlert)
     if (!form.name.trim()) e.name = 'กรุณากรอกชื่อสินค้า'
     if (!form.sku.trim()) e.sku = 'กรุณากรอก SKU'
-    if (!form.sellingPrice || isNaN(Number(form.sellingPrice))) e.sellingPrice = 'กรุณากรอกราคาขาย'
+    if (form.sku.trim() && products.some(product =>
+      product.status !== 'deleted' && product.status !== 'archived' && product.sku?.trim().toLowerCase() === form.sku.trim().toLowerCase()
+    )) e.sku = 'SKU นี้มีอยู่แล้ว'
+    if (form.sellingPrice.trim() === '' || !Number.isFinite(sellingPrice) || sellingPrice < 0) e.sellingPrice = 'กรุณากรอกราคาขายเป็นตัวเลขตั้งแต่ 0 ขึ้นไป'
+    if (form.costPrice && (!Number.isFinite(costPrice) || costPrice < 0)) e.costPrice = 'ราคาทุนต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป'
+    if (form.minStockAlert && (!Number.isFinite(minStockAlert) || minStockAlert < 0)) e.minStockAlert = 'สต๊อกขั้นต่ำต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป'
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -815,9 +828,29 @@ export default function ProductsPage() {
 
   const validateService = () => {
     const e: Partial<ServiceForm> = {}
+    const price = Number(serviceForm.price)
+    const duration = Number(serviceForm.duration)
+    const commissionRate = Number(serviceForm.commissionRate)
+    const commissionAmount = Number(serviceForm.commissionAmount)
     if (!serviceForm.name.trim()) e.name = 'กรุณากรอกชื่อบริการ'
-    if (!serviceForm.price || isNaN(Number(serviceForm.price))) e.price = 'กรุณากรอกราคา'
-    if (serviceForm.duration && isNaN(Number(serviceForm.duration))) e.duration = 'กรุณากรอกระยะเวลาเป็นตัวเลข'
+    if (serviceForm.price.trim() === '' || !Number.isFinite(price) || price < 0) e.price = 'กรุณากรอกราคาเป็นตัวเลขตั้งแต่ 0 ขึ้นไป'
+    if (serviceForm.duration && (!Number.isFinite(duration) || duration < 0)) e.duration = 'กรุณากรอกระยะเวลาเป็นตัวเลขตั้งแต่ 0 ขึ้นไป'
+    if (serviceForm.commissionRate && (!Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate > 100)) {
+      e.commissionRate = 'ค่าคอมเปอร์เซ็นต์ต้องอยู่ระหว่าง 0–100'
+    }
+    if (serviceForm.commissionAmount && (!Number.isFinite(commissionAmount) || commissionAmount < 0)) {
+      e.commissionAmount = 'ค่าคอมต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป'
+    }
+    const normalizedCode = serviceForm.code.trim().toLowerCase()
+    if (normalizedCode && services.some(service =>
+      service.id !== editingService?.id
+      && service.status !== 'deleted'
+      && service.status !== 'archived'
+      && service.isActive !== false
+      && service.code?.trim().toLowerCase() === normalizedCode
+    )) {
+      e.code = 'รหัสบริการนี้มีอยู่แล้ว'
+    }
     setServiceErrors(e)
     return Object.keys(e).length === 0
   }
@@ -832,32 +865,52 @@ export default function ProductsPage() {
     setServiceSubmitting(true)
     try {
       const code = serviceForm.code.trim() || `SVC-${String(Date.now()).slice(-6)}`
-      const serviceId = await addDocument<Service>(COLLECTIONS.SERVICES, {
-        companyId,
-        ...buildCatalogScopeFields(branchId, catalogBranchIds, isMainCatalogBranch),
+      const values = {
         code,
         name: serviceForm.name.trim(),
         category: serviceForm.category.trim() || 'บริการทั่วไป',
         price: Number(serviceForm.price),
         duration: serviceForm.duration ? Number(serviceForm.duration) : 30,
-        commissionRate: serviceForm.commissionRate ? Number(serviceForm.commissionRate) : undefined,
-        commissionAmount: serviceForm.commissionAmount ? Number(serviceForm.commissionAmount) : undefined,
-        taxType: 'vat',
-        isActive: true,
-        notes: serviceForm.notes.trim() || undefined,
-        status: 'active',
-        createdAt: new Date(),
+        commissionRate: serviceForm.commissionRate ? Number(serviceForm.commissionRate) : null,
+        commissionAmount: serviceForm.commissionAmount ? Number(serviceForm.commissionAmount) : null,
+        notes: serviceForm.notes.trim() || null,
         updatedAt: new Date(),
-      } as Omit<Service, 'id'>)
+      }
+      let serviceId: string
+      if (editingService) {
+        serviceId = editingService.id
+        await updateDoc(doc(db, COLLECTIONS.SERVICES, serviceId), {
+          ...values,
+          commissionRate: values.commissionRate ?? deleteField(),
+          commissionAmount: values.commissionAmount ?? deleteField(),
+          notes: values.notes ?? deleteField(),
+          updatedAt: serverTimestamp(),
+        })
+      } else {
+        serviceId = await addDocument<Service>(COLLECTIONS.SERVICES, {
+          companyId,
+          ...buildCatalogScopeFields(branchId, catalogBranchIds, isMainCatalogBranch),
+          ...compactObject({
+            ...values,
+            commissionRate: values.commissionRate ?? undefined,
+            commissionAmount: values.commissionAmount ?? undefined,
+            notes: values.notes ?? undefined,
+          }),
+          taxType: 'vat',
+          isActive: true,
+          status: 'active',
+          createdAt: new Date(),
+        } as Omit<Service, 'id'>)
+      }
 
       await writeActivityLog({
         companyId,
         branchId,
         userId,
         userName,
-        action: 'create',
+        action: editingService ? 'update' : 'create',
         module: 'สินค้าและบริการ',
-        description: `เพิ่มบริการ ${serviceForm.name.trim()}`,
+        description: `${editingService ? 'แก้ไข' : 'เพิ่ม'}บริการ ${serviceForm.name.trim()}`,
         recordId: serviceId,
         recordType: 'service',
         metadata: {
@@ -866,6 +919,18 @@ export default function ProductsPage() {
           category: serviceForm.category.trim() || 'บริการทั่วไป',
           price: Number(serviceForm.price),
           isMainCatalogBranch,
+          ...(editingService ? {
+            before: {
+              code: editingService.code,
+              name: editingService.name,
+              category: editingService.category,
+              price: editingService.price,
+              duration: editingService.duration,
+              commissionRate: editingService.commissionRate ?? null,
+              commissionAmount: editingService.commissionAmount ?? null,
+              notes: editingService.notes ?? null,
+            },
+          } : {}),
         },
       })
 
@@ -888,9 +953,39 @@ export default function ProductsPage() {
   }
 
   const closeServiceModal = () => {
+    if (serviceSubmitting) return
     setShowServiceModal(false)
+    setEditingService(null)
     setServiceForm(defaultServiceForm)
     setServiceErrors({})
+  }
+
+  const openNewService = () => {
+    setEditingService(null)
+    setServiceForm(defaultServiceForm)
+    setServiceErrors({})
+    setShowServiceModal(true)
+  }
+
+  const openEditService = (service: Service) => {
+    setEditingService(service)
+    setServiceForm({
+      name: service.name || '',
+      code: service.code || '',
+      category: service.category || 'บริการทั่วไป',
+      price: String(service.price ?? ''),
+      duration: String(service.duration ?? 30),
+      commissionRate: service.commissionRate == null ? '' : String(service.commissionRate),
+      commissionAmount: service.commissionAmount == null ? '' : String(service.commissionAmount),
+      notes: service.notes || '',
+    })
+    setServiceErrors({})
+    setShowServiceModal(true)
+  }
+
+  const serviceCanBeEditedHere = (service: Service) => {
+    if (service.catalogScope === 'shared') return branchId === mainCatalogBranchId
+    return (service.sourceBranchId || service.branchId || mainCatalogBranchId) === branchId
   }
 
   const catIcon = (name: string) => categories.find(c => c.name === name)?.icon ?? '📦'
@@ -955,7 +1050,7 @@ export default function ProductsPage() {
                 className="flex items-center gap-2 px-4 py-2 bg-white border border-[var(--border-light)] rounded-xl text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-base)] transition-all">
                 <Tag className="w-4 h-4" /> จัดการหมวดหมู่บริการ
               </button>
-              <button onClick={() => setShowServiceModal(true)}
+              <button onClick={openNewService}
                 className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-semibold hover:opacity-90 transition-all shadow-md">
                 <Plus className="w-4 h-4" /> เพิ่มบริการ
               </button>
@@ -1239,7 +1334,7 @@ export default function ProductsPage() {
                 <p className="text-[var(--text-muted)] text-sm">ยังไม่มีบริการในระบบ</p>
                 <p className="text-xs text-[var(--text-light)] mt-1">บริการที่เพิ่มตรงนี้จะไปขึ้นใน POS แท็บ “บริการ”</p>
               </div>
-              <button onClick={() => setShowServiceModal(true)}
+              <button onClick={openNewService}
                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white rounded-xl text-sm font-semibold hover:opacity-90 transition-all shadow-md">
                 <Plus className="w-4 h-4" /> เพิ่มบริการแรก
               </button>
@@ -1258,7 +1353,20 @@ export default function ProductsPage() {
                           <p className="font-bold text-[var(--text-primary)] line-clamp-2 leading-snug">{service.name}</p>
                           <p className="text-xs text-[var(--text-muted)] mt-0.5">{service.code || '-'} · {service.category || 'บริการทั่วไป'}</p>
                         </div>
-                        <p className="font-black text-[var(--pink-600)] whitespace-nowrap">{formatCurrency(service.price)}</p>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <p className="font-black text-[var(--pink-600)] whitespace-nowrap">{formatCurrency(service.price)}</p>
+                          {serviceCanBeEditedHere(service) && (
+                            <button
+                              type="button"
+                              onClick={() => openEditService(service)}
+                              aria-label={`แก้ไขบริการ ${service.name}`}
+                              title="แก้ไขบริการ"
+                              className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--border-light)] text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-600)] transition-colors"
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
                         <span className="inline-flex items-center gap-1 rounded-full bg-[var(--bg-base)] px-2 py-1">
@@ -1272,6 +1380,9 @@ export default function ProductsPage() {
                         ) : null}
                       </div>
                       {service.notes && <p className="mt-3 text-xs text-[var(--text-muted)] line-clamp-2">{service.notes}</p>}
+                      {!serviceCanBeEditedHere(service) && service.catalogScope === 'shared' && (
+                        <p className="mt-3 text-[11px] text-[var(--text-muted)]">รายการกลาง จัดการได้จากสาขาหลัก</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1372,22 +1483,24 @@ export default function ProductsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ราคาขาย (บาท) <span className="text-red-500">*</span></label>
-                  <input type="number" min="0" value={form.sellingPrice} onChange={e => setForm({ ...form, sellingPrice: e.target.value })}
+                  <input type="number" min="0" step="0.01" value={form.sellingPrice} onChange={e => setForm({ ...form, sellingPrice: e.target.value })}
                     placeholder="0" className={inputCls} />
                   {errors.sellingPrice && <p className="text-red-500 text-xs mt-1">{errors.sellingPrice}</p>}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ราคาทุน (บาท)</label>
-                  <input type="number" min="0" value={form.costPrice} onChange={e => setForm({ ...form, costPrice: e.target.value })}
+                  <input type="number" min="0" step="0.01" value={form.costPrice} onChange={e => setForm({ ...form, costPrice: e.target.value })}
                     placeholder="0" className={inputCls} />
+                  {errors.costPrice && <p className="text-red-500 text-xs mt-1">{errors.costPrice}</p>}
                 </div>
               </div>
 
               {/* Min stock */}
               <div>
                 <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">สต๊อกขั้นต่ำ (แจ้งเตือนเมื่อต่ำกว่า)</label>
-                <input type="number" min="0" value={form.minStockAlert} onChange={e => setForm({ ...form, minStockAlert: e.target.value })}
-                  placeholder="0" className={inputCls} />
+                  <input type="number" min="0" value={form.minStockAlert} onChange={e => setForm({ ...form, minStockAlert: e.target.value })}
+                    placeholder="0" className={inputCls} />
+                {errors.minStockAlert && <p className="text-red-500 text-xs mt-1">{errors.minStockAlert}</p>}
               </div>
 
               {/* Is wig toggle */}
@@ -1424,31 +1537,34 @@ export default function ProductsPage() {
       {/* Add Service Modal */}
       {showServiceModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+          <div role="dialog" aria-modal="true" aria-labelledby="service-dialog-title" className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-5 border-b border-[var(--border-light)]">
               <div>
-                <h2 className="text-lg font-bold text-[var(--text-primary)]">เพิ่มบริการใหม่</h2>
-                <p className="text-xs text-[var(--text-muted)]">บริการที่เพิ่มตรงนี้จะไปขึ้นหน้า POS แท็บ “บริการ”</p>
+                <h2 id="service-dialog-title" className="text-lg font-bold text-[var(--text-primary)]">{editingService ? 'แก้ไขบริการ' : 'เพิ่มบริการใหม่'}</h2>
+                {editingService?.catalogScope === 'shared' && (
+                  <p className="text-xs text-[var(--text-muted)]">การแก้ไขนี้จะแสดงทุกสาขา</p>
+                )}
               </div>
-              <button onClick={closeServiceModal} className="p-1.5 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)]"><X className="w-5 h-5" /></button>
+              <button type="button" onClick={closeServiceModal} disabled={serviceSubmitting} aria-label="ปิด" className="p-1.5 rounded-lg hover:bg-[var(--bg-base)] text-[var(--text-muted)] disabled:opacity-50"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleSubmitService} className="p-5 space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ชื่อบริการ <span className="text-red-500">*</span></label>
-                <input value={serviceForm.name} onChange={e => setServiceForm({ ...serviceForm, name: e.target.value })}
+                <label htmlFor="service-name" className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ชื่อบริการ <span className="text-red-500">*</span></label>
+                <input id="service-name" value={serviceForm.name} onChange={e => setServiceForm({ ...serviceForm, name: e.target.value })}
                   placeholder="เช่น ตัดผม, ปรับแต่งวิก, วัดหัว" className={inputCls} />
                 {serviceErrors.name && <p className="text-red-500 text-xs mt-1">{serviceErrors.name}</p>}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">รหัสบริการ</label>
-                  <input value={serviceForm.code} onChange={e => setServiceForm({ ...serviceForm, code: e.target.value })}
+                  <label htmlFor="service-code" className="block text-xs font-semibold text-[var(--text-muted)] mb-1">รหัสบริการ</label>
+                  <input id="service-code" value={serviceForm.code} onChange={e => setServiceForm({ ...serviceForm, code: e.target.value })}
                     placeholder="เว้นว่างให้ระบบสร้าง" className={inputCls} />
+                  {serviceErrors.code && <p className="text-red-500 text-xs mt-1">{serviceErrors.code}</p>}
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">หมวดบริการ</label>
-                  <input value={serviceForm.category} onChange={e => setServiceForm({ ...serviceForm, category: e.target.value })}
+                  <label htmlFor="service-category" className="block text-xs font-semibold text-[var(--text-muted)] mb-1">หมวดบริการ</label>
+                  <input id="service-category" value={serviceForm.category} onChange={e => setServiceForm({ ...serviceForm, category: e.target.value })}
                     list="service-category-options" placeholder="เช่น บริการวิก" className={inputCls} />
                   <datalist id="service-category-options">
                     {serviceCategories.map(c => <option key={c} value={c} />)}
@@ -1463,14 +1579,14 @@ export default function ProductsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ราคา (บาท) <span className="text-red-500">*</span></label>
-                  <input type="number" min="0" value={serviceForm.price} onChange={e => setServiceForm({ ...serviceForm, price: e.target.value })}
+                  <label htmlFor="service-price" className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ราคา (บาท) <span className="text-red-500">*</span></label>
+                  <input id="service-price" type="number" min="0" step="0.01" value={serviceForm.price} onChange={e => setServiceForm({ ...serviceForm, price: e.target.value })}
                     placeholder="0" className={inputCls} />
                   {serviceErrors.price && <p className="text-red-500 text-xs mt-1">{serviceErrors.price}</p>}
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ระยะเวลา (นาที)</label>
-                  <input type="number" min="0" value={serviceForm.duration} onChange={e => setServiceForm({ ...serviceForm, duration: e.target.value })}
+                  <label htmlFor="service-duration" className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ระยะเวลา (นาที)</label>
+                  <input id="service-duration" type="number" min="0" step="1" value={serviceForm.duration} onChange={e => setServiceForm({ ...serviceForm, duration: e.target.value })}
                     placeholder="30" className={inputCls} />
                   {serviceErrors.duration && <p className="text-red-500 text-xs mt-1">{serviceErrors.duration}</p>}
                 </div>
@@ -1478,30 +1594,28 @@ export default function ProductsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ค่าคอม (%)</label>
-                  <input type="number" min="0" value={serviceForm.commissionRate} onChange={e => setServiceForm({ ...serviceForm, commissionRate: e.target.value })}
+                  <label htmlFor="service-commission-rate" className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ค่าคอม (%)</label>
+                  <input id="service-commission-rate" type="number" min="0" max="100" step="0.01" value={serviceForm.commissionRate} onChange={e => setServiceForm({ ...serviceForm, commissionRate: e.target.value })}
                     placeholder="เช่น 10" className={inputCls} />
+                  {serviceErrors.commissionRate && <p className="text-red-500 text-xs mt-1">{serviceErrors.commissionRate}</p>}
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ค่าคอมแบบจำนวนเงิน</label>
-                  <input type="number" min="0" value={serviceForm.commissionAmount} onChange={e => setServiceForm({ ...serviceForm, commissionAmount: e.target.value })}
+                  <label htmlFor="service-commission-amount" className="block text-xs font-semibold text-[var(--text-muted)] mb-1">ค่าคอมแบบจำนวนเงิน</label>
+                  <input id="service-commission-amount" type="number" min="0" step="0.01" value={serviceForm.commissionAmount} onChange={e => setServiceForm({ ...serviceForm, commissionAmount: e.target.value })}
                     placeholder="เช่น 100" className={inputCls} />
+                  {serviceErrors.commissionAmount && <p className="text-red-500 text-xs mt-1">{serviceErrors.commissionAmount}</p>}
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[var(--text-muted)] mb-1">หมายเหตุ</label>
-                <textarea value={serviceForm.notes} onChange={e => setServiceForm({ ...serviceForm, notes: e.target.value })}
+                <label htmlFor="service-notes" className="block text-xs font-semibold text-[var(--text-muted)] mb-1">หมายเหตุ</label>
+                <textarea id="service-notes" value={serviceForm.notes} onChange={e => setServiceForm({ ...serviceForm, notes: e.target.value })}
                   rows={2} placeholder="รายละเอียดบริการเพิ่มเติม..." className={inputCls + ' resize-none'} />
               </div>
 
-              <div className="rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-3 text-xs text-[var(--text-muted)]">
-                ถ้าเป็นของที่ต้องตัดสต๊อก เช่น วิกหรืออุปกรณ์ ให้เพิ่มเป็น “สินค้า” เหมือนเดิม แต่ถ้าเป็นค่าแรง/ค่าบริการ ให้เพิ่มตรงนี้
-              </div>
-
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={closeServiceModal}
-                  className="flex-1 px-4 py-2.5 bg-[var(--bg-base)] text-[var(--text-muted)] rounded-xl text-sm font-semibold hover:bg-[#ede8e0] transition-all">
+                <button type="button" onClick={closeServiceModal} disabled={serviceSubmitting}
+                  className="flex-1 px-4 py-2.5 bg-[var(--bg-base)] text-[var(--text-muted)] rounded-xl text-sm font-semibold hover:bg-[#ede8e0] transition-all disabled:opacity-50">
                   ยกเลิก
                 </button>
                 <button type="submit" disabled={serviceSubmitting}
@@ -1509,7 +1623,7 @@ export default function ProductsPage() {
                   {serviceSubmitting ? (
                     <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</>
                   ) : (
-                    <><Plus className="w-4 h-4" />บันทึกบริการ</>
+                    <>{editingService ? <Edit className="w-4 h-4" /> : <Plus className="w-4 h-4" />}{editingService ? 'บันทึกการแก้ไข' : 'บันทึกบริการ'}</>
                   )}
                 </button>
               </div>

@@ -21,6 +21,7 @@ await env.withSecurityRulesDisabled(async context => {
     'system_settings/co': { companyId: 'co', nameTh: 'ร้านทดสอบ', allowNegativeStock: false },
     'system_settings/co_tax': { companyId: 'co' },
     'products/p': { companyId: 'co', branchId: 'main', name: 'สินค้าทดสอบ', sku: 'QA001', sellingPrice: 100, costPrice: 20, isActive: true, stockQty: 10, minStockAlert: 2, images: [], createdAt: now },
+    'services/svc': { companyId: 'co', branchId: 'main', sourceBranchId: 'main', catalogScope: 'shared', visibleBranchIds: ['main', 'second'], code: 'SVC-QA', name: 'บริการทดสอบ', category: 'บริการทั่วไป', price: 500, duration: 30, taxType: 'vat', isActive: true, status: 'active', createdAt: now, updatedAt: now },
     'inventory/p_main': { companyId: 'co', branchId: 'main', productId: 'p', quantity: 10 },
     'customers/customer': { companyId: 'co', branchId: 'main', firstName: 'ทดสอบ', lastName: 'ลูกค้า', phone: '0800000000', customerId: 'C-QA001', createdAt: now },
     'deposits/dep': { companyId: 'co', branchId: 'main', depositNo: 'DEP-QA-001', customerId: 'customer', customerName: 'ทดสอบ ลูกค้า', totalAmount: 100, depositAmount: 30, paidAmount: 50, remainingAmount: 50, status: 'deposited', items: [{ productId: 'p', name: 'สินค้าทดสอบ', quantity: 1, unitPrice: 100, total: 100 }], paymentHistory: [{ id: 'initial', amount: 30, method: 'cash', confirmed: true, receivedAt: now }, { id: 'second', amount: 20, method: 'cash', confirmed: true, receivedAt: now }], createdAt: now },
@@ -42,6 +43,21 @@ try {
   await page.locator('input[type=password]').fill('OnlyForEmulator123!')
   await page.locator('button[type=submit]').click()
   await page.waitForURL('**/dashboard', { timeout: 60000 })
+  await page.goto('http://localhost:3106/products')
+  await page.getByRole('button', { name: 'รายการบริการ (1)' }).click()
+  await page.getByText('บริการทดสอบ', { exact: true }).waitFor()
+  await page.getByRole('button', { name: 'แก้ไขบริการ บริการทดสอบ' }).click()
+  const serviceDialog = page.getByRole('dialog', { name: 'แก้ไขบริการ' })
+  await serviceDialog.getByLabel(/ราคา/).fill('750.50')
+  await serviceDialog.getByLabel('หมายเหตุ').fill('แก้ไขจากหน้ารายการบริการ')
+  await serviceDialog.getByRole('button', { name: 'บันทึกการแก้ไข' }).click()
+  await expect(serviceDialog).toBeHidden()
+  await expect(page.getByText('฿750.50', { exact: true })).toBeVisible()
+  let editedService
+  await env.withSecurityRulesDisabled(async context => { editedService = await context.firestore().doc('services/svc').get() })
+  assert.equal(editedService.data().price, 750.5)
+  assert.equal(editedService.data().catalogScope, 'shared', 'Editing must preserve the central catalog scope')
+  await page.screenshot({ path: 'test-results/service-edit.png', fullPage: true })
   await page.goto('http://localhost:3106/pos')
   await page.getByText('สินค้าทดสอบ', { exact: true }).first().click()
   await page.getByRole('button', { name: 'พักบิล', exact: true }).click()
@@ -135,7 +151,7 @@ try {
   await page.screenshot({ path: 'test-results/pos-mobile.png', fullPage: true })
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'Mobile page must not overflow horizontally')
   assert.deepEqual(errors, [])
-  console.log('UI smoke passed: park/recover, global search, deposit checkout, reports, accounting, activity log, branch navigation/reload/profile updates/archived branch/role restrictions, mobile layout')
+  console.log('UI smoke passed: service edit, park/recover, global search, deposit checkout, reports, accounting, activity log, branch navigation/reload/profile updates/archived branch/role restrictions, mobile layout')
 } finally {
   await browser.close()
   await env.cleanup()

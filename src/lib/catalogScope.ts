@@ -20,10 +20,11 @@ export interface CatalogBranch {
 }
 
 const normalize = (value?: string) => value?.trim().toLowerCase() ?? ''
+const isActiveBranch = (branch: CatalogBranch) => !['inactive', 'deleted', 'archived'].includes(branch.status ?? 'active')
 
 export function getActiveBranchIds(branches: CatalogBranch[], fallbackBranchId?: string) {
   const ids = branches
-    .filter(branch => branch.status !== 'inactive' && branch.status !== 'deleted')
+    .filter(isActiveBranch)
     .map(branch => branch.id)
     .filter(Boolean)
 
@@ -35,7 +36,7 @@ export function findCatalogMainBranch(
   branches: CatalogBranch[],
   fallbackBranchId?: string
 ) {
-  const activeBranches = branches.filter(branch => branch.status !== 'inactive' && branch.status !== 'deleted')
+  const activeBranches = branches.filter(isActiveBranch)
   const yumikoMain = activeBranches.find(branch =>
     branch.isMainBranch && normalize(branch.name).includes('yumiko wig studio')
   )
@@ -89,9 +90,9 @@ export function isCatalogVisibleInBranch(
   if (!currentBranchId) return false
   if (item.status === 'deleted' || item.status === 'archived' || item.isActive === false) return false
   if (item.excludedBranchIds?.includes(currentBranchId)) return false
+  if (item.catalogScope === 'shared') return true
   if (item.visibleBranchIds?.includes(currentBranchId)) return true
 
-  if (item.catalogScope === 'shared') return !item.visibleBranchIds || item.visibleBranchIds.length === 0
   if (item.catalogScope === 'branch') {
     return item.branchId === currentBranchId || item.sourceBranchId === currentBranchId
   }
