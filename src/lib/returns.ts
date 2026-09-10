@@ -46,6 +46,7 @@ export async function recordReturn(input: { sale: Sale; quantities: number[]; re
     if (!saleSnap.exists()) throw new Error('ไม่พบบิล')
     const live = { id: saleSnap.id, ...convertTimestamps(saleSnap.data()) } as Sale
     if (live.companyId !== sale.companyId || live.branchId !== sale.branchId) throw new Error('สาขาของบิลไม่ตรงกัน')
+    if (live.items.some((item, index) => item.course && input.quantities[index] > 0)) throw new Error('คอร์สต้องยกเลิกผ่านบิลต้นทางเพื่อปิดสิทธิ์พร้อมกัน ไม่สามารถคืนเป็นสินค้าทั่วไปได้')
     if (live.status === 'cancelled' || live.paymentStatus === 'pending' || live.paymentStatus === 'rejected') throw new Error('คืนได้เฉพาะบิลที่รับชำระแล้วและยังไม่ยกเลิก')
     const previous = totalsSnap.exists() ? totalsSnap.data().quantities as Record<string, number> : legacy.quantities
     const refund = calculateReturn(live, input.quantities, previous)

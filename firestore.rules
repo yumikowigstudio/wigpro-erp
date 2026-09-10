@@ -167,9 +167,10 @@ service cloud.firestore {
 
     match /customer_work_cases/{caseId} {
       allow read: if isStaff() && canReadCompanyData();
+      allow get: if isStaff() && !exists(/databases/$(database)/documents/customer_work_cases/$(caseId));
       allow create: if isStaff() && canCreateCompanyData();
       allow update: if isStaff() && canUpdateCompanyData();
-      allow delete: if isStaff() && canDeleteCompanyData();
+      allow delete: if isStaff() && canDeleteCompanyData() && !('workOrderId' in resource.data);
     }
 
     match /customer_images/{imageId} {
@@ -197,7 +198,120 @@ service cloud.firestore {
       allow read: if isStaff() && canReadCompanyData();
       allow create: if isStaff() && canCreateCompanyData();
       allow update: if isStaff() && canUpdateCompanyData();
-      allow delete: if isStaff() && canDeleteCompanyData();
+      allow delete: if isStaff() && canDeleteCompanyData() && !('courseId' in resource.data);
+    }
+
+    function courseAccess(companyId) {
+      let profile = getUserData();
+      return request.auth != null && profile.isActive != false
+        && (profile.companyId == companyId || profile.role == 'super_admin')
+        && profile.role in ['super_admin', 'owner', 'branch_manager', 'sales', 'stylist', 'staff', 'accountant'];
+    }
+
+    function courseManager() {
+      return getUserData().role in ['super_admin', 'owner', 'branch_manager'];
+    }
+
+    function validCourseExpiry(data) {
+      return (data.template.validityDays == null && data.expiresAt == null)
+        || (data.template.validityDays is int && data.template.validityDays > 0
+          && data.expiresAt is timestamp
+          && data.expiresAt <= request.time + duration.value(data.template.validityDays, 'd')
+          && data.expiresAt >= request.time + duration.value(data.template.validityDays, 'd') - duration.value(5, 'm'));
+    }
+
+    function validCoursePurchase(courseId) {
+      let data = request.resource.data;
+      let sale = getAfter(/databases/$(database)/documents/sales/$(data.saleId)).data;
+      let catalogService = get(/databases/$(database)/documents/services/$(data.serviceId)).data;
+      return data.lineIndex is int && data.lineIndex >= 0 && data.lineIndex < sale.items.size()
+        && data.unitIndex is int && data.unitIndex >= 0 && data.unitIndex < sale.items[data.lineIndex].quantity
+        && courseId == data.saleId + '_' + string(data.lineIndex) + '_' + string(data.unitIndex)
+        && courseId in sale.courseIds && data.companyId == sale.companyId && data.customerId == sale.customerId
+        && data.customerId != '' && data.serviceId == sale.items[data.lineIndex].serviceId
+        && data.template == catalogService.course && data.template == sale.items[data.lineIndex].course
+        && data.totalUnits == data.template.paidUnits + data.template.bonusUnits
+        && data.totalUnits > 0 && data.usedUnits == 0 && data.remainingUnits == data.totalUnits
+        && data.lastEventId == courseId + '_purchase' && data.createdAt == request.time
+        && ((sale.paymentStatus == 'confirmed' && data.status == 'active' && data.activatedAt == request.time && validCourseExpiry(data))
+          || (sale.paymentStatus == 'pending' && data.status == 'pending' && data.activatedAt == null && data.expiresAt == null))
+        && getAfter(/databases/$(database)/documents/course_events/$(data.lastEventId)).data.kind == 'purchase'
+        && getAfter(/databases/$(database)/documents/course_events/$(data.lastEventId)).data.units == data.totalUnits;
+    }
+
+    function validCourseUse(before, after, event) {
+      let sale = get(/databases/$(database)/documents/sales/$(before.saleId)).data;
+      let record = getAfter(/databases/$(database)/documents/service_records/$(after.lastEventId)).data;
+      let staff = get(/databases/$(database)/documents/employees/$(event.staffId)).data;
+      let branch = get(/databases/$(database)/documents/branches/$(event.branchId)).data;
+      return before.status == 'active' && after.status == 'active'
+        && (before.expiresAt == null || before.expiresAt > request.time)
+        && sale.status != 'cancelled' && sale.paymentStatus == 'confirmed'
+        && event.serviceId in before.template.serviceIds && event.units is int && event.units > 0
+        && (before.template.branchIds.size() == 0 || event.branchId in before.template.branchIds)
+        && (courseManager() || event.branchId == getUserData().branchId)
+        && branch.companyId == before.companyId && staff.companyId == before.companyId && staff.status == 'active'
+        && branch.get('isActive', true) != false && !(branch.get('status', 'active') in ['inactive', 'archived'])
+        && after.usedUnits == before.usedUnits + event.units
+        && after.remainingUnits == before.remainingUnits - event.units
+        && record.courseId == event.courseId && record.courseEventId == after.lastEventId
+        && record.customerId == before.customerId && record.serviceId == event.serviceId
+        && after.activatedAt == before.activatedAt && after.expiresAt == before.expiresAt;
+    }
+
+    function validCourseReverse(before, after, event) {
+      let original = get(/databases/$(database)/documents/course_events/$(event.reverseOf)).data;
+      return courseManager() && before.status == 'active' && after.status == 'active'
+        && after.lastEventId == event.reverseOf + '_reverse' && original.kind == 'use'
+        && original.courseId == event.courseId && original.units == event.units
+        && event.note is string && event.note.size() > 0
+        && after.usedUnits == before.usedUnits - event.units && after.remainingUnits == before.remainingUnits + event.units
+        && after.activatedAt == before.activatedAt && after.expiresAt == before.expiresAt
+        && getAfter(/databases/$(database)/documents/service_records/$(event.reverseOf)).data.reversed == true;
+    }
+
+    function validCourseUpdate(courseId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let event = getAfter(/databases/$(database)/documents/course_events/$(after.lastEventId)).data;
+      return after.diff(before).affectedKeys().hasOnly(['usedUnits', 'remainingUnits', 'status', 'lastEventId', 'updatedAt', 'activatedAt', 'expiresAt'])
+        && after.usedUnits is int && after.usedUnits >= 0 && after.usedUnits <= before.totalUnits
+        && after.remainingUnits is int && after.remainingUnits >= 0 && after.remainingUnits <= before.totalUnits
+        && (after.status == 'cancelled' || after.usedUnits + after.remainingUnits == before.totalUnits)
+        && after.lastEventId != before.lastEventId
+        && !exists(/databases/$(database)/documents/course_events/$(after.lastEventId))
+        && event.courseId == courseId && event.companyId == before.companyId && event.customerId == before.customerId
+        && event.userId == request.auth.uid && event.balance == after.remainingUnits
+        && after.updatedAt == request.time
+        && ((event.kind == 'use' && validCourseUse(before, after, event))
+          || (event.kind == 'reverse' && validCourseReverse(before, after, event))
+          || (event.kind == 'activate' && courseManager() && before.status == 'pending' && after.status == 'active'
+            && after.usedUnits == 0 && after.remainingUnits == before.totalUnits && after.activatedAt == request.time
+            && validCourseExpiry(after) && getAfter(/databases/$(database)/documents/sales/$(before.saleId)).data.paymentStatus == 'confirmed'
+            && getAfter(/databases/$(database)/documents/sales/$(before.saleId)).data.status != 'cancelled')
+          || (event.kind == 'cancel' && courseManager() && before.status != 'cancelled' && after.status == 'cancelled'
+            && after.usedUnits == before.usedUnits && after.remainingUnits == 0
+            && after.expiresAt == before.expiresAt && after.activatedAt == before.activatedAt
+            && event.units == before.remainingUnits && event.note is string && event.note.size() > 0));
+    }
+
+    match /customer_courses/{courseId} {
+      allow read: if courseAccess(resource.data.companyId);
+      allow create: if courseAccess(request.resource.data.companyId) && validCoursePurchase(courseId);
+      allow update: if courseAccess(resource.data.companyId) && validCourseUpdate(courseId);
+      allow delete: if false;
+    }
+
+    match /course_events/{eventId} {
+      allow read: if courseAccess(resource.data.companyId);
+      allow get: if isStaff() && !exists(/databases/$(database)/documents/course_events/$(eventId));
+      allow create: if courseAccess(request.resource.data.companyId)
+        && request.resource.data.userId == request.auth.uid && request.resource.data.createdAt == request.time
+        && getAfter(/databases/$(database)/documents/customer_courses/$(request.resource.data.courseId)).data.lastEventId == eventId
+        && getAfter(/databases/$(database)/documents/customer_courses/$(request.resource.data.courseId)).data.companyId == request.resource.data.companyId
+        && getAfter(/databases/$(database)/documents/customer_courses/$(request.resource.data.courseId)).data.customerId == request.resource.data.customerId
+        && getAfter(/databases/$(database)/documents/customer_courses/$(request.resource.data.courseId)).data.remainingUnits == request.resource.data.balance;
+      allow update, delete: if false;
     }
 
     match /appointments/{appointmentId} {
@@ -207,10 +321,32 @@ service cloud.firestore {
       allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
+    function validCatalogArchive() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let source = before.get('sourceBranchId', before.get('branchId', ''));
+      return after.get('status', '') != 'archived' || before.get('status', '') == 'archived'
+        || (after.archivedBy == request.auth.uid && after.archivedAt == request.time
+          && after.isActive == false && after.archivedReason is string && after.archivedReason.size() > 0
+          && (isOwner() || after.archivedFromBranchId == getUserData().branchId)
+          && (source == after.archivedFromBranchId || (source in ['', 'main'] && isOwner()))
+          && after.diff(before).affectedKeys().hasOnly(['status', 'isActive', 'archivedAt', 'archivedBy', 'archivedReason', 'archivedFromBranchId', 'archiveOperationId', 'updatedAt'])
+          && getAfter(/databases/$(database)/documents/catalog_archive_operations/$(after.archiveOperationId)).data.companyId == before.companyId
+          && getAfter(/databases/$(database)/documents/catalog_archive_operations/$(after.archiveOperationId)).data.userId == request.auth.uid);
+    }
+
+    match /catalog_archive_operations/{operationId} {
+      allow read: if isBranchManager() && canReadCompanyData();
+      allow get: if isBranchManager() && !exists(/databases/$(database)/documents/catalog_archive_operations/$(operationId));
+      allow create: if isBranchManager() && canCreateCompanyData()
+        && request.resource.data.userId == request.auth.uid && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
     match /products/{productId} {
       allow read: if isStaff() && canReadCompanyData();
       allow create: if isBranchManager() && canCreateCompanyData();
-      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData() && validCatalogArchive();
       allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 
@@ -231,7 +367,7 @@ service cloud.firestore {
     match /services/{serviceId} {
       allow read: if isStaff() && canReadCompanyData();
       allow create: if isBranchManager() && canCreateCompanyData();
-      allow update: if isBranchManager() && canUpdateCompanyData();
+      allow update: if isBranchManager() && canUpdateCompanyData() && validCatalogArchive();
       allow delete: if isBranchManager() && canDeleteCompanyData();
     }
 

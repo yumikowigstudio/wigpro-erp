@@ -5,6 +5,7 @@ import {
   findCatalogMainBranch,
   getActiveBranchIds,
   isCatalogVisibleInBranch,
+  canArchiveCatalogItem,
 } from '../src/lib/catalogScope'
 
 const branches = [
@@ -37,4 +38,14 @@ test('archived catalog items are hidden from every branch', () => {
   const item = { ...buildCatalogScopeFields('main', ['main', 'branch-a'], true), status: 'archived' }
   assert.equal(isCatalogVisibleInBranch(item, 'main', 'main'), false)
   assert.equal(isCatalogVisibleInBranch(item, 'branch-a', 'main'), false)
+})
+
+test('catalog archiving is limited to the source branch and cannot select archived items', () => {
+  const shared = buildCatalogScopeFields('main', ['main', 'branch-a'], true)
+  const local = buildCatalogScopeFields('branch-a', ['main', 'branch-a'], false)
+  assert.equal(canArchiveCatalogItem(shared, 'main', 'main'), true)
+  assert.equal(canArchiveCatalogItem(shared, 'branch-a', 'main'), false)
+  assert.equal(canArchiveCatalogItem(local, 'main', 'main'), false)
+  assert.equal(canArchiveCatalogItem(local, 'branch-a', 'main'), true)
+  assert.equal(canArchiveCatalogItem({ ...shared, status: 'archived' }, 'main', 'main'), false)
 })

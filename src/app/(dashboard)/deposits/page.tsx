@@ -1,14 +1,15 @@
 'use client'
 import { CancelFinancialDocument } from '@/components/CancelFinancialDocument'
-import { useState, useEffect, useRef } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { formatDate, formatCurrency } from '@/lib/utils'
-import { Plus, Search, CreditCard, CheckCircle, Clock, XCircle, Loader2, X, AlertTriangle, CalendarDays, UserRound } from 'lucide-react'
-import { collection, onSnapshot, query, where } from 'firebase/firestore'
+import { Plus, Search, CreditCard, CheckCircle, Clock, XCircle, Loader2, X, AlertTriangle, CalendarDays, UserRound, Banknote, Landmark, QrCode, Save } from 'lucide-react'
+import { collection, doc, getDoc, onSnapshot, query, serverTimestamp, setDoc, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS, addDocument, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
 import { receiveDepositPayment } from '@/lib/depositPayments'
+import { printDepositReceipt } from '@/lib/depositReceipt'
 import { depositPaid, depositPayments, depositRemaining, money } from '@/lib/money'
 import { Deposit } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
@@ -26,11 +27,19 @@ const statusConfig: Record<DepositStatus, { label: string; color: string; icon: 
 const inputClass = 'w-full px-4 py-2.5 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all'
 
 const PAY_METHODS = [
-  { id: 'cash', label: 'เงินสด', icon: '💵' },
-  { id: 'transfer', label: 'โอนเงิน', icon: '🏦' },
-  { id: 'qr', label: 'พร้อมเพย์', icon: '📱' },
-  { id: 'credit_card', label: 'บัตร', icon: '💳' },
+  { id: 'cash', label: 'เงินสด', icon: Banknote },
+  { id: 'transfer', label: 'โอนเงิน', icon: Landmark },
+  { id: 'qr', label: 'พร้อมเพย์', icon: QrCode },
+  { id: 'credit_card', label: 'บัตร', icon: CreditCard },
 ]
+
+const DEFAULT_RECEIPT_NOTE_TEMPLATES = [
+  'กรุณาเก็บใบเสร็จนี้ไว้เป็นหลักฐาน / Please keep this receipt as proof of purchase.',
+  'รับประกันสินค้า 7 วัน ตามเงื่อนไขของร้าน / 7-day warranty under store policy.',
+  'สินค้าสั่งผลิตไม่รับคืนหรือเปลี่ยนหลังเริ่มผลิต / Custom-made items are non-refundable after production starts.',
+]
+
+const uniqTexts = (values: string[]) => Array.from(new Set(values.map(value => value.trim()).filter(Boolean)))
 
 const parsePickupDate = (value?: string) => {
   if (!value) return null
@@ -59,8 +68,8 @@ const isDueSoonDeposit = (deposit: Deposit) => {
   return date >= today && date <= nextWeek
 }
 
-function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, saving, onClose, onConfirm }:
-  { deposit: Deposit; payAmount: string; setPayAmount: (v:string)=>void; payMethod: string; setPayMethod: (v:string)=>void; saving: boolean; onClose: ()=>void; onConfirm: ()=>void }) {
+function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, receiptItems, setReceiptItems, receiptNote, setReceiptNote, receiptNoteTemplates, templateSaving, onSaveTemplate, saving, onClose, onConfirm }:
+  { deposit: Deposit; payAmount: string; setPayAmount: (v:string)=>void; payMethod: string; setPayMethod: (v:string)=>void; receiptItems: Deposit['items']; setReceiptItems: (items: Deposit['items'])=>void; receiptNote: string; setReceiptNote: (v:string)=>void; receiptNoteTemplates: string[]; templateSaving: boolean; onSaveTemplate: ()=>void; saving: boolean; onClose: ()=>void; onConfirm: ()=>void }) {
   const method = payMethod
   const setMethod = setPayMethod
   const paid = parseFloat(payAmount) || 0
@@ -69,7 +78,7 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+      <div role="dialog" aria-modal="true" aria-label={`รับชำระส่วนที่เหลือ ${deposit.depositNo}`} className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
         {/* Header */}
         <div className="bg-gradient-to-r from-emerald-500 to-teal-500 p-5 text-white">
           <div className="flex items-center justify-between">
@@ -83,15 +92,31 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
           </div>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="min-h-0 space-y-4 overflow-y-auto p-5 pb-0">
           {/* Deposit details */}
           <div className="bg-[var(--bg-base)] rounded-2xl p-4 space-y-2.5 text-sm">
-            {deposit.items?.[0]?.name && (
-              <div className="flex justify-between">
-                <span className="text-[var(--text-muted)]">รายการ</span>
-                <span className="font-medium text-right max-w-[180px]">{deposit.items[0].name}</span>
+            <div>
+              <p className="mb-2 text-xs font-semibold text-[var(--text-secondary)]">รายการสินค้าและบริการ</p>
+              <div className="max-h-36 space-y-2 overflow-y-auto rounded-xl border border-[var(--border-light)] bg-white p-3">
+                {receiptItems.map((item, index) => (
+                  <div key={`${item.productId || item.serviceId || item.name}-${index}`} className="border-b border-dashed border-[var(--border-light)] pb-2 last:border-0 last:pb-0">
+                    <div className="flex items-start justify-between gap-3 text-xs">
+                      <span className="min-w-0 font-medium text-[var(--text-primary)]">{item.name} × {item.quantity}</span>
+                      <span className="shrink-0 font-semibold">{formatCurrency(item.total)}</span>
+                    </div>
+                    {item.workGroupName && <p className="mt-1 text-[11px] text-[var(--text-muted)]">ชิ้นงาน: {item.workGroupName}</p>}
+                    <textarea
+                      aria-label={`หมายเหตุรายการ ${item.name}`}
+                      value={item.note ?? ''}
+                      onChange={event => setReceiptItems(receiptItems.map((current, currentIndex) => currentIndex === index ? { ...current, note: event.target.value } : current))}
+                      rows={1}
+                      className="mt-2 w-full resize-y rounded-lg border border-[var(--border-light)] bg-[var(--bg-base)] px-2.5 py-1.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]"
+                      placeholder="หมายเหตุของรายการนี้"
+                    />
+                  </div>
+                ))}
               </div>
-            )}
+            </div>
             {deposit.notes && (
               <div className="flex justify-between gap-3">
                 <span className="text-[var(--text-muted)] shrink-0">สเปค/หมายเหตุ</span>
@@ -111,7 +136,7 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
             </div>
             <div className="flex justify-between">
               <span className="text-[var(--text-muted)]">มัดจำที่รับไว้</span>
-              <span className="text-blue-600">{formatCurrency(deposit.depositAmount)}</span>
+              <span className="text-blue-600">{formatCurrency(depositPaid(deposit))}</span>
             </div>
             <div className="flex justify-between font-bold">
               <span className="text-red-500">ยอดที่ต้องชำระ</span>
@@ -127,7 +152,7 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
                 <button key={m.id} type="button" onClick={() => setMethod(m.id)}
                   className={`py-2.5 rounded-xl text-xs font-medium border transition-all flex flex-col items-center gap-1
                     ${method === m.id ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'bg-[var(--bg-base)] border-[var(--border-light)] text-[var(--text-secondary)]'}`}>
-                  <span className="text-lg">{m.icon}</span>{m.label}
+                  <m.icon className="h-4 w-4" />{m.label}
                 </button>
               ))}
             </div>
@@ -154,34 +179,63 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
               {isEnough ? (
                 <div className="space-y-1">
                   <div className="flex justify-between font-bold text-emerald-700">
-                    <span>✅ รับเงิน</span><span>{formatCurrency(paid)}</span>
+                    <span className="flex items-center gap-1.5"><CheckCircle className="h-4 w-4" />รับเงิน</span><span>{formatCurrency(paid)}</span>
                   </div>
                   {change > 0 && <div className="flex justify-between text-emerald-600">
-                    <span>💵 เงินทอน</span><span className="font-bold">{formatCurrency(change)}</span>
+                    <span className="flex items-center gap-1.5"><Banknote className="h-4 w-4" />เงินทอน</span><span className="font-bold">{formatCurrency(change)}</span>
                   </div>}
                 </div>
               ) : (
                 <div className="flex justify-between font-medium text-red-600">
-                  <span>⚠️ รับไม่ครบ ขาดอีก</span><span>{formatCurrency(deposit.remainingAmount - paid)}</span>
+                  <span className="flex items-center gap-1.5"><AlertTriangle className="h-4 w-4" />รับไม่ครบ ขาดอีก</span><span>{formatCurrency(deposit.remainingAmount - paid)}</span>
                 </div>
               )}
             </div>
           )}
 
-          {/* Buttons */}
-          <div className="flex gap-3 pt-1">
-            <button type="button" onClick={onClose}
-              className="flex-1 py-2.5 border border-[var(--border-light)] rounded-xl text-sm font-semibold text-[var(--text-secondary)]">
-              ยกเลิก
-            </button>
-            <button onClick={onConfirm} disabled={saving || paid <= 0}
-              className="flex-1 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-xl text-sm font-bold disabled:opacity-40 transition-all">
-              {saving ? 'กำลังบันทึก...' : '✅ ยืนยันรับเงิน'}
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold text-[var(--text-secondary)]">หมายเหตุท้ายใบเสร็จ / Receipt note</label>
+            <select
+              aria-label="ข้อความหมายเหตุที่บันทึกไว้"
+              value={receiptNoteTemplates.includes(receiptNote.trim()) ? receiptNote.trim() : ''}
+              onChange={event => setReceiptNote(event.target.value)}
+              className={inputClass}
+            >
+              <option value="">เลือกข้อความที่บันทึกไว้</option>
+              {receiptNoteTemplates.map(template => <option key={template} value={template}>{template}</option>)}
+            </select>
+            <textarea
+              aria-label="หมายเหตุท้ายใบเสร็จ"
+              value={receiptNote}
+              onChange={event => setReceiptNote(event.target.value)}
+              rows={3}
+              className={`${inputClass} resize-y whitespace-pre-wrap`}
+              placeholder="เช่น เงื่อนไขรับประกัน หรือข้อความแจ้งลูกค้า"
+            />
+            <button
+              type="button"
+              onClick={onSaveTemplate}
+              disabled={!receiptNote.trim() || templateSaving}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--pink-600)] disabled:opacity-40"
+            >
+              {templateSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              บันทึกข้อความนี้เป็นตัวเลือก
             </button>
           </div>
-          {isEnough && paid > 0 && (
-            <p className="text-center text-xs text-[var(--text-muted)]">🖨️ ระบบจะพิมพ์ใบเสร็จอัตโนมัติเมื่อชำระครบ</p>
-          )}
+
+          <div className="sticky bottom-0 -mx-5 border-t border-[var(--border-light)] bg-white px-5 py-4 shadow-[0_-8px_18px_rgba(0,0,0,0.04)]">
+            <div className="flex gap-3">
+              <button type="button" onClick={onClose}
+                className="flex-1 py-2.5 border border-[var(--border-light)] rounded-xl text-sm font-semibold text-[var(--text-secondary)]">
+                ยกเลิก
+              </button>
+              <button onClick={onConfirm} disabled={saving || paid <= 0}
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700 disabled:opacity-40">
+                {saving ? <><Loader2 className="h-4 w-4 animate-spin" />กำลังบันทึก...</> : <><CheckCircle className="h-4 w-4" />ยืนยันรับเงิน</>}
+              </button>
+            </div>
+            {paid > 0 && <p className="mt-2 text-center text-xs text-[var(--text-muted)]">ระบบจะเปิดใบรับเงินหลังบันทึกสำเร็จ</p>}
+          </div>
         </div>
       </div>
     </div>
@@ -191,6 +245,7 @@ function PayModal({ deposit, payAmount, setPayAmount, payMethod, setPayMethod, s
 export default function DepositsPage() {
   const paymentAttempt = useRef('')
   const paymentBusy = useRef(false)
+  const autoOpenedPayment = useRef('')
   const searchParams = useSearchParams()
   const { companyId, branchId, userId, userName, currentBranch } = useAuth()
   const { ensurePermission } = usePermissionAction()
@@ -205,6 +260,10 @@ export default function DepositsPage() {
   const [form, setForm] = useState({ customerName: '', itemName: '', totalAmount: '', depositAmount: '', notes: '' })
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('cash')
+  const [payReceiptItems, setPayReceiptItems] = useState<Deposit['items']>([])
+  const [payReceiptNote, setPayReceiptNote] = useState('')
+  const [receiptNoteTemplates, setReceiptNoteTemplates] = useState(DEFAULT_RECEIPT_NOTE_TEMPLATES)
+  const [templateSaving, setTemplateSaving] = useState(false)
 
   useEffect(() => {
     setSearch(searchParams.get('q') ?? '')
@@ -230,6 +289,52 @@ export default function DepositsPage() {
       setLoading(false)
     }, () => setLoading(false))
   }, [companyId])
+
+  useEffect(() => {
+    if (!companyId) return
+    getDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId)).then(snapshot => {
+      const saved = snapshot.exists() && Array.isArray(snapshot.data().receiptNoteTemplates)
+        ? snapshot.data().receiptNoteTemplates.map((value: unknown) => String(value))
+        : []
+      setReceiptNoteTemplates(uniqTexts([...DEFAULT_RECEIPT_NOTE_TEMPLATES, ...saved]))
+    }).catch(console.error)
+  }, [companyId])
+
+  const openPayModal = useCallback((deposit: Deposit) => {
+    paymentAttempt.current = ''
+    setShowPayModal(deposit)
+    setPayAmount(String(deposit.remainingAmount ?? 0))
+    setPayMethod('cash')
+    setPayReceiptItems((deposit.items ?? []).map(item => ({ ...item })))
+    setPayReceiptNote(deposit.receiptNote ?? '')
+  }, [])
+
+  useEffect(() => {
+    const payId = searchParams.get('pay') ?? ''
+    if (!payId || autoOpenedPayment.current === payId || deposits.length === 0) return
+    const deposit = deposits.find(item => item.id === payId)
+    if (!deposit || deposit.status === 'cancelled' || deposit.closedBySaleId || deposit.remainingAmount <= 0) return
+    autoOpenedPayment.current = payId
+    openPayModal(deposit)
+  }, [deposits, openPayModal, searchParams])
+
+  const saveReceiptNoteTemplate = async () => {
+    const text = payReceiptNote.trim()
+    if (!text || !companyId || templateSaving) return
+    const nextTemplates = uniqTexts([...receiptNoteTemplates, text])
+    setTemplateSaving(true)
+    try {
+      await setDoc(doc(db, COLLECTIONS.SYSTEM_SETTINGS, companyId), {
+        receiptNoteTemplates: nextTemplates,
+        updatedAt: serverTimestamp(),
+      }, { merge: true })
+      setReceiptNoteTemplates(nextTemplates)
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'บันทึกตัวเลือกหมายเหตุไม่สำเร็จ')
+    } finally {
+      setTemplateSaving(false)
+    }
+  }
 
   const matchesStatus = (deposit: Deposit) => {
     if (!filterStatus) return true
@@ -290,70 +395,16 @@ export default function DepositsPage() {
       const amount = parseFloat(payAmount) || 0
       const received = payMethod === 'cash' ? Math.min(amount, showPayModal.remainingAmount) : amount
       paymentAttempt.current ||= crypto.randomUUID()
-      const updated = await receiveDepositPayment(showPayModal, { id: paymentAttempt.current, amount: money(received), method: payMethod, receivedAt: new Date(), receivedBy: userId, receivedByName: userName, confirmed: true })
-      if (updated.remainingAmount <= 0) printPickupReceipt(showPayModal, amount, payMethod || 'cash')
+      const paymentId = paymentAttempt.current
+      const updated = await receiveDepositPayment(showPayModal, { id: paymentId, amount: money(received), method: payMethod, receivedAt: new Date(), receivedBy: userId, receivedByName: userName, receiptItems: payReceiptItems.map(item => ({ ...item, note: item.note?.trim() || undefined })), receiptNote: payReceiptNote.trim(), confirmed: true })
+      try { printDepositReceipt(updated, { tendered: amount, paymentId }) } catch (error) { alert(error instanceof Error ? error.message : 'พิมพ์ไม่สำเร็จ สามารถพิมพ์ใหม่จากรายการมัดจำ') }
       paymentAttempt.current = ''
-      setShowPayModal(null); setPayAmount(''); setPayMethod('cash')
+      setShowPayModal(null); setPayAmount(''); setPayMethod('cash'); setPayReceiptItems([]); setPayReceiptNote('')
     } catch (err) { alert(err instanceof Error ? err.message : 'รับชำระไม่สำเร็จ') }
     finally { setSaving(false); paymentBusy.current = false }
   }
 
 
-  const printPickupReceipt = (dep: Deposit, paid: number, method: string) => {
-    const methodLabel: Record<string,string> = { cash:'เงินสด', transfer:'โอนเงิน', card:'บัตรเครดิต/เดบิต', credit_card:'บัตรเครดิต/เดบิต', qr:'QR', promptpay:'พร้อมเพย์' }
-    const change = Math.max(paid - dep.remainingAmount, 0)
-    const receiptInfo = dep.receiptInfo
-    const branchName = receiptInfo?.branchName || dep.branchName || ''
-    const branchCode = receiptInfo?.branchCode || dep.branchCode || ''
-    const win = window.open('', '_blank', 'width=400,height=600')
-    if (!win) return
-    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>ใบเสร็จรับเงิน</title>
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
-      *{margin:0;padding:0;box-sizing:border-box}
-      body{font-family:'Sarabun',sans-serif;font-size:13px;color:#111;padding:24px;max-width:320px;margin:0 auto}
-      .center{text-align:center}.bold{font-weight:700}.muted{color:#666;font-size:11px}.shop{margin-bottom:10px}.shop-name{font-size:16px;font-weight:700}.shop-sub{font-size:11px;color:#666;white-space:pre-line}.logo{height:44px;max-width:120px;object-fit:contain;margin:0 auto 6px;display:block}
-      .divider{border:none;border-top:1px dashed #ccc;margin:10px 0}
-      .row{display:flex;justify-content:space-between;padding:3px 0}
-      .badge{display:inline-block;background:#d1fae5;color:#065f46;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
-      .highlight{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px;margin:8px 0}
-      .total-row{font-size:15px;font-weight:700}
-      @media print{body{padding:8px}}
-    </style></head><body>
-    ${receiptInfo ? `<div class="center shop">
-      ${receiptInfo.logoUrl ? `<img class="logo" src="${receiptInfo.logoUrl}" alt="logo"/>` : ''}
-      ${receiptInfo.nameTh ? `<div class="shop-name">${receiptInfo.nameTh}</div>` : ''}
-      ${branchName ? `<div class="shop-sub">สาขา ${branchName}${branchCode ? ` (${branchCode})` : ''}</div>` : ''}
-      ${receiptInfo.address ? `<div class="shop-sub">${receiptInfo.address}</div>` : ''}
-      ${receiptInfo.phone ? `<div class="shop-sub">โทร. ${receiptInfo.phone}</div>` : ''}
-      ${receiptInfo.email ? `<div class="shop-sub">${receiptInfo.email}</div>` : ''}
-      ${receiptInfo.taxId ? `<div class="shop-sub">เลขผู้เสียภาษี ${receiptInfo.taxId}</div>` : ''}
-    </div>` : branchName ? `<div class="center shop"><div class="shop-sub">สาขา ${branchName}${branchCode ? ` (${branchCode})` : ''}</div></div>` : ''}
-    <div class="center" style="margin-bottom:12px">
-      <div style="font-size:18px;font-weight:700;color:#059669">✅ ใบเสร็จรับวิก</div>
-      <div class="muted">รับวิกและชำระเงินครบแล้ว</div>
-      <div class="badge" style="margin-top:6px">ชำระครบ</div>
-    </div>
-    <hr class="divider">
-    <div class="row"><span class="muted">เลขที่</span><span class="bold">${dep.depositNo}</span></div>
-    <div class="row"><span class="muted">วันที่รับ</span><span>${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</span></div>
-    <div class="row"><span class="muted">ลูกค้า</span><span class="bold">${dep.customerName}</span></div>
-    ${dep.items?.[0]?.name ? `<div class="row"><span class="muted">รายการ</span><span>${dep.items[0].name}</span></div>` : ''}
-    ${dep.notes ? `<div class="row"><span class="muted">สเปค</span><span style="font-size:11px;max-width:180px;text-align:right">${dep.notes}</span></div>` : ''}
-    <hr class="divider">
-    <div class="row"><span class="muted">ยอดรวม</span><span>${dep.totalAmount.toLocaleString('th-TH',{minimumFractionDigits:2})} ฿</span></div>
-    <div class="row"><span class="muted">มัดจำที่รับไว้</span><span>${dep.depositAmount.toLocaleString('th-TH',{minimumFractionDigits:2})} ฿</span></div>
-    <div class="highlight">
-      <div class="row total-row"><span>💰 รับชำระวันนี้</span><span>${paid.toLocaleString('th-TH',{minimumFractionDigits:2})} ฿</span></div>
-    </div>
-    ${change > 0 ? `<div class="row"><span class="muted">เงินทอน</span><span class="bold" style="color:#059669">${change.toLocaleString('th-TH',{minimumFractionDigits:2})} ฿</span></div>` : ''}
-    <div class="row"><span class="muted">ช่องทาง</span><span>${methodLabel[method]||method}</span></div>
-    <hr class="divider">
-    <div class="center muted" style="margin-top:8px">${receiptInfo?.receiptFooter || 'ขอบคุณที่ใช้บริการค่ะ 🙏'}</div>
-    <script>window.onload=()=>{window.print();window.onafterprint=()=>window.close()}<\/script>
-    </body></html>`)
-    win.document.close()
-  }
 
   return (
     <div className="space-y-6">
@@ -435,7 +486,7 @@ export default function DepositsPage() {
                     )}
                     <button
                       type="button"
-                      onClick={() => { setShowPayModal(dep); setPayAmount(String(dep.remainingAmount ?? 0)) }}
+                      onClick={() => openPayModal(dep)}
                       className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
                     >
                       รับชำระ
@@ -506,6 +557,7 @@ export default function DepositsPage() {
                           <div className="mt-2 space-y-2 min-w-48">{depositPayments(dep).map(payment => <div key={payment.id} className="border-b pb-2">
                             <p>{payment.receivedAt ? formatDate(payment.receivedAt) : 'ข้อมูลเดิม ไม่ระบุวันที่'} · {formatCurrency(payment.amount)}</p>
                             <p>{payment.method} · {payment.receivedByName || '-'} · {payment.confirmed ? 'ยืนยันแล้ว' : 'รอยืนยัน'}</p>
+                            {payment.confirmed && <button type="button" onClick={() => { try { printDepositReceipt(dep, { paymentId: payment.id }) } catch (error) { alert(error instanceof Error ? error.message : 'พิมพ์ไม่สำเร็จ') } }} className="mt-1 text-[var(--pink-600)] underline">พิมพ์รายการนี้</button>}
                             {!payment.confirmed && dep.status !== 'cancelled' && !dep.closedBySaleId && <button disabled={saving} onClick={async () => {
                               if (!await ensurePermission('action.sales.confirmPayment', 'ยืนยันรับเงินมัดจำ')) return
                               if (!window.confirm(`ยืนยันตรวจสอบและรับเงิน ${formatCurrency(payment.amount)} แล้ว?`)) return
@@ -528,13 +580,14 @@ export default function DepositsPage() {
                       <td className="px-4 py-3.5">
                         <div className="flex items-center gap-1.5">
                           {dep.status !== 'cancelled' && !dep.closedBySaleId && dep.remainingAmount > 0 && (
-                            <button onClick={() => { setShowPayModal(dep); setPayAmount(String(dep.remainingAmount)) }}
+                            <button onClick={() => openPayModal(dep)}
                               className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-medium hover:bg-emerald-100 transition-all whitespace-nowrap">
                               รับชำระ
                             </button>
                           )}
                           {dep.customerId && !dep.closedBySaleId && dep.status !== 'cancelled' && <Link href={`/pos?depositId=${dep.id}`} className="px-2 py-1 text-xs text-blue-700 underline whitespace-nowrap">เปิดบิลปิดมัดจำ</Link>}
                           <CancelFinancialDocument target={{ kind: 'deposit', record: dep }} />
+                          <button type="button" className="px-2 py-1 text-xs text-[var(--pink-600)] underline whitespace-nowrap" onClick={() => { try { printDepositReceipt(dep) } catch (error) { alert(error instanceof Error ? error.message : 'พิมพ์ไม่สำเร็จ') } }}>พิมพ์ใบมัดจำ</button>
                         </div>
                       </td>
                     </tr>
@@ -596,8 +649,15 @@ export default function DepositsPage() {
           setPayAmount={setPayAmount}
           payMethod={payMethod}
           setPayMethod={setPayMethod}
+          receiptItems={payReceiptItems}
+          setReceiptItems={setPayReceiptItems}
+          receiptNote={payReceiptNote}
+          setReceiptNote={setPayReceiptNote}
+          receiptNoteTemplates={receiptNoteTemplates}
+          templateSaving={templateSaving}
+          onSaveTemplate={saveReceiptNoteTemplate}
           saving={saving}
-          onClose={() => { setShowPayModal(null); setPayAmount(''); setPayMethod('cash') }}
+          onClose={() => { paymentAttempt.current = ''; setShowPayModal(null); setPayAmount(''); setPayMethod('cash'); setPayReceiptItems([]); setPayReceiptNote('') }}
           onConfirm={handlePay}
         />
       )}

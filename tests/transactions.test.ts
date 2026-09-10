@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { initializeTestEnvironment, assertFails } from '@firebase/rules-unit-testing'
 import { connectAuthEmulator, signInAnonymously } from 'firebase/auth'
 import { connectFirestoreEmulator, doc, getDoc, setDoc, terminate } from 'firebase/firestore'
 import type { Deposit, Sale } from '../src/types'
+import type { CourseEvent, CustomerCourse } from '../src/lib/courseTypes'
 
 test('isolated transaction and tenant regression suite', { timeout: 120000 }, async t => {
   assert.equal(process.env.FIRESTORE_EMULATOR_HOST, '127.0.0.1:8086', 'Run through npm run test:emulator only')
@@ -24,6 +25,9 @@ test('isolated transaction and tenant regression suite', { timeout: 120000 }, as
   const { attachSaleSlip, confirmSalePayment } = await import('../src/lib/salePayments')
   const { depositCredit } = await import('../src/lib/money')
   const { convertTimestamps } = await import('../src/lib/firestore')
+  const { redeemCourse, reverseCourseUse, cancelCourseRights } = await import('../src/lib/courses')
+  const { saveWorkOrderPhoto } = await import('../src/lib/workOrderAlbums')
+  const { archiveCatalogItems } = await import('../src/lib/catalogArchive')
   const seed = async (path: string, data: Record<string, unknown>) => env.withSecurityRulesDisabled(async context => { await context.firestore().doc(path).set(data) })
   const read = async (path: string) => { const snap = await getDoc(doc(db, path)); return { id: snap.id, ...convertTimestamps(snap.data()!) } }
   const quantity = async (branch = 'main') => Number((await getDoc(doc(db, 'inventory', `p_${branch}`))).data()?.quantity ?? 0)
@@ -36,6 +40,7 @@ test('isolated transaction and tenant regression suite', { timeout: 120000 }, as
     await env.clearFirestore()
     await seed(`users/${user.uid}`, { companyId: 'co', branchId: 'main', role: 'owner', isActive: true })
     await seed('branches/main', { companyId: 'co', code: '00' })
+    await seed('customers/customer', { companyId: 'co', firstName: 'Customer' })
     await seed('branches/other', { companyId: 'co', code: '01' })
     await seed('products/p', { companyId: 'co', branchId: 'main', name: 'Product', catalogScope: 'shared', isActive: true })
     await seed('inventory/p_main', { companyId: 'co', branchId: 'main', productId: 'p', quantity: 10 })
@@ -99,7 +104,7 @@ test('isolated transaction and tenant regression suite', { timeout: 120000 }, as
       const data = { ...saleData('SERVICE'), items: [{ type: 'service', serviceId: 'service', name: 'Service', unitPrice: 100, quantity: 1, total: 100 }] }
       await commitCheckout({ id: 'service-sale', mode: 'sale', data, orders: [], allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' })
       assert.equal(await quantity(), 1)
-      await commitCheckout({ id: 'pending-deposit', mode: 'deposit', data: { ...data, depositNo: 'DEP-PENDING', depositAmount: 30, paidAmount: 0, remainingAmount: 100, paymentStatus: 'pending', status: 'pending', paymentHistory: [{ id: 'initial', amount: 30, confirmed: false, method: 'transfer', receivedAt: new Date() }], optional: undefined }, orders: [{ id: 'pending-work', data: { companyId: 'co', branchId: 'main', totalAmount: 100, remainingAmount: 70, status: 'waiting' } }], allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' })
+      await commitCheckout({ id: 'pending-deposit', mode: 'deposit', data: { ...data, depositNo: 'DEP-PENDING', depositAmount: 30, paidAmount: 0, remainingAmount: 100, paymentStatus: 'pending', status: 'pending', paymentHistory: [{ id: 'initial', amount: 30, confirmed: false, method: 'transfer', receivedAt: new Date() }], optional: undefined }, orders: [{ id: 'pending-work', data: { companyId: 'co', branchId: 'main', customerId: 'customer', orderNo: 'WO-PENDING', totalAmount: 100, remainingAmount: 70, status: 'waiting' } }], allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' })
       assert.equal((await getDoc(doc(db, 'work_orders/pending-work'))).data()?.remainingAmount, 100)
       const dep = await read('deposits/pending-deposit') as Deposit
       await receiveDepositPayment(dep, { id: 'initial', amount: 30, confirmed: true, method: 'transfer', receivedAt: new Date(), receivedBy: user.uid })
@@ -134,13 +139,137 @@ test('isolated transaction and tenant regression suite', { timeout: 120000 }, as
       await cancelDocument({ kind: 'sale', record: sale }, { reason: 'test', cancelProduction: false, userId: user.uid, userName: 'Tester' })
       assert.equal(depositCredit(await read('deposits/dep') as Deposit), 100)
     })
+    await t.test('multiple wig cases allocate deposit and later payment per piece', async () => {
+      const data = { ...saleData('MULTI'), items: [{ type: 'service', serviceId: 'service', name: 'Custom work and services', quantity: 1, unitPrice: 1200, total: 1200 }], totalAmount: 1200,
+        depositNo: 'DEP-MULTI', depositAmount: 600, paidAmount: 600, remainingAmount: 600, status: 'deposited', paymentHistory: [{ id: 'initial', amount: 600, confirmed: true, method: 'cash', receivedAt: new Date() }] }
+      const input = { id: 'multi-dep', mode: 'deposit' as const, data, orders: [600, 400].map((amount, index) => ({ id: `multi-wo-${index}`, data: { companyId: 'co', branchId: 'main', customerId: 'customer', totalAmount: amount, orderNo: `WO-${index}`, sourceItemName: `Wig ${index}` } })), allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' }
+      await Promise.all([commitCheckout(input), commitCheckout(input)])
+      const first = (await getDoc(doc(db, 'work_orders/multi-wo-0'))).data()!
+      assert.equal(first.depositAmount, 300)
+      assert.equal((await getDoc(doc(db, 'work_orders/multi-wo-1'))).data()?.depositAmount, 200)
+      assert.equal((await getDoc(doc(db, 'customer_work_cases', first.workCaseId))).data()?.customerId, 'customer')
+      await receiveDepositPayment(await read('deposits/multi-dep') as Deposit, { id: 'pay-rest', amount: 600, confirmed: true, method: 'cash', receivedBy: user.uid, receivedAt: new Date() })
+      assert.equal((await getDoc(doc(db, 'work_orders/multi-wo-0'))).data()?.depositAmount, 600)
+      assert.equal((await getDoc(doc(db, 'work_orders/multi-wo-1'))).data()?.remainingAmount, 0)
+      const photo = { companyId: 'co', orderId: 'multi-wo-0', url: 'https://example.test/qa-completed.jpg', field: 'completedImages' as const, userId: user.uid }
+      await saveWorkOrderPhoto(photo)
+      await env.withSecurityRulesDisabled(async context => {
+        const images = (await context.firestore().collection('customer_images').get()).docs.map(doc => doc.data())
+        assert.equal(images.filter(image => image.workCaseId === first.workCaseId).length, 1)
+      })
+      await saveWorkOrderPhoto({ ...photo, remove: true })
+      assert.deepEqual((await getDoc(doc(db, 'work_orders/multi-wo-0'))).data()?.completedImages, [])
+    })
+    await t.test('course purchase, concurrent use, reversal and cancellation preserve rights', async () => {
+      await seed('services/course', { companyId: 'co', branchId: 'main', name: 'Wash 10 + 2', status: 'active', catalogScope: 'shared',
+        course: { paidUnits: 10, bonusUnits: 2, validityDays: 365, serviceIds: ['service'], branchIds: [] } })
+      await seed('employees/staff', { companyId: 'co', branchId: 'other', firstName: 'Stylist', status: 'active' })
+      const actor = { userId: user.uid, userName: 'Tester', branchId: 'other' }
+      const buy = (id: string, pending = false) => commitCheckout({ id, mode: 'sale', data: { ...saleData(id), items: [{ type: 'service', serviceId: 'course', name: 'Wash 10 + 2', quantity: 1, unitPrice: 100, total: 100 }], status: pending ? 'pending' : 'completed', paymentStatus: pending ? 'pending' : 'confirmed' }, orders: [], allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' })
+      await Promise.all([buy('course-sale'), buy('course-sale')])
+      let course = await read('customer_courses/course-sale_0_0') as CustomerCourse
+      assert.equal(course.remainingUnits, 12)
+      assert.equal(course.status, 'active')
+      const use = { id: 'course-use-1', course, serviceId: 'service', units: 1, staffId: 'staff', note: 'test', actor }
+      await Promise.all([redeemCourse(use), redeemCourse(use)])
+      assert.equal((await getDoc(doc(db, 'customer_courses', course.id))).data()?.remainingUnits, 11)
+      assert.equal((await getDoc(doc(db, 'service_records/course-use-1'))).data()?.courseId, course.id)
+      await assert.rejects(cancelDocument({ kind: 'sale', record: await read('sales/course-sale') as Sale }, { reason: 'test', cancelProduction: false, userId: user.uid, userName: 'Tester' }), /ใช้สิทธิ์แล้ว/)
+      const event = await read('course_events/course-use-1') as CourseEvent
+      await Promise.all([reverseCourseUse(course, event, actor, 'entered twice'), reverseCourseUse(course, event, actor, 'entered twice')])
+      assert.equal((await getDoc(doc(db, 'customer_courses', course.id))).data()?.remainingUnits, 12)
+      assert.equal((await getDoc(doc(db, 'service_records/course-use-1'))).data()?.reversed, true)
+      const concurrent = await Promise.allSettled([redeemCourse({ ...use, id: 'last-use-a', units: 12 }), redeemCourse({ ...use, id: 'last-use-b', units: 12 })])
+      assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1)
+      await assertFails(setDoc(doc(db, 'customer_courses', course.id), { remainingUnits: 100 }, { merge: true }))
+      await assertFails(setDoc(doc(db, 'course_events/course-use-1'), { units: 100 }, { merge: true }))
+      await cancelCourseRights(course, actor, 'stop remaining rights without refund')
+      assert.equal((await getDoc(doc(db, 'customer_courses', course.id))).data()?.status, 'cancelled')
+      await buy('course-unused')
+      await cancelDocument({ kind: 'sale', record: await read('sales/course-unused') as Sale }, { reason: 'unused test', cancelProduction: false, userId: user.uid, userName: 'Tester' })
+      assert.equal((await getDoc(doc(db, 'customer_courses/course-unused_0_0'))).data()?.remainingUnits, 0)
+      await buy('course-pending', true)
+      course = await read('customer_courses/course-pending_0_0') as CustomerCourse
+      await assert.rejects(redeemCourse({ ...use, id: 'pending-use', course }))
+      await confirmSalePayment(await read('sales/course-pending') as Sale, actor)
+      assert.equal((await getDoc(doc(db, 'customer_courses', course.id))).data()?.status, 'active')
+      await assert.rejects(recordReturn({ sale: await read('sales/course-pending') as Sale, quantities: [1], reason: 'test', method: 'cash', userId: user.uid, userName: 'Tester', operationId: 'course-return' }), /คอร์สต้องยกเลิก/)
+    })
+    await t.test('five distinct courses can be purchased, activated and cancelled in one atomic bill', async () => {
+      const items = []
+      for (let index = 0; index < 5; index++) {
+        const serviceId = `bulk-course-${index}`
+        await seed(`services/${serviceId}`, { companyId: 'co', branchId: 'main', name: serviceId, status: 'active', catalogScope: 'shared', course: { paidUnits: 10, bonusUnits: 2, validityDays: null, serviceIds: ['service'], branchIds: [] } })
+        items.push({ type: 'service', serviceId, name: serviceId, quantity: 1, unitPrice: 100, total: 100 })
+      }
+      await commitCheckout({ id: 'bulk-courses', mode: 'sale', data: { ...saleData('BULK', 5), items, status: 'pending', paymentStatus: 'pending' }, orders: [], allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' })
+      const bill = await read('sales/bulk-courses') as Sale
+      assert.equal(bill.courseIds?.length, 5)
+      await confirmSalePayment(bill, { userId: user.uid, userName: 'Tester' })
+      for (const id of bill.courseIds!) assert.equal((await getDoc(doc(db, 'customer_courses', id))).data()?.status, 'active')
+      await cancelDocument({ kind: 'sale', record: await read('sales/bulk-courses') as Sale }, { reason: 'bulk QA cancellation', cancelProduction: false, userId: user.uid, userName: 'Tester' })
+      for (const id of bill.courseIds!) assert.equal((await getDoc(doc(db, 'customer_courses', id))).data()?.status, 'cancelled')
+    })
+    await t.test('staff can redeem but cannot reverse or act as another branch', async () => {
+      await seed(`users/${user.uid}`, { companyId: 'co', branchId: 'main', role: 'sales', isActive: true })
+      const course = await read('customer_courses/course-pending_0_0') as CustomerCourse
+      const actor = { userId: user.uid, userName: 'Staff', branchId: 'main' }
+      const input = { id: 'staff-course-use', course, serviceId: 'service', units: 1, staffId: 'staff', note: '', actor }
+      await redeemCourse(input)
+      const event = await read('course_events/staff-course-use') as CourseEvent
+      await assert.rejects(reverseCourseUse(course, event, actor, 'no manager permission'))
+      await assert.rejects(cancelCourseRights(course, actor, 'no manager permission'))
+      await assert.rejects(redeemCourse({ ...input, id: 'wrong-branch-use', actor: { ...actor, branchId: 'other' } }))
+      await assert.rejects(redeemCourse({ ...input, note: 'changed after save' }), /บันทึกแล้ว/)
+      assert.equal((await getDoc(doc(db, 'customer_courses', course.id))).data()?.remainingUnits, 11)
+    })
+    await t.test('catalog bulk archive is atomic, branch scoped and preserves old deposits and course rights', async () => {
+      const actor = { companyId: 'co', branchId: 'main', userId: user.uid, userName: 'Tester' }
+      await assert.rejects(archiveCatalogItems({ ...actor, kind: 'products', ids: ['p'], operationId: 'staff-archive', reason: 'not allowed' }))
+      await seed(`users/${user.uid}`, { companyId: 'co', branchId: 'main', role: 'owner', isActive: true })
+      await seed('products/archive-p', { companyId: 'co', branchId: 'main', catalogScope: 'shared', name: 'Archived product', status: 'active' })
+      await seed('products/local-p', { companyId: 'co', branchId: 'other', catalogScope: 'branch', name: 'Branch local', status: 'active' })
+      await seed('inventory/archive-p_main', { companyId: 'co', branchId: 'main', productId: 'archive-p', quantity: 10 })
+      await seed('deposits/archived-deposit', { companyId: 'co', branchId: 'main', customerId: 'customer', depositNo: 'DEP-ARCHIVE', totalAmount: 100, depositAmount: 50, paidAmount: 50, status: 'deposited', items: [{ productId: 'archive-p', quantity: 1, unitPrice: 100, total: 100, name: 'Archived product' }], paymentHistory: [{ id: 'initial', amount: 50, method: 'cash', confirmed: true, receivedAt: new Date() }] })
+      await assert.rejects(archiveCatalogItems({ ...actor, kind: 'products', ids: ['archive-p', 'local-p'], operationId: 'mixed-archive', reason: 'scope QA' }))
+      assert.equal((await getDoc(doc(db, 'products/archive-p'))).data()?.status, 'active')
+      const archive = { ...actor, kind: 'products' as const, ids: ['archive-p'], operationId: 'archive-products', reason: 'wrong import' }
+      await Promise.all([archiveCatalogItems(archive), archiveCatalogItems(archive)])
+      assert.equal((await getDoc(doc(db, 'inventory/archive-p_main'))).data()?.quantity, 10)
+      assert.equal((await getDoc(doc(db, 'products/archive-p'))).data()?.status, 'archived')
+      const items = [{ type: 'product' as const, productId: 'archive-p', quantity: 1, unitPrice: 100, total: 100, name: 'Archived product' }]
+      await assert.rejects(commitCheckout({ id: 'archived-new-sale', mode: 'sale', data: { ...saleData('ARCHIVED'), items }, orders: [], allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' }))
+      await commitCheckout({ id: 'archived-settlement', mode: 'sale', data: { ...saleData('ARCHIVED-SETTLEMENT'), items, depositId: 'archived-deposit', depositDeducted: 50 }, deposit: await read('deposits/archived-deposit') as Deposit, orders: [], allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' })
+      assert.equal((await getDoc(doc(db, 'inventory/archive-p_main'))).data()?.quantity, 9)
+      await archiveCatalogItems({ ...actor, kind: 'services', ids: ['course', 'service'], operationId: 'archive-services', reason: 'wrong import' })
+      const course = await read('customer_courses/course-pending_0_0') as CustomerCourse
+      await redeemCourse({ id: 'archived-course-use', course, serviceId: 'service', units: 1, staffId: 'staff', note: '', actor })
+      assert.equal((await getDoc(doc(db, 'customer_courses', course.id))).data()?.remainingUnits, 10)
+      assert.ok((await getDoc(doc(db, 'customers/customer'))).exists())
+    })
     await t.test('sales staff can atomically create a bill without manager permissions', async () => {
       await seed(`users/${user.uid}`, { companyId: 'co', branchId: 'main', role: 'sales', isActive: true })
       await seed('inventory/p_main', { companyId: 'co', branchId: 'main', productId: 'p', quantity: 1 })
       await checkout('staff-checkout')
       assert.equal(await quantity(), 0)
     })
+    await t.test('catalog archive supports the advertised 400-item limit', async () => {
+      await seed(`users/${user.uid}`, { companyId: 'co', branchId: 'main', role: 'owner', isActive: true })
+      const ids = Array.from({ length: 400 }, (_, index) => `bulk-archive-${index}`)
+      await env.withSecurityRulesDisabled(async context => {
+        const batch = context.firestore().batch()
+        for (const id of ids) batch.set(context.firestore().doc(`services/${id}`), { companyId: 'co', branchId: 'main', catalogScope: 'shared', name: id, status: 'active' })
+        await batch.commit()
+      })
+      await archiveCatalogItems({ companyId: 'co', branchId: 'main', userId: user.uid, userName: 'Tester', kind: 'services', ids, operationId: 'bulk-archive-limit', reason: 'limit QA' })
+      assert.equal((await getDoc(doc(db, 'services/bulk-archive-399'))).data()?.status, 'archived')
+      assert.equal((await getDoc(doc(db, 'catalog_archive_operations/bulk-archive-limit'))).data()?.ids.length, 400)
+    })
   } finally {
+    if (process.env.RULES_COVERAGE) {
+      await mkdir('test-results', { recursive: true })
+      await writeFile('test-results/rules-coverage.json', await fetch('http://127.0.0.1:8086/emulator/v1/projects/demo-yumiko-qa:ruleCoverage').then(response => response.text()))
+    }
     await auth.signOut()
     await terminate(db)
     await env.cleanup()

@@ -76,7 +76,7 @@ export function OperationalAlertsProvider({ children }: { children: React.ReactN
       watch<Product>(COLLECTIONS.PRODUCTS, [where('isActive', '==', true)], setProducts, hasPermission('page.inventory')),
       watch<WorkOrder>(COLLECTIONS.WORK_ORDERS, [branch, where('status', 'in', ['waiting', 'in_production', 'qc', 'ready_to_ship', 'shipped', 'at_branch', 'ready_to_pickup'])], setWorkOrders, hasPermission('page.production')),
       watch<{ id: string; label?: string; userEmail?: string; status?: string; createdAt?: Date }>(COLLECTIONS.PERMISSION_REQUESTS, [where('status', '==', 'pending')], setRequests, !!user && ['owner', 'super_admin'].includes(user.role)),
-      watch<Deposit>(COLLECTIONS.DEPOSITS, [branch, where('status', 'in', ['pending', 'deposited', 'cancelled'])], setDeposits, hasPermission('page.deposits')),
+      watch<Deposit>(COLLECTIONS.DEPOSITS, [branch, where('status', 'in', ['pending', 'deposited', 'paid_full', 'cancelled'])], setDeposits, hasPermission('page.deposits')),
       watch<TransferOrder>(COLLECTIONS.TRANSFER_ORDERS, [where('status', 'in', ['pending', 'approved', 'in_transit'])], setTransfers, hasPermission('page.transfers')),
       watch<Inventory>(COLLECTIONS.INVENTORY, [branch], records => setBranchStock(Object.fromEntries(records.filter(item => item.productId).map(item => [item.productId, Number(item.quantity ?? 0)]))), hasPermission('page.inventory')),
     ]
@@ -115,22 +115,32 @@ export function OperationalAlertsProvider({ children }: { children: React.ReactN
         createdAt: dateValue(a.date),
       }))
 
+    const activeWorkOrdersByDeposit = new Map<string, WorkOrder[]>()
+    workOrders.forEach(order => {
+      if (!order.depositId) return
+      activeWorkOrdersByDeposit.set(order.depositId, [...(activeWorkOrdersByDeposit.get(order.depositId) ?? []), order])
+    })
+
     const depositAlerts = deposits
-      .filter(d => !['paid_full', 'cancelled'].includes(d.status ?? '') && (d.remainingAmount ?? 0) > 0)
+      .filter(d => d.status !== 'cancelled' && !d.pickedUpAt)
+      .filter(d => (d.remainingAmount ?? 0) > 0 || (activeWorkOrdersByDeposit.get(d.id)?.length ?? 0) > 0)
       .filter(d => {
-        if (!d.pickupDate) return true
+        if (!d.pickupDate) return (d.remainingAmount ?? 0) > 0
         const pickupDate = dateValue(`${d.pickupDate}T00:00:00`)
         return pickupDate <= nextWeek
       })
       .map(d => {
         const pickupDate = d.pickupDate ? dateValue(`${d.pickupDate}T00:00:00`) : null
         const isOverdue = pickupDate ? pickupDate < today : false
+        const isToday = pickupDate ? pickupDate >= today && pickupDate < tomorrow : false
+        const hasBalance = (d.remainingAmount ?? 0) > 0
+        const hasPickupWork = (activeWorkOrdersByDeposit.get(d.id)?.length ?? 0) > 0
         return {
           id: `deposit-${d.id}`,
           kind: 'deposit' as const,
-          title: `${isOverdue ? 'มัดจำเกินกำหนด' : 'มัดจำค้างชำระ'} ${d.depositNo}`,
-          message: `${d.customerName} · ค้าง ${formatCurrency(d.remainingAmount ?? 0)}${d.pickupDate ? ` · นัดรับ ${d.pickupDate}` : ''}`,
-          href: `/deposits?q=${encodeURIComponent(d.depositNo)}`,
+          title: `${pickupDate && hasPickupWork ? isOverdue ? 'เลยวันนัดรับวิก' : isToday ? 'นัดรับวิกวันนี้' : 'ใกล้ถึงวันนัดรับวิก' : 'มัดจำค้างชำระ'} ${d.depositNo}`,
+          message: `${d.customerName}${hasBalance ? ` · ค้าง ${formatCurrency(d.remainingAmount ?? 0)}` : ' · ชำระครบแล้ว'}${d.pickupDate ? ` · นัดรับ ${d.pickupDate}` : ''}`,
+          href: hasPickupWork ? `/production?pickup=${encodeURIComponent(`deposit:${d.id}`)}` : `/deposits?q=${encodeURIComponent(d.depositNo)}`,
           priority: isOverdue ? 'high' as const : 'medium' as const,
           createdAt: pickupDate ?? dateValue(d.createdAt),
         }
@@ -170,14 +180,23 @@ export function OperationalAlertsProvider({ children }: { children: React.ReactN
         createdAt: dateValue(t.createdAt),
       }))
 
-    const productionAlerts = workOrders
-      .filter(w => !['delivered', 'cancelled'].includes(w.status ?? '') && w.expectedDate && dateValue(w.expectedDate) <= nextWeek)
-      .map(w => ({
-        id: `wo-${w.id}`,
+    const depositIds = new Set(deposits.map(deposit => deposit.id))
+    const standalonePickupOrders = Array.from(workOrders
+      .filter(order => !order.depositId || !depositIds.has(order.depositId))
+      .filter(order => !['delivered', 'cancelled'].includes(order.status ?? '') && order.expectedDate && dateValue(order.expectedDate) <= nextWeek)
+      .reduce((groups, order) => {
+        const key = order.sourceType === 'sale' && (order.saleOrderId || order.sourceNo)
+          ? `sale:${order.saleOrderId || order.sourceNo}`
+          : `work-order:${order.id}`
+        if (!groups.has(key)) groups.set(key, order)
+        return groups
+      }, new Map<string, WorkOrder>()).entries())
+    const productionAlerts = standalonePickupOrders.map(([groupId, w]) => ({
+        id: `wo-${groupId}`,
         kind: 'production' as const,
-        title: `งานผลิตใกล้ครบกำหนด ${w.orderNo}`,
-        message: `${w.customerName} · กำหนด ${dateValue(w.expectedDate).toLocaleDateString('th-TH')}`,
-        href: `/production?q=${encodeURIComponent(w.orderNo)}`,
+        title: `${dateValue(w.expectedDate) < today ? 'เลยวันนัดรับวิก' : 'ใกล้ถึงวันนัดรับวิก'} ${w.orderNo}`,
+        message: `${w.customerName} · นัดรับ ${dateValue(w.expectedDate).toLocaleDateString('th-TH')}`,
+        href: `/production?pickup=${encodeURIComponent(groupId)}`,
         priority: dateValue(w.expectedDate) < today ? 'high' as const : 'medium' as const,
         createdAt: dateValue(w.expectedDate),
       }))

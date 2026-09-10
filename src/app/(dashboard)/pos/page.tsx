@@ -10,7 +10,10 @@ import {
   UserRound, FileText, ImagePlus, Factory,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import { COLLECTIONS, convertTimestamps, generateBranchDocumentNo, generateWigOrderNo } from '@/lib/firestore'
+import { COLLECTIONS, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
+import { WigOrderFields } from '@/components/WigOrderFields'
+import { prepareWigOrders, wigGroups, type WigGroupConfig } from '@/lib/wigCheckout'
+import type { CourseTemplate } from '@/lib/courseTypes'
 import { Product, Service, Deposit, Employee, Branch, ReceiptShopSnapshot } from '@/types'
 import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, serverTimestamp, setDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
@@ -47,6 +50,9 @@ interface StockShortage {
 }
 
 interface CartItem {
+  workGroupId?: string
+  workGroupName?: string
+  course?: CourseTemplate
   id: string; type: 'product' | 'service'; name: string; sku?: string
   price: number; quantity: number; taxType: 'vat' | 'non_vat'; stockQty?: number
   originalPrice?: number
@@ -188,12 +194,13 @@ function POSContent() {
   const [openDeposits, setOpenDeposits] = useState<Deposit[]>([])  // มัดจำค้างของลูกค้าที่เลือก
   const [appliedDepositId, setAppliedDepositId] = useState('')     // มัดจำที่เลือกหักในบิลนี้
   const [createWorkOrder, setCreateWorkOrder] = useState(true)
+  const [workGroups, setWorkGroups] = useState<Record<string, WigGroupConfig>>({})
   const [wigSpec, setWigSpec]         = useState({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
   const searchParams = useSearchParams()
   const requestedDepositId = searchParams.get('depositId') ?? ''
   const loadedDeposit = useRef('')
   const pendingDeposit = useRef('')
-  const draft = { cart, mode, customerId, customerName, customerPhone, discount, discountType, receiptNote, depositNote, pickupDate, depositInput, wigSpec, createWorkOrder, appliedDepositId, showVatOnReceipt, payMethod, attempt: attemptSnapshot }
+  const draft = { cart, mode, customerId, customerName, customerPhone, discount, discountType, receiptNote, depositNote, pickupDate, depositInput, wigSpec, workGroups, createWorkOrder, appliedDepositId, showVatOnReceipt, payMethod, attempt: attemptSnapshot }
   const setCheckoutAttempt = (attempt: typeof attemptSnapshot) => {
     checkoutAttempt.current = attempt; setAttemptSnapshot(attempt)
     try {
@@ -203,6 +210,7 @@ function POSContent() {
     } catch {}
   }
   const clearDraft = () => {
+    setWorkGroups({})
     setCart([]); setCustomerId(''); setCustomerName(''); setCustomerPhone(''); setDiscount(0); setDiscountType('percent')
     setReceiptNote(''); setDepositNote(''); setPickupDate(''); setDepositInput(''); setAppliedDepositId('')
     setCash(''); setSlipUrl(''); setPaymentVerified(false); setCouponCode(''); setAppliedCoupon(''); setPosMsg(null)
@@ -214,6 +222,7 @@ function POSContent() {
     setCart(value.cart); setMode(value.mode); setCustomerId(value.customerId); setCustomerName(value.customerName); setCustomerPhone(value.customerPhone)
     setDiscount(value.discount); setDiscountType(value.discountType); setReceiptNote(value.receiptNote); setDepositNote(value.depositNote)
     setPickupDate(value.pickupDate); setDepositInput(value.depositInput); setWigSpec(value.wigSpec); setCreateWorkOrder(value.createWorkOrder)
+    setWorkGroups(value.workGroups ?? {})
     setShowVatOnReceipt(value.showVatOnReceipt); pendingDeposit.current = value.appliedDepositId
     setPayMethod(value.payMethod ?? 'cash'); setCheckoutAttempt(value.attempt ?? null)
     setPosMsg({ type: 'ok', text: 'เรียกบิลแล้ว กรุณาตรวจราคา สต๊อก และการรับเงินก่อนยืนยัน' })
@@ -227,9 +236,9 @@ function POSContent() {
       const deposit = { id: snap.id, ...convertTimestamps(snap.data()) } as Deposit
       if (deposit.companyId !== companyId || deposit.branchId !== branchId) throw new Error('กรุณาเลือกสาขาของใบมัดจำก่อน')
       if (depositCredit(deposit) <= 0) throw new Error('ใบมัดจำนี้ยังไม่ยืนยันรับเงิน หรือถูกปิดบิล/ยกเลิกแล้ว')
-      const lines = deposit.items as Array<{ type?: 'product' | 'service'; productId?: string; serviceId?: string; name: string; quantity: number; unitPrice: number; note?: string }>
+      const lines = deposit.items as Array<{ type?: 'product' | 'service'; productId?: string; serviceId?: string; name: string; quantity: number; unitPrice: number; note?: string; workGroupId?: string; workGroupName?: string }>
       if (lines.some(item => !item.productId && !item.serviceId)) throw new Error('ใบมัดจำเดิมยังไม่ผูกสินค้า กรุณาเลือกรายการใน POS และเลือกมัดจำด้วยตนเอง')
-      setCart(lines.map(item => ({ id: item.productId || item.serviceId!, type: item.type ?? (item.productId ? 'product' : 'service'), name: item.name, price: item.unitPrice, originalPrice: item.unitPrice, quantity: item.quantity, taxType: 'vat', note: item.note ?? '' })))
+      setCart(lines.map(item => ({ id: item.productId || item.serviceId!, type: item.type ?? (item.productId ? 'product' : 'service'), name: item.name, price: item.unitPrice, originalPrice: item.unitPrice, quantity: item.quantity, taxType: 'vat', note: item.note ?? '', workGroupId: item.workGroupId, workGroupName: item.workGroupName })))
       setCustomerId(deposit.customerId); setCustomerName(deposit.customerName); setCustomerPhone(String(snap.data().customerPhone ?? ''))
       setDiscountType('amount'); setDiscount(Math.max(0, money(lines.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0) - deposit.totalAmount)))
       setReceiptNote(String(snap.data().receiptNote ?? '')); setShowVatOnReceipt(Boolean(snap.data().showVatOnReceipt))
@@ -372,6 +381,7 @@ function POSContent() {
       if (!allowOverStock && stock <= 0) return
       setCart([...cart, {
         id: item.id, type, name: item.name, sku: 'sku' in item ? item.sku : undefined,
+        course: type === 'service' ? (item as Service).course ?? undefined : undefined,
         price, originalPrice: price, quantity: 1, taxType: 'vat',
         stockQty: type === 'product' ? (item as ProductWithStock).stockQty : undefined,
         costPrice: type === 'product' ? (item as ProductWithStock).costPrice : undefined,
@@ -562,8 +572,12 @@ function POSContent() {
       setPosMsg({ type: 'err', text: 'กรุณาระบุยอดมัดจำก่อนบันทึก เช่น กด 30%, 50%, 70%, เต็มจำนวน หรือพิมพ์ยอดเอง' })
       return
     }
-    if ((action === 'deposit' || cartHasWigProduct) && !customerName.trim()) {
-      setPosMsg({ type: 'err', text: 'กรุณาเลือกลูกค้าก่อนบันทึก เพื่อผูกมัดจำ/ใบสั่งผลิตกับประวัติลูกค้า' })
+    if ((action === 'deposit' || cartHasWigProduct || cart.some(item => item.course)) && !customerId) {
+      setPosMsg({ type: 'err', text: 'กรุณาเลือกลูกค้าก่อนบันทึก เพื่อผูกมัดจำ งานผลิต หรือคอร์สกับประวัติลูกค้า' })
+      return
+    }
+    if ((action === 'deposit' || appliedDeposit) && cart.some(item => item.course)) {
+      setPosMsg({ type: 'err', text: 'กรุณาแยกขายคอร์สในบิลขายปกติแบบชำระเต็มจำนวน' })
       return
     }
     if (slipUploading) {
@@ -650,6 +664,7 @@ function POSContent() {
         return {
           type: c.type, productId: c.type === 'product' ? c.id : null, serviceId: c.type === 'service' ? c.id : null, name: c.name, sku: c.sku ?? null,
           isWigProduct: c.isWigProduct ?? false, wigType: c.wigType ?? null,
+          workGroupId: c.workGroupId || null, workGroupName: c.workGroupName || null,
           quantity: c.quantity, unitPrice: c.price, originalUnitPrice: c.originalPrice ?? c.price,
           isPriceEdited: (c.originalPrice ?? c.price) !== c.price,
           discountAmount: lineDiscount(c), taxType: 'vat',
@@ -697,57 +712,15 @@ function POSContent() {
     }
 
     const saleId = checkoutAttempt.current!.id
-    const preparedOrders: { id: string; data: Record<string, unknown> }[] = []
-    let createdWorkOrderCount = 0
-    const wigItems = appliedDeposit ? [] : cart.filter(c => c.type === 'product' && c.isWigProduct)
-    if (wigItems.length > 0) {
-      setPosMsg({ type: 'ok', text: 'กำลังสร้างใบสั่งผลิตจากบิลขาย...' })
-      for (const item of wigItems) {
-        try {
-          const orderNo = await generateWigOrderNo(companyId, branchId)
-          const lineTotal = item.price * item.quantity
-          const woData: Record<string, unknown> = {
-            companyId,
-            branchId,
-            orderNo,
-            branchName: receiptInfo.branchName ?? '',
-            branchCode: receiptInfo.branchCode ?? '',
-            receiptInfo,
-            customerId: customerId || '',
-            customerName: customerName.trim() || 'ลูกค้าไม่ระบุชื่อ',
-            saleOrderId: saleId,
-            saleReceiptNo: receiptNo,
-            sourceType: 'sale',
-            sourceNo: receiptNo,
-            sourceItemId: item.id,
-            sourceItemName: item.name,
-            sourceItemQty: item.quantity,
-            totalAmount: lineTotal,
-            depositAmount: lineTotal,
-            remainingAmount: 0,
-            status: 'waiting',
-            progressImages: [],
-            completedImages: [],
-            performedBy: userId,
-            orderDate: now,
-            depositDate: now,
-            notes: `สร้างจากบิลขาย ${receiptNo}${item.quantity > 1 ? ` · จำนวน ${item.quantity}` : ''}`,
-          }
-          const itemWigType = wigSpec.wigType || item.wigType
-          if (itemWigType) woData.wigType = itemWigType
-          if (wigSpec.wigColor) woData.wigColor = wigSpec.wigColor
-          if (wigSpec.wigLength) woData.wigLength = wigSpec.wigLength
-          if (wigSpec.wigModel) woData.wigModel = wigSpec.wigModel
-          if (wigSpec.manufacturer) woData.manufacturer = wigSpec.manufacturer
-          preparedOrders.push({ id: doc(collection(db, COLLECTIONS.WORK_ORDERS)).id, data: woData })
-          createdWorkOrderCount += 1
-        } catch (err) {
-          setPosMsg({ type: 'err', text: err instanceof Error ? err.message : 'เตรียมงานผลิตไม่สำเร็จ' })
-          setSaving(false); checkoutBusy.current = false
-          return
-        }
-      }
+    let preparedOrders: Awaited<ReturnType<typeof prepareWigOrders>> = []
+    try {
+      if (!appliedDeposit) preparedOrders = await prepareWigOrders({ id: saleId, mode: 'sale', no: receiptNo, cart, total, groups: workGroups,
+        base: { companyId, branchId, customerId, customerName, receiptInfo, branchName: receiptInfo.branchName || '', branchCode: receiptInfo.branchCode || '', performedBy: userId, ...wigSpec } })
+    } catch (err) {
+      setPosMsg({ type: 'err', text: err instanceof Error ? err.message : 'เตรียมงานผลิตไม่สำเร็จ' })
+      setSaving(false); checkoutBusy.current = false; return
     }
+    const createdWorkOrderCount = preparedOrders.length
 
     const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
     const commissions = cart.filter(c => c.staffId && itemCommission(c) > 0).map(c => ({
@@ -768,6 +741,7 @@ function POSContent() {
     // Show receipt after confirmed save
     setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', customerPhone: customerPhone.trim() || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setCustomerPhone(''); setReceiptNote('')
+    setWorkGroups({})
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     setSlipUrl(''); setAppliedDepositId(''); setCouponCode(''); setAppliedCoupon('')
     setShowVatOnReceipt(false)
@@ -807,7 +781,6 @@ function POSContent() {
       setSaving(false)
       return
     }
-    const saleOrderId = depositNo
 
     const notesStr = [depositNote, pickupDate ? `นัดรับ: ${pickupDate}` : ''].filter(Boolean).join(' | ')
     const custName = customerName || 'ลูกค้าทั่วไป'
@@ -834,6 +807,7 @@ function POSContent() {
         return {
           ...(c.type === 'product' ? { productId: c.id } : { serviceId: c.id }),
           name: c.name,
+          workGroupId: c.workGroupId || null, workGroupName: c.workGroupName || null,
           isWigProduct: c.isWigProduct ?? false,
           wigType: c.wigType ?? null,
           quantity: c.quantity,
@@ -872,40 +846,15 @@ function POSContent() {
     if (receiptNoteText) depData.receiptNote = receiptNoteText
     if (slipUrl)  depData.slipUrl = slipUrl
     const depositId = checkoutAttempt.current!.id
-    const preparedOrders: { id: string; data: Record<string, unknown> }[] = []
-
-    let createdDepositWorkOrder = false
-    if (createWorkOrder) {
-      setPosMsg({ type: 'ok', text: 'กำลังสร้างใบสั่งผลิตจากมัดจำ...' })
-      try {
-        const orderNo = await generateWigOrderNo(companyId, branchId)
-        const woData: Record<string, unknown> = {
-          companyId, branchId, orderNo,
-          branchName: receiptInfo.branchName ?? '',
-          branchCode: receiptInfo.branchCode ?? '',
-          receiptInfo,
-          customerId: custId, customerName: custName,
-          saleOrderId, sourceType: 'deposit', sourceNo: depositNo,
-          totalAmount: total, depositAmount: depositAmt,
-          remainingAmount: remaining, status: 'waiting',
-          progressImages: [], completedImages: [], performedBy: userId,
-          orderDate: now,
-        }
-        if (wigSpec.wigType)      woData.wigType      = wigSpec.wigType
-        if (wigSpec.wigColor)     woData.wigColor     = wigSpec.wigColor
-        if (wigSpec.wigLength)    woData.wigLength    = wigSpec.wigLength
-        if (wigSpec.wigModel)     woData.wigModel     = wigSpec.wigModel
-        if (wigSpec.manufacturer) woData.manufacturer = wigSpec.manufacturer
-        if (depositNote)          woData.notes        = depositNote
-        if (pickupDate)           woData.expectedDate = new Date(pickupDate)
-        preparedOrders.push({ id: doc(collection(db, COLLECTIONS.WORK_ORDERS)).id, data: woData })
-        createdDepositWorkOrder = true
-      } catch (err) {
-        setPosMsg({ type: 'err', text: err instanceof Error ? err.message : 'เตรียมงานผลิตไม่สำเร็จ' })
-        setSaving(false); checkoutBusy.current = false
-        return
-      }
+    let preparedOrders: Awaited<ReturnType<typeof prepareWigOrders>> = []
+    try {
+      if (createWorkOrder) preparedOrders = await prepareWigOrders({ id: depositId, mode: 'deposit', no: depositNo, cart, total, groups: workGroups, fallback: true,
+        base: { companyId, branchId, customerId: custId, customerName: custName, receiptInfo, branchName: receiptInfo.branchName || '', branchCode: receiptInfo.branchCode || '', performedBy: userId, ...wigSpec, notes: depositNote, ...(pickupDate ? { expectedDate: new Date(pickupDate) } : {}) } })
+    } catch (err) {
+      setPosMsg({ type: 'err', text: err instanceof Error ? err.message : 'เตรียมงานผลิตไม่สำเร็จ' })
+      setSaving(false); checkoutBusy.current = false; return
     }
+    const createdDepositWorkOrder = preparedOrders.length > 0
 
     try {
       await commitCheckout({ id: depositId, mode: 'deposit', data: depData, orders: preparedOrders, allowNegativeStock: false, userName: cashierName, mainBranchId: mainCatalogBranchId })
@@ -916,8 +865,9 @@ function POSContent() {
     }
 
     // Show receipt immediately — ไม่ต้องรอ
-    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, customerPhone: custPhone || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: createdDepositWorkOrder ? 1 : 0, receiverName: cashierName })
+    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, customerPhone: custPhone || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: preparedOrders.length, receiverName: cashierName })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setCustomerPhone(''); setDepositInput(''); setPickupDate(''); setDepositNote(''); setReceiptNote('')
+    setWorkGroups({})
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
     setSlipUrl(''); setCouponCode(''); setAppliedCoupon('')
     setShowVatOnReceipt(false)
@@ -966,7 +916,7 @@ function POSContent() {
               <button key={t} onClick={() => { setTab(t); setFilterCat('ทั้งหมด') }}
                 className={`flex min-w-0 items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold transition-all ${tab === t ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white shadow-sm shadow-pink-200' : 'bg-[var(--bg-base)] border border-[var(--border-light)] text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'}`}>
                 {t === 'products' ? <Package className="w-4 h-4" /> : <Scissors className="w-4 h-4" />}
-                <span className="truncate">{t === 'products' ? `สินค้า (${products.filter(p => p.status !== 'deleted').length})` : `บริการ (${services.filter(s => s.status !== 'deleted').length})`}</span>
+                <span className="truncate">{t === 'products' ? `สินค้า (${productsForBranch.length})` : `บริการ (${visibleServices.length})`}</span>
               </button>
             ))}
           </div>
@@ -1096,8 +1046,8 @@ function POSContent() {
             companyId={companyId}
             selectedId={customerId}
             selectedName={customerName}
-            onSelect={(id, name, customer) => { setCustomerId(id); setCustomerName(name); setCustomerPhone(customer?.phone ?? '') }}
-            onClear={() => { setCustomerId(''); setCustomerName(''); setCustomerPhone('') }}
+            onSelect={(id, name, customer) => { setWorkGroups({}); setCustomerId(id); setCustomerName(name); setCustomerPhone(customer?.phone ?? '') }}
+            onClear={() => { setWorkGroups({}); setCustomerId(''); setCustomerName(''); setCustomerPhone('') }}
             placeholder={mode === 'deposit' ? 'ค้นหาลูกค้า (แนะนำสำหรับมัดจำ)' : 'ค้นหาลูกค้า (ไม่บังคับ)'}
           />
         </div>
@@ -1326,7 +1276,7 @@ function POSContent() {
                   </button>
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto bg-[var(--bg-base)] p-4 space-y-3">
+              <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--bg-base)] p-4 space-y-3">
 
           {/* พนักงานขายเริ่มต้น — ใส่ให้ทุกรายการที่หยิบใหม่ */}
           {employees.length > 0 && (
@@ -1591,6 +1541,13 @@ function POSContent() {
             )}
           </div>
 
+          {!appliedDepositId && (mode === 'sale' || createWorkOrder) && <WigOrderFields cart={cart.filter(item => !item.course)} fallback={mode === 'deposit' && createWorkOrder} configs={workGroups}
+            onChange={groups => {
+              setWorkGroups(groups)
+              setCart(current => current.map(item => item.workGroupId ? { ...item, workGroupName: groups[item.workGroupId]?.title?.trim() || wigGroups(current, mode === 'deposit').find(group => group.id === item.workGroupId)?.name || '' } : item))
+            }} companyId={companyId} customerId={customerId}
+            onAssign={(id, groupId) => setCart(current => current.map(item => item.id === id && item.type === 'service' ? { ...item, workGroupId: groupId, workGroupName: workGroups[groupId]?.title || wigGroups(cart, mode === 'deposit').find(group => group.id === groupId)?.name || '' } : item))} />}
+
           {/* หักมัดจำเดิม (เฉพาะโหมดขาย เมื่อลูกค้ามีมัดจำค้าง) */}
           {mode === 'sale' && openDeposits.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 space-y-1">
@@ -1709,15 +1666,17 @@ function POSContent() {
             </div>
           )}
 
+              </div>
+              <div className="shrink-0 border-t border-[var(--border-light)] bg-white p-4">
           {/* Action button */}
           {mode === 'sale' ? (
             <button onClick={() => requestPaymentConfirm('sale')} disabled={cart.length === 0 || saving} title={discountNeedsApproval ? 'ต้องขออนุมัติส่วนลดก่อนบันทึก' : 'ชำระเงิน'}
-              className="sticky bottom-0 z-10 w-full py-3.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white font-bold rounded-2xl shadow-lg shadow-pink-200 active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2">
+              className="w-full py-3.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white font-bold rounded-2xl shadow-lg shadow-pink-200 active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2">
               {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</> : `ตรวจสอบและบันทึกขาย · ${formatCurrency(payNow)}`}
             </button>
           ) : (
             <button onClick={() => requestPaymentConfirm('deposit')} disabled={cart.length === 0 || saving} title={discountNeedsApproval ? 'ต้องขออนุมัติส่วนลดก่อนบันทึก' : 'รับมัดจำ'}
-              className="sticky bottom-0 z-10 w-full py-3.5 bg-gradient-to-r from-amber-400 to-orange-400 text-white font-bold rounded-2xl shadow-lg shadow-amber-200 active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2">
+              className="w-full py-3.5 bg-gradient-to-r from-amber-400 to-orange-400 text-white font-bold rounded-2xl shadow-lg shadow-amber-200 active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2">
               {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</>
                 : isDepositReady ? <><Wallet className="w-4 h-4" />ตรวจสอบและบันทึกมัดจำ · {formatCurrency(depositAmt)}</>
                 : <><Wallet className="w-4 h-4" />ระบุยอดมัดจำ</>
@@ -2031,6 +1990,8 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                   <div className="item-main grid grid-cols-[minmax(0,1fr)_5.5rem] gap-2">
                     <div className="item-name min-w-0 pr-1">
                       <p className="font-medium break-words">{item.name}</p>
+                      {item.workGroupName && <p className="text-[10px] break-words">ชิ้นงาน / Work: {item.workGroupName}</p>}
+                      {item.course && <p className="text-[10px] break-words">คอร์ส / Course: {item.course.paidUnits} + {item.course.bonusUnits} ครั้ง / sessions</p>}
                       {item.sku && <p className="text-[10px] text-[var(--text-muted)]">{item.sku}</p>}
                       <p className="item-meta text-[10px] text-[var(--text-muted)]">{item.quantity} x {formatCurrency(item.price)}</p>
                       {receipt.showVatOnReceipt && item.taxType === 'non_vat' && <p className="tax-note text-[10px] text-[var(--text-muted)]">ไม่นับ VAT / Non-VAT</p>}
@@ -2057,7 +2018,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                 </>
               )}
               {!isDeposit && receipt.depositAmt > 0 && (
-                <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">หักมัดจำ / Deposit deducted</span><span>-{formatCurrency(receipt.depositAmt)}</span></div>
+                <><div className="row flex justify-between font-semibold"><span>ยอดรวมงาน / Order Total</span><span>{formatCurrency(receipt.total)}</span></div><div className="row flex justify-between"><span className="label text-[var(--text-muted)]">หักมัดจำ / Deposit deducted</span><span>-{formatCurrency(receipt.depositAmt)}</span></div></>
               )}
               <div className="total-row flex justify-between font-bold text-base pt-2 border-t border-gray-300 mt-1">
                 <span>{!isDeposit && receipt.depositAmt > 0 ? 'ยอดที่ต้องชำระ / Amount Due' : 'รวมทั้งสิ้น / Grand Total'}</span><span className="text-[var(--pink-600)]">{formatCurrency(isDeposit ? receipt.total : receipt.remaining)}</span>
@@ -2075,6 +2036,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
               )}
 
               <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รับเงิน / Amount Paid</span><span>{formatCurrency(receipt.paidAmount)}</span></div>
+              {!isDeposit && receipt.depositAmt > 0 && <div className="row flex justify-between"><span>คงเหลือ / Balance</span><span>{formatCurrency(0)}</span></div>}
               {receipt.payMethod === 'cash' && (
                 <div className="change-row flex justify-between font-semibold text-emerald-600"><span>เงินทอน / Change</span><span>{formatCurrency(receipt.change)}</span></div>
               )}

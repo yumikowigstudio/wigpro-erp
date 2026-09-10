@@ -3,6 +3,7 @@ import { db } from './firebase'
 import { COLLECTIONS, convertTimestamps, stripUndefinedDeep } from './firestore'
 import { writeTransactionLog } from './transactionStock'
 import type { Sale } from '@/types'
+import { readSaleCourses, activateSaleCourses } from './courses'
 
 type Actor = { userId: string; userName: string }
 export async function confirmSalePayment(sale: Sale, actor: Actor) {
@@ -14,9 +15,11 @@ export async function confirmSalePayment(sale: Sale, actor: Actor) {
     if (snap.data().paymentStatus === 'confirmed') return
     const work = await Promise.all(orders.docs.map(order => tx.get(order.ref)))
     const data = { id: snap.id, ...convertTimestamps(snap.data()) } as Sale
+    const courses = await readSaleCourses(tx, data)
     tx.update(ref, { payments: stripUndefinedDeep((data.payments ?? []).map((payment, index) => index === 0 ? { ...payment, approvedBy: actor.userId, approvedAt: new Date() } : payment)),
       paymentStatus: 'confirmed', paymentConfirmedBy: actor.userId, paymentConfirmedByName: actor.userName, paymentConfirmedAt: serverTimestamp(), status: 'completed', updatedAt: serverTimestamp() })
     for (const order of work) if (order.exists() && order.data().status !== 'cancelled') tx.update(order.ref, { remainingAmount: 0, depositAmount: order.data().totalAmount ?? 0, updatedAt: serverTimestamp() })
+    activateSaleCourses(tx, courses, { ...actor, branchId: sale.branchId })
     writeTransactionLog(tx, { companyId: sale.companyId, branchId: sale.branchId, ...actor, action: 'payment', module: 'ประวัติบิล', recordId: sale.id, recordType: 'sale', description: `ยืนยันรับเงิน ${sale.receiptNo}` })
   })
 }

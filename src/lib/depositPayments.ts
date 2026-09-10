@@ -4,6 +4,7 @@ import { COLLECTIONS, convertTimestamps, stripUndefinedDeep } from './firestore'
 import { depositPayments, depositRemaining, money } from './money'
 import { writeTransactionLog } from './transactionStock'
 import type { Deposit, DepositPayment, WorkOrder } from '@/types'
+import { allocateOrderPayments } from './workOrderAmounts'
 
 export async function linkedDepositWorkOrders(deposit: Deposit) {
   const snap = await getDocs(query(collection(db, COLLECTIONS.WORK_ORDERS), where('companyId', '==', deposit.companyId)))
@@ -33,17 +34,37 @@ export async function receiveDepositPayment(deposit: Deposit, payment: DepositPa
     const remaining = depositRemaining(live)
     if (money(payment.amount) > remaining) throw new Error(`ยอดค้างปัจจุบัน ${remaining.toFixed(2)} บาท กรุณาตรวจยอดอีกครั้ง`)
     const orderSnaps = await Promise.all(orders.map(order => tx.get(doc(db, COLLECTIONS.WORK_ORDERS, order.id))))
-    const nextHistory = stripUndefinedDeep([...history.filter(item => item.id !== payment.id), { ...payment, amount: money(payment.amount) }]) as DepositPayment[]
-    const paidAmount = money(nextHistory.filter(item => item.confirmed).reduce((sum, item) => sum + item.amount, 0))
+    const provisionalHistory = [...history.filter(item => item.id !== payment.id), { ...payment, amount: money(payment.amount) }]
+    const paidAmount = money(provisionalHistory.filter(item => item.confirmed).reduce((sum, item) => sum + item.amount, 0))
     const remainingAmount = money(live.totalAmount - paidAmount + (live.appliedAmount ?? 0) + (live.refundedCreditAmount ?? 0))
     const status = remainingAmount <= 0 ? 'paid_full' : 'deposited'
-    tx.update(ref, { paymentHistory: nextHistory, paidAmount, remainingAmount, status, paymentStatus: nextHistory.some(item => !item.confirmed) ? 'pending' : 'confirmed', payMethod: payment.method, updatedAt: serverTimestamp() })
-    for (const order of orderSnaps) {
+    const nextHistory = stripUndefinedDeep(provisionalHistory.map(item => item.id === payment.id
+      ? { ...item, receiptKind: remainingAmount <= 0 ? 'final' : 'deposit' }
+      : item)) as DepositPayment[]
+    tx.update(ref, {
+      paymentHistory: nextHistory,
+      paidAmount,
+      remainingAmount,
+      status,
+      paymentStatus: nextHistory.some(item => !item.confirmed) ? 'pending' : 'confirmed',
+      payMethod: payment.method,
+      ...(payment.receiptNote !== undefined ? { receiptNote: payment.receiptNote } : {}),
+      updatedAt: serverTimestamp(),
+    })
+    const allocations = allocateOrderPayments(orderSnaps.map(order => Number(order.data()?.totalAmount ?? 0)), live.totalAmount, paidAmount)
+    for (const [index, order] of orderSnaps.entries()) {
       if (!order.exists() || order.data().status === 'cancelled') continue
-      tx.update(order.ref, { depositId: live.id, depositAmount: paidAmount, remainingAmount, updatedAt: serverTimestamp() })
+      tx.update(order.ref, { depositId: live.id, depositAmount: allocations[index], remainingAmount: money(Number(order.data().totalAmount) - allocations[index]), updatedAt: serverTimestamp() })
     }
     writeTransactionLog(tx, { companyId: live.companyId, branchId: live.branchId, userId: payment.receivedBy ?? '', userName: payment.receivedByName ?? '',
       action: 'payment', module: 'มัดจำ', recordId: live.id, recordType: 'deposit', description: `รับชำระ ${live.depositNo} เพิ่ม ${payment.amount.toFixed(2)} บาท คงเหลือ ${remainingAmount.toFixed(2)} บาท` })
-    return { ...live, paymentHistory: nextHistory, paidAmount, remainingAmount, status } as Deposit
+    return {
+      ...live,
+      paymentHistory: nextHistory,
+      paidAmount,
+      remainingAmount,
+      status,
+      ...(payment.receiptNote !== undefined ? { receiptNote: payment.receiptNote } : {}),
+    } as Deposit
   })
 }

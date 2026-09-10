@@ -115,3 +115,11 @@ export function getLegacyBranchStockFallback(
   }
   return 0
 }
+
+export function canArchiveCatalogItem(item: CatalogScopedItem, branchId: string, mainBranchId: string) {
+  if (!branchId || !mainBranchId || ['archived', 'deleted'].includes(item.status ?? '') || item.isActive === false) return false
+  if (item.catalogScope === 'shared') return branchId === mainBranchId
+  const source = item.sourceBranchId || item.branchId
+  if (!source || source === 'main') return branchId === mainBranchId
+  return source === branchId
+}

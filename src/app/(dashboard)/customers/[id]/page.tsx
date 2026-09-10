@@ -32,6 +32,8 @@ import {
   WorkOrder,
 } from '@/types'
 import { useAuth } from '@/hooks/useAuth'
+import { CustomerCourses } from '@/components/CustomerCourses'
+import { saveWorkOrderPhoto } from '@/lib/workOrderAlbums'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -285,6 +287,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
     { id: 'overview',  label: 'ภาพรวม' },
     { id: 'timeline',  label: `Timeline${sales.length + workOrders.length + deposits.length + images.length + documents.length + contacts.length + serviceRecords.length + appointments.length ? ` (${sales.length + workOrders.length + deposits.length + images.length + documents.length + contacts.length + serviceRecords.length + appointments.length})` : ''}` },
     { id: 'photos',    label: `อัลบั้ม${workCases.length ? ` (${workCases.length})` : ''}` },
+    { id: 'courses', label: 'คอร์ส / แพ็กเกจ' },
     { id: 'documents', label: `เอกสาร${documents.length ? ` (${documents.length})` : ''}` },
     { id: 'history',   label: `ประวัติบริการ${sales.length ? ` (${sales.length})` : ''}` },
     { id: 'services',  label: `ผลบริการ${serviceRecords.length ? ` (${serviceRecords.length})` : ''}` },
@@ -379,7 +382,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
         <div className="p-4 sm:p-6">
           {activeTab === 'overview'    && <OverviewTab customer={customer} levelCfg={levelCfg} />}
           {activeTab === 'timeline'    && <UnifiedTimelineTab sales={sales} workOrders={workOrders} deposits={deposits} images={images} documents={documents} contacts={contacts} serviceRecords={serviceRecords} workCases={workCases} appointments={appointments} />}
-          {activeTab === 'photos'      && <PhotosTab images={images} workCases={workCases} customerId={id} companyId={companyId} branchId={branchId} userId={userId} />}
+          {activeTab === 'photos'      && <PhotosTab key={searchParams.get('caseId') || 'albums'} initialCaseId={searchParams.get('caseId')} images={images} workCases={workCases} customerId={id} companyId={companyId} branchId={branchId} userId={userId} />}
+          {activeTab === 'courses' && <CustomerCourses customerId={id} />}
           {activeTab === 'documents'   && <DocumentsTab documents={documents} customerId={id} companyId={companyId} userId={userId} />}
           {activeTab === 'history'     && <ServiceHistoryTab sales={sales} workOrders={workOrders} />}
           {activeTab === 'services'    && <ServiceRecordsTab records={serviceRecords} customerId={id} companyId={companyId} branchId={branchId} userId={userId} />}
@@ -486,7 +490,7 @@ function UnifiedTimelineTab({
       id: `service-${r.id}`,
       kind: 'service' as const,
       title: `บันทึกบริการ ${r.serviceName}`,
-      description: [r.result, r.recommendations].filter(Boolean).join(' · '),
+      description: [r.reversed ? 'คืนสิทธิ์แล้ว' : r.courseId ? 'ใช้สิทธิ์คอร์ส' : '', r.result, r.recommendations, r.notes].filter(Boolean).join(' · '),
       date: toDate(r.createdAt),
       href: undefined,
     })),
@@ -703,6 +707,7 @@ function AlbumDialog({ label, children, onClose, fullscreen = false }: {
 }
 
 function PhotosTab({
+  initialCaseId,
   images,
   workCases,
   customerId,
@@ -710,6 +715,7 @@ function PhotosTab({
   branchId,
   userId,
 }: {
+  initialCaseId?: string | null
   images: CustomerImage[]
   workCases: CustomerWorkCase[]
   customerId: string
@@ -754,7 +760,7 @@ function PhotosTab({
   const [caseForm, setCaseForm] = useState<CaseForm>(blankCaseForm)
   const [lightbox, setLightbox] = useState<string | null>(null)
   const [activeImgCat, setActiveImgCat] = useState<ImgCat | 'all'>('all')
-  const [galleryCaseId, setGalleryCaseId] = useState<string | null>(null)
+  const [galleryCaseId, setGalleryCaseId] = useState<string | null>(initialCaseId || null)
   const [galleryCategory, setGalleryCategory] = useState<ImgCat | 'all'>('all')
   const [galleryDate, setGalleryDate] = useState('all')
   const [galleryLayout, setGalleryLayout] = useState<'compare' | 'grid4' | 'grid5'>('compare')
@@ -965,7 +971,8 @@ function PhotosTab({
     if (!confirm('ต้องการลบรูปนี้ใช่ไหม?')) return
     const target = images.find(image => image.id === imageId)
     try {
-      await deleteDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, imageId))
+      if (target?.sourceWorkOrderId && target.sourceImageField) await saveWorkOrderPhoto({ companyId, orderId: target.sourceWorkOrderId, url: target.url, field: target.sourceImageField, userId, remove: true })
+      else await deleteDoc(doc(db, COLLECTIONS.CUSTOMER_IMAGES, imageId))
       await writeActivityLog({
         companyId,
         branchId,
@@ -985,6 +992,7 @@ function PhotosTab({
   const handleDeleteCase = async (workCaseId: string) => {
     if (uploading || savingCase) return
     const workCase = workCases.find(item => item.id === workCaseId)
+    if (workCase?.workOrderId) { alert('เคสนี้เชื่อมใบสั่งผลิตอยู่ กรุณายกเลิกงานที่ต้นทาง โดยเก็บเคสและรูปไว้เป็นประวัติ'); return }
     const relatedImages = images.filter(image => image.workCaseId === workCaseId)
     const warning = [
       `ต้องการลบชิ้นงาน "${workCase?.title ?? 'นี้'}" ใช่ไหม?`,
@@ -1946,7 +1954,7 @@ function ServiceRecordsTab({ records, customerId, companyId, branchId, userId }:
               <p className="text-sm font-semibold text-[var(--text-primary)]">{r.serviceName}</p>
               <p className="text-xs text-[var(--text-muted)]">{formatDate(r.createdAt)}</p>
             </div>
-            <button onClick={() => handleDelete(r.id)} className="text-[var(--text-muted)] hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
+            {r.courseId ? <span className="text-xs text-emerald-700">{r.reversed ? 'คืนสิทธิ์แล้ว' : 'ใช้สิทธิ์คอร์ส'}</span> : <button onClick={() => handleDelete(r.id)} className="text-[var(--text-muted)] hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>}
           </div>
           {r.result && <p className="text-sm text-[var(--text-secondary)]">📋 {r.result}</p>}
           {r.recommendations && <p className="text-sm text-amber-700 bg-amber-50 rounded-lg px-2 py-1.5">💡 {r.recommendations}</p>}
@@ -2143,7 +2151,8 @@ function WorkOrdersTab({ workOrders }: { workOrders: WorkOrder[] }) {
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap mb-1">
-                  <p className="font-mono text-sm font-bold text-[var(--pink-500)]">{wo.orderNo}</p>
+                  <Link href={`/production?q=${encodeURIComponent(wo.orderNo)}`} className="font-mono text-sm font-bold text-[var(--pink-500)] hover:underline">{wo.orderNo}</Link>
+                  {wo.workCaseId && <Link className="text-xs text-emerald-700 hover:underline" href={`/customers/${wo.customerId}?tab=photos&caseId=${wo.workCaseId}`}>อัลบั้มชิ้นงาน</Link>}
                   {cfg && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>{cfg.label}</span>}
                   {isOverdue && <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 flex items-center gap-1"><AlertTriangle className="w-2.5 h-2.5" />เกินกำหนด</span>}
                 </div>

@@ -5,6 +5,8 @@ import { depositPaid, depositPayments, money, saleCashReceived } from './money'
 import { legacyReturnSummary } from './returns'
 import { writeStockChange, writeTransactionLog } from './transactionStock'
 import type { Deposit, Sale, WorkOrder } from '@/types'
+import { readSaleCourses, writeCourseCancellation } from './courses'
+import { allocateOrderPayments } from './workOrderAmounts'
 
 export type CancelTarget = { kind: 'sale'; record: Sale } | { kind: 'deposit'; record: Deposit }
 export async function cancellationContext(target: CancelTarget) {
@@ -35,6 +37,8 @@ export async function cancelDocument(target: CancelTarget, options: { reason: st
     const orderSnaps = await Promise.all(context.orders.map(order => tx.get(doc(db, COLLECTIONS.WORK_ORDERS, order.id))))
     const depositSnaps = await Promise.all(context.deposits.map(dep => tx.get(doc(db, COLLECTIONS.DEPOSITS, dep.id))))
     const commissionSnaps = await Promise.all(context.commissions.map(record => tx.get(record.ref)))
+    const courses = target.kind === 'sale' ? await readSaleCourses(tx, live) : []
+    if (courses.some(course => Number(course.data()?.usedUnits ?? 0) > 0)) throw new Error('บิลนี้มีคอร์สที่ใช้สิทธิ์แล้ว ไม่สามารถยกเลิกเต็มบิลได้ กรุณาให้ผู้จัดการตรวจการใช้สิทธิ์และยอดคืนเงินก่อน')
     if (options.cancelProduction && orderSnaps.some(order => order.data()?.status === 'delivered')) throw new Error('มีงานส่งมอบแล้ว กรุณาตรวจสอบงานก่อน หรือเลือกคงงานผลิตไว้')
     const quantities = returns?.exists() ? returns.data().quantities as Record<string, number> : context.previousReturns.quantities
     const returnedAmount = money(returns?.data()?.refundedAmount ?? context.previousReturns.refundedAmount)
@@ -74,10 +78,13 @@ export async function cancelDocument(target: CancelTarget, options: { reason: st
       if (!order.exists() || order.data().status === 'cancelled') continue
       const dep = depositSnaps.find(d => d.id === order.data().depositId || d.data()?.depositNo === order.data().sourceNo)
       const restoredDeposit = dep ? restoredDeposits.get(dep.id) : undefined
-      tx.update(order.ref, { sourceCancelled: !dep, ...(restoredDeposit ? { remainingAmount: restoredDeposit.remaining, depositAmount: restoredDeposit.credit, settlementSaleId: null } : {}),
+      const siblings = orderSnaps.filter(item => item.data()?.depositId === dep?.id || (dep && item.data()?.sourceNo === dep.data()?.depositNo))
+      const paid = restoredDeposit && dep ? allocateOrderPayments(siblings.map(item => Number(item.data()?.totalAmount ?? 0)), Number(dep.data()?.totalAmount), restoredDeposit.credit)[siblings.findIndex(item => item.id === order.id)] : 0
+      tx.update(order.ref, { sourceCancelled: !dep, ...(restoredDeposit ? { remainingAmount: money(Number(order.data().totalAmount) - paid), depositAmount: paid, settlementSaleId: null } : {}),
         ...(options.cancelProduction ? { ...cancellation, status: 'cancelled' } : { updatedAt: serverTimestamp() }) })
     }
     for (const commission of commissionSnaps) if (commission.exists()) tx.update(commission.ref, { status: 'cancelled', reversalRequired: commission.data().status === 'paid', ...cancellation })
+    for (const course of courses) writeCourseCancellation(tx, course, { userId: options.userId, userName: options.userName, branchId: live.branchId }, options.reason.trim())
     writeTransactionLog(tx, { companyId: live.companyId, branchId: live.branchId, userId: options.userId, userName: options.userName, action: 'cancel', module: 'ประวัติบิล', recordId: live.id, recordType: target.kind,
       description: `ยกเลิก ${live.receiptNo ?? live.depositNo}: ${options.reason} ยอดรอคืน ${money(refundDue)} บาท; ${options.cancelProduction ? 'ยกเลิก' : 'คง'}งานผลิต ${context.orders.length} รายการ` })
   })

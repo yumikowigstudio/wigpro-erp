@@ -110,6 +110,7 @@ export const PAGE_PERMISSION_BY_PATH: Array<{ path: string; permission: Permissi
   { path: '/products', permission: 'page.products' },
   { path: '/inventory', permission: 'page.inventory' },
   { path: '/production', permission: 'page.production' },
+  { path: '/courses', permission: 'page.customers' },
   { path: '/returns', permission: 'page.returns' },
   { path: '/transfers', permission: 'page.transfers' },
   { path: '/deposits', permission: 'page.deposits' },

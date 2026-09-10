@@ -33,6 +33,8 @@ export const COLLECTIONS = {
   APPOINTMENTS: 'appointments',
   SERVICES: 'services',
   SERVICE_RECORDS: 'service_records',
+  CUSTOMER_COURSES: 'customer_courses',
+  COURSE_EVENTS: 'course_events',
   PRODUCTS: 'products',
   INVENTORY: 'inventory',
   TRANSFER_ORDERS: 'transfer_orders',

@@ -29,6 +29,7 @@ const navItems: NavItem[] = [
   { href: '/customers', label: 'ลูกค้า', icon: Users, group: 'หลัก', permission: 'page.customers' },
   { href: '/appointments', label: 'นัดหมาย', icon: CalendarDays, group: 'หลัก', permission: 'page.appointments' },
   { href: '/members', label: 'สมาชิก', icon: Star, group: 'หลัก', permission: 'page.members' },
+  { href: '/courses', label: 'คอร์ส / สิทธิ์คงเหลือ', icon: CalendarDays, group: 'หลัก', permission: 'page.customers' },
   {
     label: 'สินค้าและสต๊อก', icon: Package, group: 'คลัง',
     children: [

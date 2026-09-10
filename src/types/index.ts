@@ -4,6 +4,8 @@
 
 export type UserRole = 'super_admin' | 'owner' | 'branch_manager' | 'sales' | 'stylist' | 'staff' | 'accountant'
 
+import type { CourseTemplate } from '@/lib/courseTypes'
+
 export type Status = 'active' | 'archived' | 'deleted'
 
 // ==========================================
@@ -138,6 +140,8 @@ export interface Customer {
 }
 
 export interface CustomerImage {
+  sourceWorkOrderId?: string
+  sourceImageField?: 'progressImages' | 'completedImages'
   id: string
   companyId: string
   customerId: string
@@ -157,6 +161,7 @@ export type CustomerWorkCaseType = 'custom_wig' | 'ready_made' | 'repair'
 export type CustomerRepairWorkType = 'reshape' | 'color' | 'add_hair' | 'replace_parts' | 'other'
 
 export interface CustomerWorkCase {
+  workOrderId?: string
   id: string
   companyId: string
   customerId: string
@@ -273,6 +278,7 @@ export interface AppointmentService {
 // ==========================================
 
 export interface Service {
+  course?: CourseTemplate | null
   id: string
   companyId: string
   branchId?: string // null = global
@@ -296,6 +302,9 @@ export interface Service {
 }
 
 export interface ServiceRecord {
+  courseId?: string
+  courseEventId?: string
+  reversed?: boolean
   id: string
   appointmentId?: string
   customerId: string
@@ -429,6 +438,8 @@ export type ProductionStatus =
   | 'cancelled'
 
 export interface WorkOrder {
+  items?: DepositItem[]
+  workGroupId?: string
   id: string
   companyId: string
   branchId: string
@@ -438,6 +449,7 @@ export interface WorkOrder {
   orderNo: string // e.g. 0105690001
   customerId: string
   customerName: string
+  customerPhone?: string
   saleOrderId: string
   saleReceiptNo?: string
   sourceType?: 'sale' | 'deposit' | 'manual'
@@ -497,6 +509,9 @@ export interface DepositPayment {
   receivedBy?: string
   receivedByName?: string
   slipUrl?: string
+  receiptItems?: DepositItem[]
+  receiptNote?: string
+  receiptKind?: 'deposit' | 'final'
   confirmed: boolean
   dateUnknown?: boolean
 }
@@ -537,6 +552,9 @@ export interface Deposit {
   notes?: string
   receiptNote?: string
   pickupDate?: string
+  pickedUpAt?: Date
+  pickedUpBy?: string
+  pickedUpByName?: string
   slipUrl?: string
   cancelReason?: string
   cancelledBy?: string
@@ -552,6 +570,9 @@ export interface Deposit {
 }
 
 export interface DepositItem {
+  workGroupId?: string
+  workGroupName?: string
+  course?: CourseTemplate
   productId?: string
   serviceId?: string
   name: string
@@ -579,6 +600,8 @@ export type SaleStatus = 'pending' | 'completed' | 'returned' | 'cancelled'
 export type PaymentStatus = 'pending' | 'confirmed' | 'rejected'
 
 export interface Sale {
+  courseIds?: string[]
+  workCaseIds?: string[]
   id: string
   companyId: string
   branchId: string
@@ -652,6 +675,9 @@ export interface Sale {
 }
 
 export interface SaleItem {
+  workGroupId?: string
+  workGroupName?: string
+  course?: CourseTemplate
   type: 'product' | 'service'
   productId?: string
   serviceId?: string

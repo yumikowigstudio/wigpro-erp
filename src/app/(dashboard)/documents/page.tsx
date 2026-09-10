@@ -279,6 +279,8 @@ export default function DocumentsPage() {
             <div class="item-meta">${item.quantity} x ${formatCurrency(item.unitPrice)}</div>
             ${showVat && item.taxType === 'non_vat' ? '<div class="line-note">ไม่นับ VAT / Non-VAT</div>' : ''}
             ${item.note ? `<div class="line-note">หมายเหตุ / Note: ${escapeHtml(item.note)}</div>` : ''}
+            ${item.workGroupName ? `<div class="line-note">ชิ้นงาน / Work: ${escapeHtml(item.workGroupName)}</div>` : ''}
+            ${item.course ? `<div class="line-note">คอร์ส / Course: ${item.course.paidUnits} + ${item.course.bonusUnits} ครั้ง / sessions</div>` : ''}
           </div>
           <div class="item-total">${formatCurrency(item.total)}</div>
         </div>
@@ -353,7 +355,7 @@ export default function DocumentsPage() {
           <div class="row"><span class="muted">มูลค่าก่อน VAT / Amount before VAT</span><span>${formatCurrency(preVatAmount)}</span></div>
           <div class="row"><span class="muted">ภาษีมูลค่าเพิ่ม 7% / VAT 7%</span><span>${formatCurrency(sale.taxAmount)}</span></div>
         ` : ''}
-        ${depositDeducted > 0 ? `<div class="row"><span class="muted">หักมัดจำ / Deposit deducted</span><span>-${formatCurrency(depositDeducted)}</span></div>` : ''}
+        ${depositDeducted > 0 ? `<div class="row"><span>ยอดรวมงาน / Order Total</span><span>${formatCurrency(sale.totalAmount)}</span></div><div class="row"><span class="muted">หักมัดจำ / Deposit deducted</span><span>-${formatCurrency(depositDeducted)}</span></div>` : ''}
         <div class="row total"><span>${depositDeducted > 0 ? 'ยอดที่ต้องชำระ / Amount Due' : 'รวมทั้งสิ้น / Grand Total'}</span><span>${formatCurrency(amountDue)}</span></div>
         <div class="row"><span class="muted">รับเงิน / Amount Paid</span><span>${formatCurrency(paidAmount)}</span></div>
         ${(sale.payments?.[0]?.method ?? '') === 'cash' ? `<div class="row"><span class="muted">เงินทอน / Change</span><span>${formatCurrency(changeAmount)}</span></div>` : ''}
@@ -611,6 +613,8 @@ export default function DocumentsPage() {
                       <p className="text-xs text-[var(--text-muted)]">{formatCurrency(item.unitPrice)}</p>
                       {(activeSale.showVatOnReceipt ?? ((activeSale.taxAmount ?? 0) > 0)) && item.taxType === 'non_vat' && <p className="text-[11px] text-amber-600">ไม่นับ VAT</p>}
                       {item.note && <p className="text-[11px] text-purple-700 whitespace-pre-wrap break-words">หมายเหตุ: {item.note}</p>}
+                      {item.workGroupName && <p className="text-[11px] break-words">ชิ้นงาน: {item.workGroupName}</p>}
+                      {item.course && <p className="text-[11px] text-emerald-700">คอร์ส {item.course.paidUnits} + {item.course.bonusUnits} ครั้ง</p>}
                     </div>
                     <span className="text-center">{item.quantity}</span>
                     <span className="text-right font-semibold">{formatCurrency(item.total)}</span>

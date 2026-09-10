@@ -15,6 +15,7 @@ import {
   findCatalogMainBranch,
   getActiveBranchIds,
   isCatalogVisibleInBranch,
+  canArchiveCatalogItem,
 } from '@/lib/catalogScope'
 import {
   parseCsvRows,
@@ -35,6 +36,10 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import type { Product, Service } from '@/types'
+import type { CourseTemplate } from '@/lib/courseTypes'
+import { validateCourse } from '@/lib/courseMath'
+import { CourseTemplateFields } from '@/components/CourseTemplateFields'
+import { CatalogArchiveDialog, type CatalogArchiveTarget } from '@/components/CatalogArchiveDialog'
 import type { SheetData } from 'read-excel-file/browser'
 import type { SheetData as WritableSheetData } from 'write-excel-file/browser'
 
@@ -220,7 +225,10 @@ function CategoryModal({
 
 /* ─── Main Page ─── */
 export default function ProductsPage() {
-  const { companyId, branchId, userId, userName, branches } = useAuth()
+  const { companyId, branchId, userId, userName, user, branches } = useAuth()
+  const [selection, setSelection] = useState<{ scope: string; ids: string[] }>({ scope: '', ids: [] })
+  const [archiveRequest, setArchiveRequest] = useState<{ kind: 'products' | 'services'; branchId: string; items: CatalogArchiveTarget[] } | null>(null)
+  const [archiveSuccess, setArchiveSuccess] = useState('')
   const [catalogTab, setCatalogTab] = useState<'products' | 'services'>('products')
   const [products, setProducts]     = useState<Product[]>([])
   const [services, setServices]     = useState<Service[]>([])
@@ -235,6 +243,7 @@ export default function ProductsPage() {
   const [showModal, setShowModal]   = useState(false)
   const [showServiceModal, setShowServiceModal] = useState(false)
   const [editingService, setEditingService] = useState<Service | null>(null)
+  const [courseTemplate, setCourseTemplate] = useState<CourseTemplate | null>(null)
   const [showCatModal, setShowCatModal] = useState(false)
   const [showServiceCatModal, setShowServiceCatModal] = useState(false)
   const [form, setForm]             = useState<ProductForm>(defaultForm)
@@ -314,6 +323,12 @@ export default function ProductsPage() {
       && s.status !== 'deleted'
       && s.isActive !== false
   })
+
+  const canArchive = ['owner', 'super_admin', 'branch_manager'].includes(user?.role ?? '')
+  const selectionScope = JSON.stringify([companyId, branchId, catalogTab, search, filterCategory, serviceFilterCategory, filterWig])
+  const selectableItems = (catalogTab === 'products' ? filtered : filteredServices).filter(item => canArchiveCatalogItem(item, branchId, mainCatalogBranchId))
+  const selectedIds = selection.scope === selectionScope ? selection.ids.filter(id => selectableItems.some(item => item.id === id)) : []
+  const toggleSelected = (id: string, checked: boolean) => setSelection({ scope: selectionScope, ids: checked ? [...new Set([...selectedIds, id])] : selectedIds.filter(value => value !== id) })
 
   const margin = (p: Product) =>
     p.sellingPrice && p.costPrice ? (((p.sellingPrice - p.costPrice) / p.sellingPrice) * 100).toFixed(0) : '0'
@@ -864,6 +879,7 @@ export default function ProductsPage() {
     }
     setServiceSubmitting(true)
     try {
+      if (courseTemplate) validateCourse(courseTemplate)
       const code = serviceForm.code.trim() || `SVC-${String(Date.now()).slice(-6)}`
       const values = {
         code,
@@ -874,6 +890,7 @@ export default function ProductsPage() {
         commissionRate: serviceForm.commissionRate ? Number(serviceForm.commissionRate) : null,
         commissionAmount: serviceForm.commissionAmount ? Number(serviceForm.commissionAmount) : null,
         notes: serviceForm.notes.trim() || null,
+        course: courseTemplate,
         updatedAt: new Date(),
       }
       let serviceId: string
@@ -938,7 +955,7 @@ export default function ProductsPage() {
       setCatalogTab('services')
     } catch (err) {
       console.error(err)
-      alert('บันทึกบริการไม่สำเร็จ กรุณาลองใหม่')
+      alert(err instanceof Error ? err.message : 'บันทึกบริการไม่สำเร็จ กรุณาลองใหม่')
     } finally {
       setServiceSubmitting(false)
     }
@@ -961,6 +978,7 @@ export default function ProductsPage() {
   }
 
   const openNewService = () => {
+    setCourseTemplate(null)
     setEditingService(null)
     setServiceForm(defaultServiceForm)
     setServiceErrors({})
@@ -968,6 +986,7 @@ export default function ProductsPage() {
   }
 
   const openEditService = (service: Service) => {
+    setCourseTemplate(service.course ?? null)
     setEditingService(service)
     setServiceForm({
       name: service.name || '',
@@ -1269,6 +1288,16 @@ export default function ProductsPage() {
         </div>
       )}
 
+      {canArchive && <div className="flex flex-wrap items-center gap-3 border-y border-[var(--border-light)] py-3 text-sm">
+        <label className="flex items-center gap-2"><input type="checkbox" aria-label="เลือกทั้งหมดตามผลค้นหา" disabled={!selectableItems.length} checked={selectableItems.length > 0 && selectedIds.length === selectableItems.length}
+          ref={element => { if (element) element.indeterminate = selectedIds.length > 0 && selectedIds.length < selectableItems.length }}
+          onChange={event => setSelection({ scope: selectionScope, ids: event.target.checked ? selectableItems.map(item => item.id) : [] })} className="h-4 w-4 accent-pink-600" />เลือกทั้งหมดตามผลค้นหา ({selectableItems.length})</label>
+        <span className="text-[var(--text-muted)]">เลือก {selectedIds.length} รายการ</span>
+        <button type="button" disabled={!selectedIds.length || importing || serviceImporting} onClick={() => { setArchiveSuccess(''); setArchiveRequest({ kind: catalogTab, branchId, items: selectableItems.filter(item => selectedIds.includes(item.id)) }) }} className="ml-auto inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-red-600 disabled:opacity-40"><Trash2 className="h-4 w-4" />ลบรายการที่เลือก</button>
+      </div>}
+      {archiveSuccess && <p role="status" className="text-sm text-emerald-700">{archiveSuccess}</p>}
+      {archiveRequest && <CatalogArchiveDialog key={`${archiveRequest.kind}-${archiveRequest.branchId}`} kind={archiveRequest.kind} items={archiveRequest.items} originBranchId={archiveRequest.branchId} onClose={() => setArchiveRequest(null)} onSaved={() => { setArchiveSuccess(`ลบ${archiveRequest.kind === 'products' ? 'สินค้า' : 'บริการ'} ${archiveRequest.items.length} รายการออกจากการใช้งานแล้ว`); setSelection({ scope: '', ids: [] }); setArchiveRequest(null) }} />}
+
       {catalogTab === 'products' ? (
         <>
           {/* Product grid */}
@@ -1291,6 +1320,7 @@ export default function ProductsPage() {
                 <div key={product.id} className="bg-white rounded-2xl border border-[var(--border-light)] overflow-hidden hover:shadow-md hover:border-[var(--pink-200)] transition-all group">
                   {/* Image */}
                   <div className="aspect-square bg-[var(--bg-base)] flex items-center justify-center relative overflow-hidden">
+                    {canArchive && canArchiveCatalogItem(product, branchId, mainCatalogBranchId) && <input type="checkbox" aria-label={`เลือกสินค้า ${product.name}`} checked={selectedIds.includes(product.id)} onChange={event => toggleSelected(product.id, event.target.checked)} className="absolute right-2 top-2 z-10 h-5 w-5 accent-pink-600" />}
                     {product.images?.[0] ? (
                       <img src={product.images[0]} alt={product.name} className="w-full h-full object-cover" />
                     ) : (
@@ -1344,6 +1374,7 @@ export default function ProductsPage() {
               {filteredServices.map(service => (
                 <div key={service.id} className="bg-white rounded-2xl border border-[var(--border-light)] p-4 hover:shadow-md hover:border-[var(--pink-200)] transition-all">
                   <div className="flex items-start gap-3">
+                    {canArchive && canArchiveCatalogItem(service, branchId, mainCatalogBranchId) && <input type="checkbox" aria-label={`เลือกบริการ ${service.name}`} checked={selectedIds.includes(service.id)} onChange={event => toggleSelected(service.id, event.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-pink-600" />}
                     <div className="w-12 h-12 rounded-2xl bg-[var(--pink-50)] flex items-center justify-center shrink-0">
                       <Scissors className="w-5 h-5 text-[var(--pink-500)]" />
                     </div>
@@ -1613,6 +1644,7 @@ export default function ProductsPage() {
                   rows={2} placeholder="รายละเอียดบริการเพิ่มเติม..." className={inputCls + ' resize-none'} />
               </div>
 
+              <CourseTemplateFields value={courseTemplate} onChange={setCourseTemplate} services={services.filter(service => service.id !== editingService?.id)} branches={branches} />
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={closeServiceModal} disabled={serviceSubmitting}
                   className="flex-1 px-4 py-2.5 bg-[var(--bg-base)] text-[var(--text-muted)] rounded-xl text-sm font-semibold hover:bg-[#ede8e0] transition-all disabled:opacity-50">
