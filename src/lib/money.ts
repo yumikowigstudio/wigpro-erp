@@ -21,7 +21,7 @@ function allocate(total: number, weights: number[]): number[] {
 }
 
 export function saleLineAmounts(sale: Pick<Sale, 'items' | 'totalAmount' | 'subtotal' | 'discountAmount' | 'taxIncluded' | 'taxAmount'>): number[] {
-  const net = sale.items.map(item => Math.max(0, item.unitPrice * item.quantity - (item.discountAmount ?? 0)))
+  const net = sale.items.map(item => Math.max(0, item.unitPrice * (item.quantity - (item.courseRedemption?.units ?? 0)) - (item.discountAmount ?? 0)))
   const tax = allocate(Math.max(0, sale.taxAmount ?? 0), sale.items.map((item, index) => item.taxType === 'non_vat' ? 0 : net[index]))
   return allocate(sale.totalAmount, net.map((amount, index) => amount + ((sale.items[index].taxIncluded ?? sale.taxIncluded) ? 0 : (sale.items[index].taxAmount ?? tax[index]))))
 }
@@ -35,12 +35,13 @@ export function calculateReturn(sale: Sale, quantities: number[], previous: Reco
     const item = sale.items[index]
     if (!Number.isInteger(quantity) || quantity < 0 || !item) throw new Error('จำนวนคืนไม่ถูกต้อง')
     const already = previous[String(index)] ?? 0
-    if (quantity + already > item.quantity) throw new Error(`${item.name}: จำนวนคืนเกินจำนวนที่ยังคืนได้`)
+    const refundableQuantity = item.quantity - (item.courseRedemption?.units ?? 0)
+    if (quantity + already > refundableQuantity) throw new Error(`${item.name}: จำนวนคืนเกินจำนวนที่ชำระเงินจริง`)
     if (quantity === 0) return
-    totalCents += Math.round(cents(lineAmounts[index]) * (already + quantity) / item.quantity)
-      - Math.round(cents(lineAmounts[index]) * already / item.quantity)
-    vatCents += Math.round(cents(lineTaxes[index]) * (already + quantity) / item.quantity)
-      - Math.round(cents(lineTaxes[index]) * already / item.quantity)
+    totalCents += Math.round(cents(lineAmounts[index]) * (already + quantity) / refundableQuantity)
+      - Math.round(cents(lineAmounts[index]) * already / refundableQuantity)
+    vatCents += Math.round(cents(lineTaxes[index]) * (already + quantity) / refundableQuantity)
+      - Math.round(cents(lineTaxes[index]) * already / refundableQuantity)
   })
   const total = totalCents / 100
   const vat = vatCents / 100

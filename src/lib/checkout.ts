@@ -7,7 +7,7 @@ import { invId } from './stock'
 import { writeStockChange, writeTransactionLog } from './transactionStock'
 import type { Deposit, Sale } from '@/types'
 import { getLegacyBranchStockFallback, isCatalogVisibleInBranch } from './catalogScope'
-import { writeCoursePurchases } from './courses'
+import { prepareCheckoutCourseRedemptions, writeCheckoutCourseRedemptions, writeCoursePurchases } from './courses'
 import { validateCourse } from './courseMath'
 import type { CourseTemplate } from './courseTypes'
 import { allocateOrderPayments } from './workOrderAmounts'
@@ -26,9 +26,9 @@ export async function commitCheckout(input: {
   const signature = JSON.stringify({ mode: input.mode, branchId, customerId: input.data.customerId ?? null,
     total: input.data.totalAmount, deducted: input.data.depositDeducted ?? 0,
     orders: input.orders.map(order => ({ id: order.id, total: order.data.totalAmount, group: order.data.workGroupId, caseId: order.data.workCaseId, title: order.data.sourceItemName, color: order.data.wigColor, length: order.data.wigLength, notes: order.data.notes })),
-    items: (input.data.items as Array<Record<string, unknown>>).map(item => ({ type: item.type, productId: item.productId, serviceId: item.serviceId, name: item.name, quantity: item.quantity, unitPrice: item.unitPrice, discountAmount: item.discountAmount, note: item.note, workGroupId: item.workGroupId })),
+    items: (input.data.items as Array<Record<string, unknown>>).map(item => ({ type: item.type, productId: item.productId, serviceId: item.serviceId, name: item.name, quantity: item.quantity, unitPrice: item.unitPrice, discountAmount: item.discountAmount, note: item.note, workGroupId: item.workGroupId, courseRedemption: item.courseRedemption })),
     payment: input.data.paymentMethod ?? input.data.payMethod, note: input.data.receiptNote ?? '' })
-  if (input.orders.length + (input.commissions?.length ?? 0) + ((input.data.items as unknown[])?.length ?? 0) * 3 > 400) throw new Error('รายการในบิลมากเกินไป กรุณาแบ่งบิล')
+  if (input.orders.length + (input.commissions?.length ?? 0) + ((input.data.items as unknown[])?.length ?? 0) * 7 > 400) throw new Error('รายการในบิลมากเกินไป กรุณาแบ่งบิล')
   await runIdempotentTransaction(ref, data => data.companyId === companyId && data.checkoutSignature === signature, async tx => {
     const existing = await tx.get(ref)
     if (existing.exists()) {
@@ -110,6 +110,18 @@ export async function commitCheckout(input: {
       if (!input.allowNegativeStock && current < (productQuantities.get(item.productId) ?? item.quantity)) throw new Error(`${item.name}: สต๊อกล่าสุดเหลือ ${current} ชิ้น กรุณาตรวจรายการ`)
       stock.push({ item, current, inventoryRef, costPrice: Number(product.data().costPrice ?? 0), missing: !inventory.exists() })
     }
+    const preparedCourseRedemptions = input.mode === 'sale'
+      ? await prepareCheckoutCourseRedemptions(tx, input.id, data as unknown as Sale, { userId: createdBy, userName: input.userName, branchId })
+      : []
+    if (input.mode === 'sale') {
+      const grossAmount = money(allItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0))
+      const coveredAmount = money(allItems.reduce((sum, item) => sum + (item.courseRedemption ? item.unitPrice * item.courseRedemption.units : 0), 0))
+      const discountAmount = money(Number(data.discountAmount ?? 0))
+      if (money(Number(data.subtotal)) !== grossAmount || money(Number(data.grossAmount ?? grossAmount)) !== grossAmount) throw new Error('ยอดรวมรายการเปลี่ยนไป กรุณาตรวจตะกร้าใหม่')
+      if (money(Number(data.courseCoveredAmount ?? 0)) !== coveredAmount) throw new Error('ยอดใช้สิทธิ์คอร์สไม่ตรงกับรายการ')
+      if (discountAmount < 0 || discountAmount > money(grossAmount - coveredAmount)) throw new Error('ส่วนลดเกินยอดที่ต้องชำระ')
+      if (money(Number(data.totalAmount)) !== money(grossAmount - coveredAmount - discountAmount)) throw new Error('ยอดรับชำระไม่ตรงกับรายการและสิทธิ์คอร์ส')
+    }
     for (const { item, current, inventoryRef, missing, costPrice } of stock) {
       Object.assign(item, { stockBefore: current, stockAfter: current - item.quantity })
       writeStockChange(tx, { companyId, branchId, productId: item.productId!, productName: item.name, delta: -item.quantity,
@@ -119,7 +131,8 @@ export async function commitCheckout(input: {
     }
     const workOrderIds = [...input.orders.map(order => order.id), ...priorOrders.map(order => order.id)]
     const courseIds = input.mode === 'sale' ? writeCoursePurchases(tx, input.id, data as unknown as Sale, { userId: createdBy, userName: input.userName, branchId }) : []
-    tx.set(ref, { ...data, checkoutSignature: signature, workOrderIds, workCaseIds: [...cases.map(item => item.ref.id), ...priorOrders.map(order => order.workCaseId).filter(Boolean)], ...(input.mode === 'sale' ? { stockCommitted: true, courseIds } : {}), createdAt: serverTimestamp(), updatedAt: serverTimestamp() })
+    const courseUsageIds = input.mode === 'sale' ? writeCheckoutCourseRedemptions(tx, input.id, data as unknown as Sale, { userId: createdBy, userName: input.userName, branchId }, preparedCourseRedemptions) : []
+    tx.set(ref, { ...data, checkoutSignature: signature, workOrderIds, workCaseIds: [...cases.map(item => item.ref.id), ...priorOrders.map(order => order.workCaseId).filter(Boolean)], ...(input.mode === 'sale' ? { stockCommitted: true, courseIds, courseUsageIds } : {}), createdAt: serverTimestamp(), updatedAt: serverTimestamp() })
     const orderPaid = allocateOrderPayments(input.orders.map(order => Number(order.data.totalAmount)), Number(data.totalAmount), input.mode === 'deposit' ? Number(data.paidAmount ?? 0) : data.paymentStatus === 'confirmed' ? Number(data.totalAmount) : 0)
     for (const [index, entry] of cases.entries()) {
       const { order } = entry

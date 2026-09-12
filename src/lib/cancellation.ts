@@ -5,7 +5,7 @@ import { depositPaid, depositPayments, money, saleCashReceived } from './money'
 import { legacyReturnSummary } from './returns'
 import { writeStockChange, writeTransactionLog } from './transactionStock'
 import type { Deposit, Sale, WorkOrder } from '@/types'
-import { readSaleCourses, writeCourseCancellation } from './courses'
+import { readSaleCourseUses, readSaleCourses, writeCourseCancellation, writeSaleCourseUseReversals } from './courses'
 import { allocateOrderPayments } from './workOrderAmounts'
 
 export type CancelTarget = { kind: 'sale'; record: Sale } | { kind: 'deposit'; record: Deposit }
@@ -38,6 +38,7 @@ export async function cancelDocument(target: CancelTarget, options: { reason: st
     const depositSnaps = await Promise.all(context.deposits.map(dep => tx.get(doc(db, COLLECTIONS.DEPOSITS, dep.id))))
     const commissionSnaps = await Promise.all(context.commissions.map(record => tx.get(record.ref)))
     const courses = target.kind === 'sale' ? await readSaleCourses(tx, live) : []
+    const courseUses = target.kind === 'sale' ? await readSaleCourseUses(tx, live) : []
     if (courses.some(course => Number(course.data()?.usedUnits ?? 0) > 0)) throw new Error('บิลนี้มีคอร์สที่ใช้สิทธิ์แล้ว ไม่สามารถยกเลิกเต็มบิลได้ กรุณาให้ผู้จัดการตรวจการใช้สิทธิ์และยอดคืนเงินก่อน')
     if (options.cancelProduction && orderSnaps.some(order => order.data()?.status === 'delivered')) throw new Error('มีงานส่งมอบแล้ว กรุณาตรวจสอบงานก่อน หรือเลือกคงงานผลิตไว้')
     const quantities = returns?.exists() ? returns.data().quantities as Record<string, number> : context.previousReturns.quantities
@@ -61,7 +62,7 @@ export async function cancelDocument(target: CancelTarget, options: { reason: st
     }
     const cancellation = { cancelReason: options.reason.trim(), cancelledBy: options.userId, cancelledByName: options.userName, cancelledAt: serverTimestamp(), updatedAt: serverTimestamp() }
     tx.update(ref, { ...cancellation, status: 'cancelled', refundDue: money(refundDue),
-      ...(target.kind === 'sale' ? { cashReceivedAmount, paymentStatus: 'rejected', stockRestoredOnCancel: true, stockRestoreItems: restored, stockRestoredAt: serverTimestamp() } : { paymentHistory: depositPayments(live) }),
+      ...(target.kind === 'sale' ? { cashReceivedAmount, paymentStatus: 'rejected', stockRestoredOnCancel: true, stockRestoreItems: restored, stockRestoredAt: serverTimestamp(), courseRightsRestoredOnCancel: courseUses.length > 0 } : { paymentHistory: depositPayments(live) }),
     })
     for (const dep of depositSnaps) {
       if (!dep.exists() || dep.data().closedBySaleId !== live.id) throw new Error('สถานะมัดจำเปลี่ยนแล้ว กรุณาเปิดเอกสารใหม่')
@@ -85,6 +86,7 @@ export async function cancelDocument(target: CancelTarget, options: { reason: st
     }
     for (const commission of commissionSnaps) if (commission.exists()) tx.update(commission.ref, { status: 'cancelled', reversalRequired: commission.data().status === 'paid', ...cancellation })
     for (const course of courses) writeCourseCancellation(tx, course, { userId: options.userId, userName: options.userName, branchId: live.branchId }, options.reason.trim())
+    writeSaleCourseUseReversals(tx, courseUses, { userId: options.userId, userName: options.userName, branchId: live.branchId }, `ยกเลิกบิล ${live.receiptNo}: ${options.reason.trim()}`)
     writeTransactionLog(tx, { companyId: live.companyId, branchId: live.branchId, userId: options.userId, userName: options.userName, action: 'cancel', module: 'ประวัติบิล', recordId: live.id, recordType: target.kind,
       description: `ยกเลิก ${live.receiptNo ?? live.depositNo}: ${options.reason} ยอดรอคืน ${money(refundDue)} บาท; ${options.cancelProduction ? 'ยกเลิก' : 'คง'}งานผลิต ${context.orders.length} รายการ` })
   })

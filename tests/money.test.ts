@@ -37,6 +37,14 @@ test('discounted line allocation equals final receipt total', () => {
   ] as Sale['items'], totalAmount: 99.99 })
   assert.deepEqual(saleLineAmounts(record), [33.33, 66.66])
 })
+test('course-covered service units are excluded from new cash revenue and refunds', () => {
+  const record = sale({ items: [
+    { type: 'service', serviceId: 'wash', name: 'Wash', quantity: 2, unitPrice: 100, total: 200,
+      courseRedemption: { courseId: 'course', courseName: 'Wash 10', serviceId: 'wash', units: 1, coveredAmount: 100, balanceBefore: 10, balanceAfter: 9 } },
+  ] as Sale['items'], subtotal: 200, courseCoveredAmount: 100, totalAmount: 100, taxAmount: 6.54 })
+  assert.deepEqual(saleLineAmounts(record), [100])
+  assert.equal(calculateReturn(record, [1]).total, 100)
+})
 test('all confirmed installments become credit, with legacy unknown dates retained', () => {
   const record = { depositAmount: 100, paidAmount: 250, totalAmount: 500, status: 'deposited', createdAt: new Date() } as Deposit
   assert.equal(depositPaid(record), 250)

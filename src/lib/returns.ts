@@ -49,6 +49,12 @@ export async function recordReturn(input: { sale: Sale; quantities: number[]; re
     if (live.items.some((item, index) => item.course && input.quantities[index] > 0)) throw new Error('คอร์สต้องยกเลิกผ่านบิลต้นทางเพื่อปิดสิทธิ์พร้อมกัน ไม่สามารถคืนเป็นสินค้าทั่วไปได้')
     if (live.status === 'cancelled' || live.paymentStatus === 'pending' || live.paymentStatus === 'rejected') throw new Error('คืนได้เฉพาะบิลที่รับชำระแล้วและยังไม่ยกเลิก')
     const previous = totalsSnap.exists() ? totalsSnap.data().quantities as Record<string, number> : legacy.quantities
+    live.items.forEach((item, index) => {
+      const paidUnits = item.quantity - (item.courseRedemption?.units ?? 0)
+      if ((previous[String(index)] ?? 0) + (input.quantities[index] ?? 0) > paidUnits) {
+        throw new Error(`${item.name}: รายการที่ใช้สิทธิ์คอร์สต้องคืนด้วยการยกเลิกบิลเพื่อคืนสิทธิ์`)
+      }
+    })
     const refund = calculateReturn(live, input.quantities, previous)
     if (money((totalsSnap.data()?.refundedAmount ?? legacy.refundedAmount) + refund.total) > money(live.totalAmount)) throw new Error('ยอดคืนรวมเกินยอดบิล กรุณาตรวจรายการคืนเดิมก่อน')
     if (!input.quantities.some(qty => qty > 0)) throw new Error('เลือกรายการที่จะคืน')

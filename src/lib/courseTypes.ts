@@ -27,6 +27,20 @@ export interface CustomerCourse {
   createdAt: Date
 }
 
+export interface CourseRedemptionAllocation {
+  courseId: string
+  courseName: string
+  serviceId: string
+  units: number
+  coveredAmount: number
+  balanceBefore: number
+  balanceAfter: number
+  eventId?: string
+  staffId?: string
+  staffName?: string
+  note?: string
+}
+
 export interface CourseEvent {
   id: string
   companyId: string
@@ -44,5 +58,8 @@ export interface CourseEvent {
   serviceName?: string
   note?: string
   reverseOf?: string
+  usageSaleId?: string
+  usageReceiptNo?: string
+  lineIndex?: number
   createdAt: Date
 }

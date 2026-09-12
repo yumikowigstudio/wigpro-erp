@@ -160,6 +160,32 @@ test('isolated transaction and tenant regression suite', { timeout: 120000 }, as
       await saveWorkOrderPhoto({ ...photo, remove: true })
       assert.deepEqual((await getDoc(doc(db, 'work_orders/multi-wo-0'))).data()?.completedImages, [])
     })
+    await t.test('course redemption checkout creates a zero-value document and cancellation restores the right', async () => {
+      await seed('services/checkout-course', { companyId: 'co', branchId: 'main', name: 'Wash package', status: 'active', catalogScope: 'shared',
+        course: { paidUnits: 2, bonusUnits: 0, validityDays: 365, serviceIds: ['service'], branchIds: [] } })
+      try {
+        await commitCheckout({ id: 'checkout-course-buy', mode: 'sale', data: { ...saleData('COURSE-BUY'), items: [{ type: 'service', serviceId: 'checkout-course', name: 'Wash package', quantity: 1, unitPrice: 200, total: 200 }], subtotal: 200, totalAmount: 200, payments: [{ method: 'cash', amount: 200 }], paidAmount: 200 }, orders: [], allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' })
+      } catch (error) { throw new Error(`course buy failed: ${error instanceof Error ? error.message : error}`) }
+      const course = await read('customer_courses/checkout-course-buy_0_0') as CustomerCourse
+      const usageData = {
+        ...saleData('COURSE-USE'),
+        items: [{ type: 'service', serviceId: 'service', name: 'Service', quantity: 1, unitPrice: 100, total: 100,
+          courseRedemption: { courseId: course.id, courseName: course.name, serviceId: 'service', units: 1, coveredAmount: 100, balanceBefore: 2, balanceAfter: 1 } }],
+        subtotal: 100, grossAmount: 100, courseCoveredAmount: 100, discountAmount: 0, totalAmount: 0, taxAmount: 0,
+        documentType: 'course_usage', payments: [], paidAmount: 0,
+      }
+      try {
+        await Promise.all([1, 2].map(() => commitCheckout({ id: 'checkout-course-use', mode: 'sale', data: usageData, orders: [], allowNegativeStock: false, userName: 'Tester', mainBranchId: 'main' })))
+      } catch (error) { throw new Error(`course use failed: ${error instanceof Error ? error.message : error}`) }
+      const usageSale = await read('sales/checkout-course-use') as Sale
+      assert.equal(usageSale.totalAmount, 0)
+      assert.equal(usageSale.courseUsageIds?.length, 1)
+      assert.equal((await read(`customer_courses/${course.id}`) as CustomerCourse).remainingUnits, 1)
+      assert.equal((await getDoc(doc(db, `service_records/${usageSale.courseUsageIds![0]}`))).data()?.usageSaleId, usageSale.id)
+      await cancelDocument({ kind: 'sale', record: usageSale }, { reason: 'wrong service', cancelProduction: false, userId: user.uid, userName: 'Tester' })
+      assert.equal((await read(`customer_courses/${course.id}`) as CustomerCourse).remainingUnits, 2)
+      assert.equal((await getDoc(doc(db, `service_records/${usageSale.courseUsageIds![0]}`))).data()?.reversed, true)
+    })
     await t.test('course purchase, concurrent use, reversal and cancellation preserve rights', async () => {
       await seed('services/course', { companyId: 'co', branchId: 'main', name: 'Wash 10 + 2', status: 'active', catalogScope: 'shared',
         course: { paidUnits: 10, bonusUnits: 2, validityDays: 365, serviceIds: ['service'], branchIds: [] } })

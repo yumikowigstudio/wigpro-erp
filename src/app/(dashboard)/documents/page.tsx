@@ -31,6 +31,7 @@ const paymentLabels: Record<PaymentMethod | string, string> = {
   transfer: 'โอนเงิน / Transfer',
   qr: 'QR Code',
   credit_card: 'บัตรเครดิต / Credit Card',
+  course: 'ใช้สิทธิ์คอร์ส / Course',
 }
 
 const paymentStatusConfig: Record<PaymentStatus | 'unknown', { label: string; color: string }> = {
@@ -191,6 +192,7 @@ export default function DocumentsPage() {
   }
 
   const activeSale = selectedSale ? (docs.find(d => d.sourceId === selectedSale.id)?.sale ?? selectedSale) : null
+  const activeSaleIsCourseOnly = activeSale?.documentType === 'course_usage'
   const firstPayment = activeSale?.payments?.[0]
   const paymentStatus = activeSale?.paymentStatus ?? (activeSale?.status === 'completed' ? 'confirmed' : 'pending')
   const paymentCfg = paymentStatusConfig[paymentStatus] ?? paymentStatusConfig.unknown
@@ -270,6 +272,7 @@ export default function DocumentsPage() {
     if (!win) { setMessage('กรุณาอนุญาต popup เพื่อพิมพ์'); return }
     const showVat = sale.showVatOnReceipt ?? ((sale.taxAmount ?? 0) > 0)
     const preVatAmount = sale.preVatAmount ?? Math.max((sale.totalAmount ?? 0) - (sale.taxAmount ?? 0), 0)
+    const isCourseOnly = sale.documentType === 'course_usage'
     const rows = sale.items.map(item => `
       <div class="item-row">
         <div class="item-main">
@@ -281,6 +284,7 @@ export default function DocumentsPage() {
             ${item.note ? `<div class="line-note">หมายเหตุ / Note: ${escapeHtml(item.note)}</div>` : ''}
             ${item.workGroupName ? `<div class="line-note">ชิ้นงาน / Work: ${escapeHtml(item.workGroupName)}</div>` : ''}
             ${item.course ? `<div class="line-note">คอร์ส / Course: ${item.course.paidUnits} + ${item.course.bonusUnits} ครั้ง / sessions</div>` : ''}
+            ${item.courseRedemption ? `<div class="line-note">ใช้สิทธิ์ / Course used: ${escapeHtml(item.courseRedemption.courseName)} · ${item.courseRedemption.units} ครั้ง / sessions</div>` : ''}
           </div>
           <div class="item-total">${formatCurrency(item.total)}</div>
         </div>
@@ -290,8 +294,8 @@ export default function DocumentsPage() {
     const branchName = receiptInfo?.branchName || sale.branchName || ''
     const branchCode = receiptInfo?.branchCode || sale.branchCode || ''
     const saleDate = sale.createdAt instanceof Date ? sale.createdAt : new Date(sale.createdAt)
-    const receiptTitle = showVat ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี\nReceipt / Tax Invoice' : 'ใบเสร็จรับเงิน\nReceipt'
-    const paymentMethod = paymentLabels[sale.payments?.[0]?.method ?? 'cash'] ?? sale.payments?.[0]?.method ?? '-'
+    const receiptTitle = isCourseOnly ? 'ใบยืนยันการใช้สิทธิ์คอร์ส\nCourse Usage Receipt' : showVat ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี\nReceipt / Tax Invoice' : 'ใบเสร็จรับเงิน\nReceipt'
+    const paymentMethod = isCourseOnly ? paymentLabels.course : paymentLabels[sale.payments?.[0]?.method ?? 'cash'] ?? sale.payments?.[0]?.method ?? '-'
     const depositDeducted = sale.depositDeducted ?? 0
     const amountDue = Math.max((sale.totalAmount ?? 0) - depositDeducted, 0)
     const paidAmount = sale.paidAmount ?? sale.payments?.[0]?.amount ?? amountDue
@@ -350,14 +354,15 @@ export default function DocumentsPage() {
       </div>
       <div class="summary-box">
         <div class="row"><span class="muted">${showVat ? 'รวมเป็นเงิน / Subtotal' : 'รวมเป็นเงิน / Total'}</span><span>${formatCurrency(sale.subtotal)}</span></div>
+        ${(sale.courseCoveredAmount ?? 0) > 0 ? `<div class="row"><span class="muted">ใช้สิทธิ์คอร์ส / Course used</span><span>-${formatCurrency(sale.courseCoveredAmount ?? 0)}</span></div>` : ''}
         ${sale.discountAmount > 0 ? `<div class="row"><span class="muted">ส่วนลด / Discount</span><span>-${formatCurrency(sale.discountAmount)}</span></div>` : ''}
         ${showVat ? `
           <div class="row"><span class="muted">มูลค่าก่อน VAT / Amount before VAT</span><span>${formatCurrency(preVatAmount)}</span></div>
           <div class="row"><span class="muted">ภาษีมูลค่าเพิ่ม 7% / VAT 7%</span><span>${formatCurrency(sale.taxAmount)}</span></div>
         ` : ''}
         ${depositDeducted > 0 ? `<div class="row"><span>ยอดรวมงาน / Order Total</span><span>${formatCurrency(sale.totalAmount)}</span></div><div class="row"><span class="muted">หักมัดจำ / Deposit deducted</span><span>-${formatCurrency(depositDeducted)}</span></div>` : ''}
-        <div class="row total"><span>${depositDeducted > 0 ? 'ยอดที่ต้องชำระ / Amount Due' : 'รวมทั้งสิ้น / Grand Total'}</span><span>${formatCurrency(amountDue)}</span></div>
-        <div class="row"><span class="muted">รับเงิน / Amount Paid</span><span>${formatCurrency(paidAmount)}</span></div>
+        <div class="row total"><span>${isCourseOnly ? 'ยอดชำระเพิ่ม / Additional Payment' : depositDeducted > 0 ? 'ยอดที่ต้องชำระ / Amount Due' : 'รวมทั้งสิ้น / Grand Total'}</span><span>${formatCurrency(amountDue)}</span></div>
+        ${isCourseOnly ? '' : `<div class="row"><span class="muted">รับเงิน / Amount Paid</span><span>${formatCurrency(paidAmount)}</span></div>`}
         ${(sale.payments?.[0]?.method ?? '') === 'cash' ? `<div class="row"><span class="muted">เงินทอน / Change</span><span>${formatCurrency(changeAmount)}</span></div>` : ''}
       </div>
       <div class="note-box">${escapeHtml(footerText)}</div>
@@ -546,7 +551,7 @@ export default function DocumentsPage() {
                 <div className="rounded-2xl bg-[var(--bg-base)] border border-[var(--border-light)] p-4">
                   <p className="text-xs text-[var(--text-muted)]">ชำระเงิน</p>
                   <span className={`inline-flex mt-1 text-xs px-2 py-1 rounded-full font-semibold ${paymentCfg.color}`}>
-                    {paymentCfg.label}
+                    {activeSaleIsCourseOnly && activeSale?.status !== 'cancelled' ? 'ใช้สิทธิ์แล้ว' : paymentCfg.label}
                   </span>
                 </div>
               </div>
@@ -578,9 +583,13 @@ export default function DocumentsPage() {
 
                 <div className="space-y-3">
                   <h4 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4" /> การชำระเงิน
+                    <CheckCircle2 className="w-4 h-4" /> {activeSaleIsCourseOnly ? 'การใช้สิทธิ์คอร์ส' : 'การชำระเงิน'}
                   </h4>
-                  <div className="rounded-2xl border border-[var(--border-light)] p-4 text-sm space-y-2">
+                  {activeSaleIsCourseOnly ? <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm space-y-2 text-emerald-800">
+                    <div className="flex justify-between"><span>คอร์สครอบคลุม</span><span className="font-semibold">{formatCurrency(activeSale.courseCoveredAmount ?? 0)}</span></div>
+                    <div className="flex justify-between"><span>ยอดชำระเพิ่ม</span><span className="font-semibold">{formatCurrency(0)}</span></div>
+                    <p className="text-xs">ยกเลิกบิลนี้เพื่อคืนสิทธิ์กลับเข้าคอร์สโดยอัตโนมัติ</p>
+                  </div> : <><div className="rounded-2xl border border-[var(--border-light)] p-4 text-sm space-y-2">
                     <div className="flex justify-between"><span className="text-[var(--text-muted)]">วิธีชำระ</span><span className="font-semibold">{paymentLabels[firstPayment?.method ?? 'cash']}</span></div>
                     <div className="flex justify-between"><span className="text-[var(--text-muted)]">ยอดรับ</span><span className="font-semibold">{formatCurrency(firstPayment?.amount ?? activeSale.paidAmount ?? 0)}</span></div>
                     {firstPayment?.slipUrl ? (
@@ -598,7 +607,7 @@ export default function DocumentsPage() {
                       className="flex-1 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2">
                       {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} ยืนยันชำระ
                     </button>
-                  </div>
+                  </div></>}
                 </div>
               </div>
 
@@ -615,6 +624,7 @@ export default function DocumentsPage() {
                       {item.note && <p className="text-[11px] text-purple-700 whitespace-pre-wrap break-words">หมายเหตุ: {item.note}</p>}
                       {item.workGroupName && <p className="text-[11px] break-words">ชิ้นงาน: {item.workGroupName}</p>}
                       {item.course && <p className="text-[11px] text-emerald-700">คอร์ส {item.course.paidUnits} + {item.course.bonusUnits} ครั้ง</p>}
+                      {item.courseRedemption && <p className="text-[11px] font-semibold text-emerald-700">ใช้สิทธิ์ {item.courseRedemption.courseName} {item.courseRedemption.units} ครั้ง · ครอบคลุม {formatCurrency(item.courseRedemption.coveredAmount)}</p>}
                     </div>
                     <span className="text-center">{item.quantity}</span>
                     <span className="text-right font-semibold">{formatCurrency(item.total)}</span>

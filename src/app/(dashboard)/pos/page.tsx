@@ -14,7 +14,7 @@ import { formatCurrency } from '@/lib/utils'
 import { COLLECTIONS, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
 import { WigOrderFields } from '@/components/WigOrderFields'
 import { prepareWigOrders, wigGroups, type WigGroupConfig } from '@/lib/wigCheckout'
-import type { CourseTemplate, CustomerCourse } from '@/lib/courseTypes'
+import type { CourseRedemptionAllocation, CourseTemplate, CustomerCourse } from '@/lib/courseTypes'
 import { Product, Service, Deposit, Employee, Branch, Customer, ReceiptShopSnapshot } from '@/types'
 import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, serverTimestamp, setDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
@@ -26,7 +26,6 @@ import { commitCheckout } from '@/lib/checkout'
 import { depositCredit, money } from '@/lib/money'
 import { findCatalogMainBranch, getLegacyBranchStockFallback, isCatalogVisibleInBranch } from '@/lib/catalogScope'
 import { formatThaiReceiptDate } from '@/lib/dateFormat'
-import { redeemCourse } from '@/lib/courses'
 
 type ProductWithStock = Product & { stockQty?: number }
 type PosMode = 'sale' | 'deposit'
@@ -56,6 +55,7 @@ interface CartItem {
   workGroupId?: string
   workGroupName?: string
   course?: CourseTemplate
+  courseRedemption?: CourseRedemptionAllocation
   id: string; type: 'product' | 'service'; name: string; sku?: string
   price: number; quantity: number; taxType: 'vat' | 'non_vat'; stockQty?: number
   originalPrice?: number
@@ -83,6 +83,8 @@ interface ReceiptData {
   customerPhone?: string
   items:        CartItem[]
   subtotal:     number
+  courseCoveredAmount: number
+  documentType: 'sale' | 'course_usage' | 'mixed'
   discountAmt:  number
   preVatAmount: number
   vatAmt:       number
@@ -151,6 +153,12 @@ const DEFAULT_RECEIPT_NOTE_TEMPLATES = [
 const uniqTexts = (values: string[]) =>
   Array.from(new Set(values.map(v => v.trim()).filter(Boolean)))
 
+const withoutCourseRedemption = (item: CartItem): CartItem => {
+  const next = { ...item }
+  delete next.courseRedemption
+  return next
+}
+
 export default function POSPage() {
   const { companyId, branchId, userId } = useAuth()
   return <POSContent key={`${companyId}:${branchId}:${userId}`} />
@@ -209,7 +217,6 @@ function POSContent() {
   const [customerCourses, setCustomerCourses] = useState<CustomerCourse[]>([])
   const [coursesLoading, setCoursesLoading] = useState(false)
   const [courseUseDialog, setCourseUseDialog] = useState<CourseUseDialog | null>(null)
-  const [courseUseSaving, setCourseUseSaving] = useState(false)
   const [appliedDepositId, setAppliedDepositId] = useState('')     // มัดจำที่เลือกหักในบิลนี้
   const [createWorkOrder, setCreateWorkOrder] = useState(true)
   const [workGroups, setWorkGroups] = useState<Record<string, WigGroupConfig>>({})
@@ -408,6 +415,28 @@ function POSContent() {
   )
   const items = tab === 'products' ? filteredProducts : filteredServices
 
+  const courseIsAvailable = (course: CustomerCourse) => course.status === 'active'
+    && course.remainingUnits > 0
+    && (!course.expiresAt || course.expiresAt > new Date())
+    && (!course.template.branchIds.length || course.template.branchIds.includes(branchId))
+  const availableCustomerCourses = customerCourses.filter(courseIsAvailable)
+  const courseUsedByAnotherItem = (courseId: string, serviceId: string) => cart.some(item =>
+    item.type === 'service' && item.id !== serviceId && item.courseRedemption?.courseId === courseId)
+  const coursesForService = (serviceId: string) => availableCustomerCourses.filter(course =>
+    course.template.serviceIds.includes(serviceId) && !courseUsedByAnotherItem(course.id, serviceId))
+  const serviceLabel = (serviceId: string) => services.find(service => service.id === serviceId)?.name || serviceId
+  const courseAllocation = (course: CustomerCourse, serviceId: string, units: number, price: number, current?: CartItem): CourseRedemptionAllocation => ({
+    courseId: course.id,
+    courseName: course.name,
+    serviceId,
+    units,
+    coveredAmount: money(price * units),
+    balanceBefore: course.remainingUnits,
+    balanceAfter: course.remainingUnits - units,
+    ...(current?.staffId ? { staffId: current.staffId, staffName: current.staffName } : {}),
+    ...(current?.note?.trim() ? { note: current.note.trim() } : {}),
+  })
+
   const addToCart = (item: ProductWithStock | Service, type: 'product' | 'service') => {
     const price = type === 'product' ? (item as ProductWithStock).sellingPrice : (item as Service).price
     const stock = type === 'product' ? (item as ProductWithStock).stockQty ?? 999 : 999
@@ -415,10 +444,22 @@ function POSContent() {
     const existing = cart.find(c => c.id === item.id && c.type === type)
     if (existing) {
       if (!allowOverStock && existing.quantity >= stock) return
-      setCart(cart.map(c => c.id === item.id && c.type === type ? { ...c, quantity: c.quantity + 1 } : c))
+      const quantity = existing.quantity + 1
+      const selectedCourse = existing.courseRedemption
+        ? availableCustomerCourses.find(course => course.id === existing.courseRedemption?.courseId)
+        : type === 'service' && mode === 'sale' && customerId && !existing.course && coursesForService(item.id).length === 1
+          ? coursesForService(item.id)[0]
+          : undefined
+      const units = selectedCourse ? Math.min(quantity, selectedCourse.remainingUnits) : 0
+      setCart(cart.map(c => c.id === item.id && c.type === type ? {
+        ...c,
+        quantity,
+        ...(selectedCourse && units > 0 ? { courseRedemption: courseAllocation(selectedCourse, item.id, units, c.price, c) } : {}),
+      } : c))
     } else {
       if (!allowOverStock && stock <= 0) return
-      setCart([...cart, {
+      const eligibleCourses = type === 'service' && mode === 'sale' && customerId && !(item as Service).course ? coursesForService(item.id) : []
+      const next: CartItem = {
         id: item.id, type, name: item.name, sku: 'sku' in item ? item.sku : undefined,
         course: type === 'service' ? (item as Service).course ?? undefined : undefined,
         price, originalPrice: price, quantity: 1, taxType: 'vat',
@@ -429,7 +470,11 @@ function POSContent() {
         commissionRate: item.commissionRate, commissionAmount: item.commissionAmount,
         staffId: defaultStaffId || undefined,
         staffName: defaultStaffId ? employees.find(e => e.id === defaultStaffId)?.nickname || `${employees.find(e => e.id === defaultStaffId)?.firstName ?? ''}`.trim() : undefined,
-      }])
+      }
+      if (eligibleCourses.length === 1) next.courseRedemption = courseAllocation(eligibleCourses[0], item.id, 1, price, next)
+      setCart([...cart, next])
+      if (eligibleCourses.length === 1) setPosMsg({ type: 'ok', text: `เลือกใช้สิทธิ์ ${eligibleCourses[0].name} ให้ ${item.name} แล้ว ระบบจะตัดสิทธิ์เมื่อยืนยันบิล` })
+      else if (eligibleCourses.length > 1) setPosMsg({ type: 'ok', text: `${item.name} ใช้ได้หลายคอร์ส กรุณากด “เลือกสิทธิ์” ที่รายการ` })
     }
   }
   const remove    = (id: string, type: string) => setCart(cart.filter(c => !(c.id === id && c.type === type)))
@@ -437,11 +482,28 @@ function POSContent() {
     if (qty <= 0) { remove(id, type); return }
     const item = cart.find(c => c.id === id && c.type === type)
     if (item?.stockQty !== undefined && qty > item.stockQty && !(item.type === 'product' && stockPolicy.allowNegativeStock)) return
-    setCart(cart.map(c => c.id === id && c.type === type ? { ...c, quantity: qty } : c))
+    setCart(cart.map(c => {
+      if (c.id !== id || c.type !== type) return c
+      const course = c.courseRedemption ? availableCustomerCourses.find(item => item.id === c.courseRedemption?.courseId) : undefined
+      const units = course ? Math.min(qty, course.remainingUnits) : 0
+      return {
+        ...c,
+        quantity: qty,
+        ...(course && units > 0 ? { courseRedemption: courseAllocation(course, c.id, units, c.price, c) } : {}),
+      }
+    }))
   }
   const updatePrice = (id: string, type: string, price: number) => {
     const nextPrice = Number.isFinite(price) ? Math.max(0, price) : 0
-    setCart(cart.map(c => c.id === id && c.type === type ? { ...c, price: nextPrice } : c))
+    setCart(cart.map(c => c.id === id && c.type === type ? {
+      ...c,
+      price: nextPrice,
+      ...(c.courseRedemption ? { courseRedemption: { ...c.courseRedemption, coveredAmount: money(nextPrice * c.courseRedemption.units) } } : {}),
+    } : c))
+  }
+  const removeCourseUse = (id: string, type: string) => {
+    setCart(current => current.map(item => item.id === id && item.type === type ? withoutCourseRedemption(item) : item))
+    setPosMsg({ type: 'ok', text: 'เปลี่ยนรายการนี้เป็นชำระราคาปกติแล้ว' })
   }
 
   /* ─── โหลดมัดจำค้างของลูกค้าที่เลือก (สำหรับหักมัดจำในโหมดขาย) ─── */
@@ -496,13 +558,7 @@ function POSContent() {
   /* ─── พนักงานขาย / คอมมิชชั่น ─── */
   const empLabel = (e: Employee) => e.nickname || `${e.firstName} ${e.lastName ?? ''}`.trim()
   const branchEmployees = employees.filter(employee => !employee.branchId || employee.branchId === branchId)
-  const courseIsAvailable = (course: CustomerCourse) => course.status === 'active'
-    && course.remainingUnits > 0
-    && (!course.expiresAt || course.expiresAt > new Date())
-    && (!course.template.branchIds.length || course.template.branchIds.includes(branchId))
-  const availableCustomerCourses = customerCourses.filter(courseIsAvailable)
-  const coursesForService = (serviceId: string) => availableCustomerCourses.filter(course => course.template.serviceIds.includes(serviceId))
-  const serviceLabel = (serviceId: string) => services.find(service => service.id === serviceId)?.name || serviceId
+  const courseBranchEmployees = employees.filter(employee => employee.branchId === branchId)
 
   const openCourseUse = (course: CustomerCourse, serviceId?: string, cartItem?: CartItem) => {
     const usableServiceIds = course.template.serviceIds.filter(id => visibleServices.some(service => service.id === id && service.isActive !== false && service.status !== 'deleted'))
@@ -512,13 +568,18 @@ function POSContent() {
       return
     }
     const matchingCourses = serviceId ? coursesForService(serviceId) : [course]
+    if (courseUsedByAnotherItem(course.id, serviceId || selectedServiceId)) {
+      setPosMsg({ type: 'err', text: 'คอร์สนี้ถูกเลือกให้บริการอื่นในตะกร้าแล้ว กรุณาใช้จำนวนรวมในรายการเดียว' })
+      return
+    }
     const maximumUnits = Math.min(course.remainingUnits, cartItem?.quantity ?? course.remainingUnits)
+    const preferredStaffId = cartItem?.courseRedemption?.staffId || cartItem?.staffId || defaultStaffId || ''
     setCourseUseDialog({
-      courseId: course.id,
+      courseId: cartItem?.courseRedemption?.courseId || course.id,
       serviceId: selectedServiceId,
-      units: Math.max(1, Math.min(1, maximumUnits)),
-      staffId: cartItem?.staffId || defaultStaffId || '',
-      note: cartItem?.note || '',
+      units: Math.max(1, Math.min(cartItem?.courseRedemption?.units || 1, maximumUnits)),
+      staffId: courseBranchEmployees.some(employee => employee.id === preferredStaffId) ? preferredStaffId : '',
+      note: cartItem?.courseRedemption?.note || cartItem?.note || '',
       cartItem: cartItem?.type === 'service' ? { id: cartItem.id, type: 'service' } : undefined,
       courseIds: matchingCourses.map(item => item.id),
     })
@@ -539,9 +600,9 @@ function POSContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestedCourseUse, requestedCourseId, requestedCustomerId, customerId, customerCourses, coursesLoading, dataLoading, services, branchId])
 
-  const submitCourseUse = async (event: React.FormEvent) => {
+  const submitCourseUse = (event: React.FormEvent) => {
     event.preventDefault()
-    if (!courseUseDialog || courseUseSaving) return
+    if (!courseUseDialog) return
     const course = availableCustomerCourses.find(item => item.id === courseUseDialog.courseId)
     if (!course) {
       setPosMsg({ type: 'err', text: 'สิทธิ์นี้ไม่พร้อมใช้งานแล้ว กรุณาตรวจสอบยอดคงเหลืออีกครั้ง' })
@@ -555,48 +616,74 @@ function POSContent() {
       setPosMsg({ type: 'err', text: 'จำนวนสิทธิ์มากกว่าจำนวนบริการในตะกร้า' })
       return
     }
-    setCourseUseSaving(true)
-    try {
-      await redeemCourse({
-        id: crypto.randomUUID(),
-        course,
-        serviceId: courseUseDialog.serviceId,
-        units: courseUseDialog.units,
-        staffId: courseUseDialog.staffId || undefined,
-        note: courseUseDialog.note,
-        actor: { userId, userName: cashierName, branchId },
-      })
-      if (sourceItem) {
-        setCart(current => current.flatMap(item => {
-          if (item.id !== sourceItem.id || item.type !== sourceItem.type) return [item]
-          const remainingQuantity = item.quantity - courseUseDialog.units
-          return remainingQuantity > 0 ? [{ ...item, quantity: remainingQuantity }] : []
-        }))
-      }
-      const remaining = course.remainingUnits - courseUseDialog.units
-      setCourseUseDialog(null)
-      setPosMsg({ type: 'ok', text: `ใช้สิทธิ์ ${serviceLabel(courseUseDialog.serviceId)} ${courseUseDialog.units} ครั้งแล้ว · คอร์สเหลือ ${remaining} ครั้ง${sourceItem ? ' · นำรายการที่ใช้สิทธิ์ออกจากยอดชำระแล้ว' : ''}` })
-    } catch (error) {
-      setPosMsg({ type: 'err', text: error instanceof Error ? error.message : 'ใช้สิทธิ์ไม่สำเร็จ กรุณาลองใหม่' })
-    } finally {
-      setCourseUseSaving(false)
+    if (courseUsedByAnotherItem(course.id, courseUseDialog.serviceId)) {
+      setPosMsg({ type: 'err', text: 'คอร์สนี้ถูกเลือกให้บริการอื่นในตะกร้าแล้ว' })
+      return
     }
+    const service = visibleServices.find(item => item.id === courseUseDialog.serviceId)
+    if (!service || service.course) {
+      setPosMsg({ type: 'err', text: 'ไม่พบบริการที่ใช้สิทธิ์ในสาขานี้' })
+      return
+    }
+    const staff = courseBranchEmployees.find(employee => employee.id === courseUseDialog.staffId)
+    setCart(current => {
+      const target = sourceItem || current.find(item => item.id === service.id && item.type === 'service')
+      if (target) {
+        const quantity = Math.max(target.quantity, courseUseDialog.units)
+        const updated = {
+          ...target,
+          quantity,
+          staffId: staff?.id || target.staffId,
+          staffName: staff ? empLabel(staff) : target.staffName,
+          note: courseUseDialog.note || target.note,
+        }
+        updated.courseRedemption = {
+          ...courseAllocation(course, service.id, courseUseDialog.units, updated.price, updated),
+          ...(courseUseDialog.staffId ? { staffId: courseUseDialog.staffId, staffName: staff ? empLabel(staff) : undefined } : {}),
+          ...(courseUseDialog.note.trim() ? { note: courseUseDialog.note.trim() } : {}),
+        }
+        return current.map(item => item.id === target.id && item.type === target.type ? updated : item)
+      }
+      const next: CartItem = {
+        id: service.id,
+        type: 'service',
+        name: service.name,
+        price: service.price,
+        originalPrice: service.price,
+        quantity: courseUseDialog.units,
+        taxType: 'vat',
+        commissionRate: service.commissionRate,
+        commissionAmount: service.commissionAmount,
+        staffId: staff?.id,
+        staffName: staff ? empLabel(staff) : undefined,
+        note: courseUseDialog.note || undefined,
+      }
+      next.courseRedemption = courseAllocation(course, service.id, courseUseDialog.units, next.price, next)
+      return [...current, next]
+    })
+    setTab('services')
+    setFilterCat('ทั้งหมด')
+    setCourseUseDialog(null)
+    setPosMsg({ type: 'ok', text: `เลือกใช้สิทธิ์ ${serviceLabel(courseUseDialog.serviceId)} ${courseUseDialog.units} ครั้งแล้ว · จะเหลือ ${course.remainingUnits - courseUseDialog.units} ครั้งหลังยืนยันบิล` })
   }
 
   const setStaff = (id: string, type: string, staffId: string) => {
     const emp = employees.find(e => e.id === staffId)
     setCart(cart.map(c => c.id === id && c.type === type
-      ? { ...c, staffId: staffId || undefined, staffName: emp ? empLabel(emp) : undefined }
+      ? { ...c, staffId: staffId || undefined, staffName: emp ? empLabel(emp) : undefined,
+        ...(c.courseRedemption ? { courseRedemption: { ...c.courseRedemption, staffId: staffId || undefined, staffName: emp ? empLabel(emp) : undefined } } : {}) }
       : c))
   }
   const setItemNote = (id: string, type: string, note: string) => {
-    setCart(cart.map(c => c.id === id && c.type === type ? { ...c, note } : c))
+    setCart(cart.map(c => c.id === id && c.type === type ? { ...c, note,
+      ...(c.courseRedemption ? { courseRedemption: { ...c.courseRedemption, note: note.trim() || undefined } } : {}) } : c))
   }
   // คอมต่อรายการ: ใช้จำนวนเงินคงที่ของสินค้า > %ของสินค้า > %ของพนักงาน
   const itemCommission = (c: CartItem): number => {
     if (!c.staffId) return 0
-    const lineTotal = c.price * c.quantity
-    if (c.commissionAmount) return c.commissionAmount * c.quantity
+    const paidUnits = Math.max(0, c.quantity - (c.courseRedemption?.units ?? 0))
+    const lineTotal = c.price * paidUnits
+    if (c.commissionAmount) return c.commissionAmount * paidUnits
     if (c.commissionRate)   return lineTotal * c.commissionRate / 100
     const emp = employees.find(e => e.id === c.staffId)
     if (emp?.commissionRate) return lineTotal * emp.commissionRate / 100
@@ -653,20 +740,24 @@ function POSContent() {
 
   /* ─── Totals ─── */
   const subtotal    = cart.reduce((s, c) => s + c.price * c.quantity, 0)
-  const rawDiscountAmt = discountType === 'percent' ? subtotal * (discount / 100) : discount
-  const discountAmt = Math.min(Math.max(rawDiscountAmt, 0), subtotal)
-  const taxableSubtotal = subtotal
-  const taxableDiscount = subtotal > 0 ? discountAmt * (taxableSubtotal / subtotal) : 0
+  const courseCoveredAmount = money(cart.reduce((sum, item) => sum + (item.courseRedemption ? item.price * Math.min(item.quantity, item.courseRedemption.units) : 0), 0))
+  const payableSubtotal = money(Math.max(0, subtotal - courseCoveredAmount))
+  const rawDiscountAmt = discountType === 'percent' ? payableSubtotal * (discount / 100) : discount
+  const discountAmt = Math.min(Math.max(rawDiscountAmt, 0), payableSubtotal)
+  const taxableSubtotal = payableSubtotal
+  const taxableDiscount = payableSubtotal > 0 ? discountAmt * (taxableSubtotal / payableSubtotal) : 0
   const taxableAfterDisc = Math.max(taxableSubtotal - taxableDiscount, 0)
-  const nonTaxableAfterDisc = Math.max((subtotal - taxableSubtotal) - (discountAmt - taxableDiscount), 0)
+  const nonTaxableAfterDisc = Math.max((payableSubtotal - taxableSubtotal) - (discountAmt - taxableDiscount), 0)
   const afterDisc   = taxableAfterDisc + nonTaxableAfterDisc
   const vatAmt      = money(taxableAfterDisc - (taxableAfterDisc / (1 + VAT_RATE)))
   const preVatAmount = money(afterDisc - vatAmt)
   const total       = money(afterDisc)
   const lineSubtotal = (c: CartItem) => c.price * c.quantity
-  const lineDiscount = (c: CartItem) => subtotal > 0 ? Math.min(lineSubtotal(c), discountAmt * (lineSubtotal(c) / subtotal)) : 0
+  const lineCourseCovered = (c: CartItem) => c.courseRedemption ? c.price * Math.min(c.quantity, c.courseRedemption.units) : 0
+  const linePayableSubtotal = (c: CartItem) => Math.max(0, lineSubtotal(c) - lineCourseCovered(c))
+  const lineDiscount = (c: CartItem) => payableSubtotal > 0 ? Math.min(linePayableSubtotal(c), discountAmt * (linePayableSubtotal(c) / payableSubtotal)) : 0
   const lineTax = (c: CartItem) => {
-    const taxableLineTotal = Math.max(lineSubtotal(c) - lineDiscount(c), 0)
+    const taxableLineTotal = Math.max(linePayableSubtotal(c) - lineDiscount(c), 0)
     return money(taxableLineTotal - (taxableLineTotal / (1 + VAT_RATE)))
   }
   const depositAmt  = Math.min(parseFloat(depositInput) || 0, total)
@@ -682,7 +773,7 @@ function POSContent() {
   const paymentMethodLabel = payMethods.find(p => p.id === payMethod)?.label ?? payMethod
   const cartHasWigProduct = cart.some(c => c.type === 'product' && c.isWigProduct)
   const canDiscount = hasPermission('action.sales.discount')
-  const discountPercent = subtotal > 0 ? (discountAmt / subtotal) * 100 : 0
+  const discountPercent = payableSubtotal > 0 ? (discountAmt / payableSubtotal) * 100 : 0
   const userDiscountLimit =
     user?.role === 'super_admin' || user?.role === 'owner'
       ? discountPolicy.owner
@@ -716,6 +807,13 @@ function POSContent() {
     if (cart.length === 0) setCheckoutOpen(false)
   }, [cart.length])
 
+  useEffect(() => {
+    if (mode === 'deposit' && cart.some(item => item.courseRedemption)) {
+      setCart(current => current.map(withoutCourseRedemption))
+      setPosMsg({ type: 'ok', text: 'โหมดมัดจำไม่ตัดสิทธิ์คอร์ส ระบบคืนรายการเป็นราคาปกติแล้ว' })
+    }
+  }, [mode, cart])
+
   const requestPaymentConfirm = async (action: PosMode) => {
     setPosMsg(null)
     if (action === 'sale' && cart.length === 0) return
@@ -723,7 +821,7 @@ function POSContent() {
       setPosMsg({ type: 'err', text: 'กรุณาระบุยอดมัดจำก่อนบันทึก เช่น กด 30%, 50%, 70%, เต็มจำนวน หรือพิมพ์ยอดเอง' })
       return
     }
-    if ((action === 'deposit' || cartHasWigProduct || cart.some(item => item.course)) && !customerId) {
+    if ((action === 'deposit' || cartHasWigProduct || cart.some(item => item.course || item.courseRedemption)) && !customerId) {
       setPosMsg({ type: 'err', text: 'กรุณาเลือกลูกค้าก่อนบันทึก เพื่อผูกมัดจำ งานผลิต หรือคอร์สกับประวัติลูกค้า' })
       return
     }
@@ -760,7 +858,7 @@ function POSContent() {
     }
 
     const now = new Date()
-    const paymentConfirmed = payMethod === 'cash' || paymentVerified
+    const paymentConfirmed = payNow <= 0 || payMethod === 'cash' || paymentVerified
     const negativeReason = hasNegativeStockSale ? negativeStockReason.trim() : ''
     if (hasNegativeStockSale) {
       if (!stockPolicy.allowNegativeStock) {
@@ -820,6 +918,8 @@ function POSContent() {
           isPriceEdited: (c.originalPrice ?? c.price) !== c.price,
           discountAmount: lineDiscount(c), taxType: 'vat',
           taxAmount: lineTax(c), taxIncluded: true, total: lineSubtotal(c),
+          payableTotal: money(linePayableSubtotal(c) - lineDiscount(c)),
+          ...(c.courseRedemption ? { courseRedemption: { ...c.courseRedemption, coveredAmount: money(lineCourseCovered(c)) } } : {}),
           note: itemNote || null,
           staffId: c.staffId ?? null, staffName: c.staffName ?? null, commissionAmount: itemCommission(c),
           stockBefore, stockAfter,
@@ -829,12 +929,14 @@ function POSContent() {
           negativeStockApprovedBy: isNegativeStockSale ? userId : null,
         }
       }),
-      subtotal, discountAmount: discountAmt, discountPercent: discountType === 'percent' ? discount : 0,
+      subtotal, grossAmount: subtotal, courseCoveredAmount,
+      documentType: courseCoveredAmount <= 0 ? 'sale' : total <= 0 ? 'course_usage' : 'mixed',
+      discountAmount: discountAmt, discountPercent: discountType === 'percent' ? discount : 0,
       preVatAmount,
       taxAmount: vatAmt, totalAmount: total,
       taxIncluded: true, showVatOnReceipt,
-      payments: [paymentRecord],
-      paidAmount: payMethod === 'cash' ? cashReceived : netDue,
+      payments: netDue > 0 ? [paymentRecord] : [],
+      paidAmount: netDue > 0 ? (payMethod === 'cash' ? cashReceived : netDue) : 0,
       changeAmount: change,
       status: paymentConfirmed ? 'completed' : 'pending',
       paymentStatus: paymentConfirmed ? 'confirmed' : 'pending',
@@ -876,7 +978,7 @@ function POSContent() {
     const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
     const commissions = cart.filter(c => c.staffId && itemCommission(c) > 0).map(c => ({
       companyId, branchId, employeeId: c.staffId!, saleId,
-      type: c.type, itemName: c.name, saleAmount: c.price * c.quantity,
+      type: c.type, itemName: c.name, saleAmount: linePayableSubtotal(c),
       commissionRate: c.commissionRate ?? null, commissionAmount: itemCommission(c),
       status: 'pending', month: monthKey,
     }))
@@ -890,7 +992,7 @@ function POSContent() {
     }
 
     // Show receipt after confirmed save
-    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', customerPhone: customerPhone.trim() || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : netDue, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
+    setReceipt({ mode: 'sale', receiptNo, customerName: customerName || '', customerPhone: customerPhone.trim() || undefined, items: [...cart], subtotal, courseCoveredAmount, documentType: courseCoveredAmount <= 0 ? 'sale' : total <= 0 ? 'course_usage' : 'mixed', discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt: depositDeduct, remaining: netDue, pickupDate: '', depositNote: '', receiptNote: receiptNoteText || undefined, payMethod: netDue > 0 ? payMethod : 'course', paidAmount: netDue > 0 ? (payMethod === 'cash' ? cashReceived : netDue) : 0, change, date: new Date(), branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, saleId, customerId: customerId || undefined, workOrderCreatedCount: createdWorkOrderCount, receiverName: cashierName })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setCustomerPhone(''); setReceiptNote('')
     setWorkGroups({})
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
@@ -1016,7 +1118,7 @@ function POSContent() {
     }
 
     // Show receipt immediately — ไม่ต้องรอ
-    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, customerPhone: custPhone || undefined, items: [...cart], subtotal, discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: preparedOrders.length, receiverName: cashierName })
+    setReceipt({ mode: 'deposit', receiptNo: depositNo, customerName: custName, customerPhone: custPhone || undefined, items: [...cart], subtotal, courseCoveredAmount: 0, documentType: 'sale', discountAmt, preVatAmount, vatAmt, total, showVatOnReceipt, taxIncluded: true, depositAmt, remaining, pickupDate, depositNote, receiptNote: receiptNoteText || undefined, payMethod, paidAmount: payMethod === 'cash' ? cashReceived : depositAmt, change, date: now, branchName: receiptInfo.branchName, branchCode: receiptInfo.branchCode, shopInfo: receiptInfo, depositId, customerId: custId || undefined, workOrderCreatedCount: preparedOrders.length, receiverName: cashierName })
     setCart([]); setCash(''); setDiscount(0); setCustomerName(''); setCustomerId(''); setCustomerPhone(''); setDepositInput(''); setPickupDate(''); setDepositNote(''); setReceiptNote('')
     setWorkGroups({})
     setWigSpec({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
@@ -1053,12 +1155,14 @@ function POSContent() {
     ? availableCustomerCourses.filter(course => courseUseDialog.courseIds.includes(course.id))
     : []
   const selectedDialogCourse = courseUseDialog ? courseDialogOptions.find(course => course.id === courseUseDialog.courseId) : undefined
-  const dialogServiceIds = selectedDialogCourse?.template.serviceIds.filter(id => visibleServices.some(service => service.id === id && service.isActive !== false && service.status !== 'deleted')) ?? []
+  const dialogServiceIds = selectedDialogCourse?.template.serviceIds.filter(id =>
+    (!courseUseDialog?.cartItem || id === courseUseDialog.cartItem.id)
+    && visibleServices.some(service => service.id === id && service.isActive !== false && service.status !== 'deleted')) ?? []
   const dialogCartQuantity = courseUseDialog?.cartItem
     ? cart.find(item => item.id === courseUseDialog.cartItem?.id && item.type === courseUseDialog.cartItem?.type)?.quantity
     : undefined
   const dialogMaxUnits = Math.min(selectedDialogCourse?.remainingUnits ?? 1, dialogCartQuantity ?? selectedDialogCourse?.remainingUnits ?? 1)
-  const showSummaryBreakdown = discountAmt > 0 || showVatOnReceipt || depositDeduct > 0 || (mode === 'deposit' && depositAmt > 0)
+  const showSummaryBreakdown = courseCoveredAmount > 0 || discountAmt > 0 || showVatOnReceipt || depositDeduct > 0 || (mode === 'deposit' && depositAmt > 0)
 
   return (
     <>
@@ -1195,8 +1299,11 @@ function POSContent() {
             companyId={companyId}
             selectedId={customerId}
             selectedName={customerName}
-            onSelect={(id, name, customer) => { setWorkGroups({}); setCustomerId(id); setCustomerName(name); setCustomerPhone(customer?.phone ?? '') }}
-            onClear={() => { setWorkGroups({}); setCustomerId(''); setCustomerName(''); setCustomerPhone('') }}
+            onSelect={(id, name, customer) => {
+              if (id !== customerId) setCart(current => current.map(withoutCourseRedemption))
+              setWorkGroups({}); setCustomerId(id); setCustomerName(name); setCustomerPhone(customer?.phone ?? '')
+            }}
+            onClear={() => { setCart(current => current.map(withoutCourseRedemption)); setWorkGroups({}); setCustomerId(''); setCustomerName(''); setCustomerPhone('') }}
             placeholder={mode === 'deposit' ? 'ค้นหาลูกค้า (แนะนำสำหรับมัดจำ)' : 'ค้นหาลูกค้า (ไม่บังคับ)'}
           />
           {mode === 'sale' && customerId && <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-2 py-1.5">
@@ -1206,7 +1313,7 @@ function POSContent() {
                   <p className="flex shrink-0 items-center gap-1 text-[10px] font-bold text-emerald-800"><Ticket className="h-3 w-3" />คอร์ส {availableCustomerCourses.length}</p>
                   {availableCustomerCourses.map(course => <div key={course.id} className="flex min-w-[12rem] max-w-[16rem] flex-1 items-center gap-2 rounded-md border border-emerald-100 bg-white px-2 py-1">
                     <p className="min-w-0 flex-1 truncate text-[10px] font-semibold text-[var(--text-primary)]" title={course.name}>{course.name} · เหลือ {course.remainingUnits}</p>
-                    <button type="button" onClick={() => openCourseUse(course)} className="shrink-0 rounded-md bg-emerald-600 px-2 py-1 text-[9px] font-bold text-white hover:bg-emerald-700">ใช้สิทธิ์</button>
+                    <button type="button" onClick={() => openCourseUse(course)} className="shrink-0 rounded-md bg-emerald-600 px-2 py-1 text-[9px] font-bold text-white hover:bg-emerald-700">เพิ่มบริการ</button>
                   </div>)}
                 </div>
               </> : <p className="text-[10px] text-[var(--text-muted)]">ลูกค้ารายนี้ยังไม่มีคอร์สที่พร้อมใช้ในสาขานี้</p>}
@@ -1233,6 +1340,8 @@ function POSContent() {
             const priceEdited = originalPrice !== item.price
             const hasItemConfig = Boolean(item.staffId)
             const matchingRights = item.type === 'service' && !item.course && mode === 'sale' ? coursesForService(item.id) : []
+            const selectedRight = item.courseRedemption ? availableCustomerCourses.find(course => course.id === item.courseRedemption?.courseId) : undefined
+            const rightToEdit = selectedRight || matchingRights[0]
             return (
             <div key={itemKey} data-cart-item className="min-h-11 rounded-lg bg-white border border-[var(--border-light)] px-2 py-1.5 shadow-sm shadow-pink-50">
               <div className="flex min-w-0 items-center gap-1.5">
@@ -1259,7 +1368,7 @@ function POSContent() {
                     <button onClick={() => updateQty(item.id, item.type, item.quantity + 1)} aria-label={`เพิ่มจำนวน ${item.name}`} className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[var(--pink-500)] shadow-sm transition-all hover:bg-[var(--pink-50)]"><Plus className="h-3 w-3" /></button>
                   </div>
                   <p className="w-[4.75rem] text-right text-xs font-bold text-[var(--pink-500)]">{formatCurrency(item.price * item.quantity)}</p>
-                  {matchingRights.length > 0 && <button type="button" onClick={() => openCourseUse(matchingRights[0], item.id, item)} title="ใช้สิทธิ์คอร์ส" aria-label="ใช้สิทธิ์" className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-emerald-600 px-2 text-[9px] font-bold text-white hover:bg-emerald-700"><Ticket className="h-3.5 w-3.5" /><span className="hidden 2xl:inline">สิทธิ์</span></button>}
+                  {rightToEdit && <button type="button" onClick={() => openCourseUse(rightToEdit, item.id, item)} title={item.courseRedemption ? 'เปลี่ยนการใช้สิทธิ์คอร์ส' : 'เลือกใช้สิทธิ์คอร์ส'} aria-label={item.courseRedemption ? 'เปลี่ยนสิทธิ์' : 'เลือกสิทธิ์'} className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-emerald-600 px-2 text-[9px] font-bold text-white hover:bg-emerald-700"><Ticket className="h-3.5 w-3.5" /><span className="hidden 2xl:inline">{item.courseRedemption ? 'เปลี่ยน' : 'สิทธิ์'}</span></button>}
                   <button
                     type="button"
                     onClick={() => setEditingCartItemId(editingCartItemId === itemKey ? '' : itemKey)}
@@ -1285,6 +1394,14 @@ function POSContent() {
                   </button>
                 </div>
               </div>
+              {item.courseRedemption && (
+                <div className="mt-1.5 flex items-center justify-between gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1.5 text-[10px] text-emerald-800">
+                  <span className="min-w-0 truncate font-semibold" title={item.courseRedemption.courseName}>
+                    <Ticket className="mr-1 inline h-3 w-3" />ใช้ {item.courseRedemption.courseName} {item.courseRedemption.units} ครั้ง · ครอบคลุม {formatCurrency(lineCourseCovered(item))}
+                  </span>
+                  <button type="button" onClick={() => removeCourseUse(item.id, item.type)} className="shrink-0 font-bold text-[var(--pink-600)] hover:underline">ชำระปกติ</button>
+                </div>
+              )}
               {editingCartItemId === itemKey && (
                 <div className="mt-2 rounded-lg border border-[var(--pink-100)] bg-[var(--bg-base)] p-2">
                   <div className="grid grid-cols-[6.25rem_minmax(0,1fr)] gap-1.5">
@@ -1349,6 +1466,11 @@ function POSContent() {
             {showSummaryBreakdown && <div className="flex justify-between text-[11px] text-[var(--text-secondary)]">
               <span>รวมเป็นเงิน</span><span>{formatCurrency(subtotal)}</span>
             </div>}
+            {courseCoveredAmount > 0 && (
+              <div className="flex justify-between text-xs font-semibold text-emerald-700">
+                <span>ใช้สิทธิ์คอร์ส</span><span>-{formatCurrency(courseCoveredAmount)}</span>
+              </div>
+            )}
             {discountAmt > 0 && (
               <div className="flex justify-between text-xs font-semibold text-emerald-600">
                 <span>ส่วนลด/คูปอง</span><span>-{formatCurrency(discountAmt)}</span>
@@ -1410,7 +1532,9 @@ function POSContent() {
             {saving ? (
               <><Loader2 className="w-5 h-5 animate-spin" />กำลังบันทึก...</>
             ) : mode === 'sale' ? (
-              <>ไปชำระเงิน / บันทึกขาย · {formatCurrency(payNow)}</>
+              courseCoveredAmount > 0 && payNow <= 0
+                ? <>ตรวจสอบและใช้สิทธิ์คอร์ส</>
+                : <>ไปชำระเงิน / บันทึกขาย · {formatCurrency(payNow)}</>
             ) : (
               <>ไปบันทึกมัดจำ · {depositAmt > 0 ? formatCurrency(depositAmt) : 'กรอกยอดถัดไป'}</>
             )}
@@ -1430,7 +1554,11 @@ function POSContent() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h3 className="text-lg font-black text-[var(--text-primary)]">
-                      {mode === 'sale' ? 'ชำระเงินและบันทึกขาย' : 'บันทึกมัดจำ'}
+                      {mode === 'sale'
+                        ? courseCoveredAmount > 0 && payNow <= 0
+                          ? 'ตรวจสอบและใช้สิทธิ์คอร์ส'
+                          : 'ชำระเงินและบันทึกขาย'
+                        : 'บันทึกมัดจำ'}
                     </h3>
                     <p className="text-xs text-[var(--text-muted)] mt-1">
                       {cart.length} รายการ · {cart.reduce((s, c) => s + c.quantity, 0)} ชิ้น · ยอดรวม {formatCurrency(total)}
@@ -1499,6 +1627,11 @@ function POSContent() {
             <div className="flex justify-between text-[var(--text-secondary)]">
               <span>รวมเป็นเงิน</span><span>{formatCurrency(subtotal)}</span>
             </div>
+            {courseCoveredAmount > 0 && (
+              <div className="flex justify-between font-medium text-emerald-700">
+                <span>ใช้สิทธิ์คอร์ส</span><span>-{formatCurrency(courseCoveredAmount)}</span>
+              </div>
+            )}
             {discountAmt > 0 && (
               <div className="flex justify-between text-emerald-500 font-medium">
                 <span>ส่วนลด</span><span>-{formatCurrency(discountAmt)}</span>
@@ -1554,6 +1687,12 @@ function POSContent() {
                     <span>รวมเป็นเงิน</span>
                     <span className="font-semibold">{formatCurrency(subtotal)}</span>
                   </div>
+                  {courseCoveredAmount > 0 && (
+                    <div className="flex justify-between text-xs font-bold text-emerald-700">
+                      <span>ใช้สิทธิ์คอร์ส</span>
+                      <span>-{formatCurrency(courseCoveredAmount)}</span>
+                    </div>
+                  )}
                   {discountAmt > 0 && (
                     <div className="flex justify-between text-xs font-bold text-emerald-700">
                       <span>ส่วนลด/คูปอง</span>
@@ -1791,17 +1930,23 @@ function POSContent() {
           </div>
 
           {/* Payment method */}
-          <div className="grid grid-cols-4 gap-1.5">
+          {mode === 'sale' && payNow <= 0 && courseCoveredAmount > 0 && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+              <p className="font-bold">คอร์สครอบคลุมยอดทั้งหมด</p>
+              <p className="mt-1">ไม่ต้องเลือกวิธีชำระ ระบบจะออกเอกสารการใช้สิทธิ์และบันทึกประวัติบริการให้</p>
+            </div>
+          )}
+          {(mode !== 'sale' || payNow > 0) && <div className="grid grid-cols-4 gap-1.5">
             {payMethods.map(pm => (
               <button key={pm.id} onClick={() => setPayMethod(pm.id)}
                 className={`flex flex-col items-center gap-1 p-2 rounded-xl text-[10px] font-semibold transition-all ${payMethod === pm.id ? `bg-gradient-to-br ${pm.color} text-white shadow-sm` : 'bg-white border border-[var(--border-light)] text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'}`}>
                 <pm.icon className="w-4 h-4" />{pm.label}
               </button>
             ))}
-          </div>
+          </div>}
 
           {/* แนบสลิป (สำหรับโอน/QR/บัตร) */}
-          {payMethod !== 'cash' && (
+          {(mode !== 'sale' || payNow > 0) && payMethod !== 'cash' && (
             <div className="flex items-center gap-2">
               <label className="flex-1 cursor-pointer px-3 py-2 bg-white border border-dashed border-[var(--border-light)] rounded-xl text-xs text-center text-[var(--text-secondary)] hover:bg-[var(--pink-50)] transition-all">
                 {slipUploading ? 'กำลังอัปโหลด...' : slipUrl ? '✓ แนบสลิปแล้ว (กดเปลี่ยน)' : '📎 แนบสลิปการชำระ'}
@@ -1812,7 +1957,7 @@ function POSContent() {
           )}
 
           {/* Cash input */}
-          {payMethod === 'cash' && (
+          {(mode !== 'sale' || payNow > 0) && payMethod === 'cash' && (
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <Banknote className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-muted)]" />
@@ -1845,7 +1990,7 @@ function POSContent() {
           {mode === 'sale' ? (
             <button onClick={() => requestPaymentConfirm('sale')} disabled={cart.length === 0 || saving} title={discountNeedsApproval ? 'ต้องขออนุมัติส่วนลดก่อนบันทึก' : 'ชำระเงิน'}
               className="w-full py-3.5 bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white font-bold rounded-2xl shadow-lg shadow-pink-200 active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2">
-              {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</> : `ตรวจสอบและบันทึกขาย · ${formatCurrency(payNow)}`}
+              {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก...</> : courseCoveredAmount > 0 && payNow <= 0 ? 'ตรวจสอบ ใช้สิทธิ์ และออกเอกสาร' : `ตรวจสอบและบันทึกขาย · ${formatCurrency(payNow)}`}
             </button>
           ) : (
             <button onClick={() => requestPaymentConfirm('deposit')} disabled={cart.length === 0 || saving} title={discountNeedsApproval ? 'ต้องขออนุมัติส่วนลดก่อนบันทึก' : 'รับมัดจำ'}
@@ -1890,7 +2035,7 @@ function POSContent() {
                 : 'bg-gradient-to-r from-amber-400 to-orange-400 shadow-amber-200'
             }`}
           >
-            {mode === 'sale' ? 'ชำระเงิน' : 'มัดจำ'}
+            {mode === 'sale' ? (courseCoveredAmount > 0 && payNow <= 0 ? 'ยืนยันสิทธิ์' : 'ชำระเงิน') : 'มัดจำ'}
           </button>
         </div>
       </div>
@@ -1900,10 +2045,10 @@ function POSContent() {
       <form role="dialog" aria-modal="true" aria-label="ใช้สิทธิ์คอร์สที่ POS" onSubmit={submitCourseUse} className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-5 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-lg font-bold text-[var(--text-primary)]">ใช้สิทธิ์คอร์ส</h2>
+            <h2 className="text-lg font-bold text-[var(--text-primary)]">เพิ่มบริการจากคอร์ส</h2>
             <p className="mt-1 text-xs text-[var(--text-muted)]">{customerName} · สาขา {currentBranch?.name || shopInfo.branchName || ''}</p>
           </div>
-          <button type="button" disabled={courseUseSaving} onClick={() => setCourseUseDialog(null)} aria-label="ปิดหน้าต่างใช้สิทธิ์" className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-light)] text-[var(--text-muted)]"><X className="h-4 w-4" /></button>
+          <button type="button" onClick={() => setCourseUseDialog(null)} aria-label="ปิดหน้าต่างใช้สิทธิ์" className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-light)] text-[var(--text-muted)]"><X className="h-4 w-4" /></button>
         </div>
         <div className="mt-4 space-y-3">
           <label className="block text-xs font-semibold text-[var(--text-secondary)]">คอร์ส
@@ -1928,7 +2073,7 @@ function POSContent() {
             <label className="block text-xs font-semibold text-[var(--text-secondary)]">พนักงานผู้ให้บริการ <span className="font-normal text-[var(--text-muted)]">(ไม่บังคับ)</span>
               <select value={courseUseDialog.staffId} onChange={event => setCourseUseDialog({ ...courseUseDialog, staffId: event.target.value })} className="mt-1 w-full rounded-lg border border-[var(--border-light)] bg-white px-3 py-2.5 text-sm">
                 <option value="">ไม่ระบุพนักงาน</option>
-                {branchEmployees.map(employee => <option key={employee.id} value={employee.id}>{empLabel(employee)}</option>)}
+                {courseBranchEmployees.map(employee => <option key={employee.id} value={employee.id}>{empLabel(employee)}</option>)}
               </select>
             </label>
           </div>
@@ -1936,10 +2081,10 @@ function POSContent() {
             <textarea rows={3} maxLength={1000} value={courseUseDialog.note} onChange={event => setCourseUseDialog({ ...courseUseDialog, note: event.target.value })} placeholder="รายละเอียดการใช้บริการ" className="mt-1 w-full resize-y rounded-lg border border-[var(--border-light)] bg-white px-3 py-2.5 text-sm" />
           </label>
           <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-            หลังยืนยันจะเหลือ {selectedDialogCourse.remainingUnits - courseUseDialog.units} ครั้ง{courseUseDialog.cartItem ? ' และนำจำนวนที่ใช้สิทธิ์ออกจากยอดชำระในตะกร้า' : ''}
+            หลังบันทึกบิลจะเหลือ {selectedDialogCourse.remainingUnits - courseUseDialog.units} ครั้ง · ขั้นตอนนี้ยังไม่ตัดสิทธิ์
           </div>
-          <button disabled={courseUseSaving || courseUseDialog.units < 1 || courseUseDialog.units > dialogMaxUnits || !dialogServiceIds.includes(courseUseDialog.serviceId)} className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-40">
-            {courseUseSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}ยืนยันใช้สิทธิ์
+          <button disabled={courseUseDialog.units < 1 || courseUseDialog.units > dialogMaxUnits || !dialogServiceIds.includes(courseUseDialog.serviceId)} className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-40">
+            <Check className="h-4 w-4" />{courseUseDialog.cartItem ? 'บันทึกการเลือกสิทธิ์' : 'เพิ่มลงตะกร้า'}
           </button>
         </div>
       </form>
@@ -1949,6 +2094,7 @@ function POSContent() {
       <PaymentConfirmModal
         action={paymentConfirm}
         amount={payNow}
+        courseCoveredAmount={courseCoveredAmount}
         methodLabel={paymentMethodLabel}
         payMethod={payMethod}
         hasSlip={Boolean(slipUrl)}
@@ -1974,15 +2120,17 @@ const PAY_LABELS: Record<string, string> = {
   transfer: 'โอนเงิน / Transfer',
   qr: 'QR Code',
   credit_card: 'บัตรเครดิต / Credit Card',
+  course: 'ใช้สิทธิ์คอร์ส / Course',
 }
 
 function PaymentConfirmModal({
-  action, amount, methodLabel, payMethod, hasSlip, verified, saving,
+  action, amount, courseCoveredAmount, methodLabel, payMethod, hasSlip, verified, saving,
   stockShortages, negativeStockReason, negativeStockRequiresReason, onNegativeStockReasonChange,
   onVerifiedChange, onCancel, onConfirm,
 }: {
   action: PosMode
   amount: number
+  courseCoveredAmount: number
   methodLabel: string
   payMethod: string
   hasSlip: boolean
@@ -1997,28 +2145,30 @@ function PaymentConfirmModal({
   onConfirm: () => void | Promise<void>
 }) {
   const isCash = payMethod === 'cash'
+  const isCourseOnly = action === 'sale' && amount <= 0 && courseCoveredAmount > 0
   const hasStockShortage = stockShortages.length > 0
   const confirmDisabled = saving || (hasStockShortage && negativeStockRequiresReason && !negativeStockReason.trim())
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
       <div className="w-full max-w-md max-h-[92vh] rounded-3xl bg-white shadow-2xl overflow-hidden flex flex-col">
         <div className="px-5 py-4 border-b border-[var(--border-light)]">
-          <h3 className="text-lg font-bold text-[var(--text-primary)]">ยืนยันรับชำระเงิน</h3>
+          <h3 className="text-lg font-bold text-[var(--text-primary)]">{isCourseOnly ? 'ยืนยันใช้สิทธิ์และออกเอกสาร' : 'ยืนยันรับชำระเงิน'}</h3>
           <p className="text-xs text-[var(--text-muted)] mt-1">
-            ตรวจยอดและวิธีชำระก่อนบันทึก{action === 'deposit' ? 'มัดจำ' : 'บิลขาย'}
+            {isCourseOnly ? 'สิทธิ์จะถูกตัดเมื่อกดยืนยัน และระบบจะสร้างประวัติบริการพร้อมเอกสาร ฿0' : `ตรวจยอดและวิธีชำระก่อนบันทึก${action === 'deposit' ? 'มัดจำ' : 'บิลขาย'}`}
           </p>
         </div>
         <div className="p-5 space-y-4 overflow-y-auto">
           <div className="rounded-2xl bg-[var(--bg-base)] border border-[var(--border-light)] p-4 space-y-2">
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-muted)]">ยอดรับชำระ</span>
-              <span className="font-bold text-[var(--pink-600)]">{formatCurrency(amount)}</span>
+              <span className="text-[var(--text-muted)]">{isCourseOnly ? 'ยอดที่คอร์สครอบคลุม' : 'ยอดรับชำระ'}</span>
+              <span className="font-bold text-[var(--pink-600)]">{formatCurrency(isCourseOnly ? courseCoveredAmount : amount)}</span>
             </div>
-            <div className="flex justify-between text-sm">
+            {!isCourseOnly && <div className="flex justify-between text-sm">
               <span className="text-[var(--text-muted)]">วิธีชำระ</span>
               <span className="font-semibold text-[var(--text-primary)]">{methodLabel}</span>
-            </div>
-            {!isCash && (
+            </div>}
+            {isCourseOnly && <div className="flex justify-between text-sm"><span className="text-[var(--text-muted)]">ยอดชำระเพิ่ม</span><span className="font-semibold text-emerald-700">{formatCurrency(0)}</span></div>}
+            {!isCourseOnly && !isCash && (
               <div className="flex justify-between text-sm">
                 <span className="text-[var(--text-muted)]">สลิป</span>
                 <span className={hasSlip ? 'font-semibold text-emerald-600' : 'font-semibold text-amber-600'}>
@@ -2028,7 +2178,7 @@ function PaymentConfirmModal({
             )}
           </div>
 
-          {!isCash && (
+          {!isCourseOnly && !isCash && (
             <label className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 cursor-pointer">
               <input
                 type="checkbox"
@@ -2080,7 +2230,7 @@ function PaymentConfirmModal({
           </button>
           <button onClick={onConfirm} disabled={confirmDisabled}
             className="flex-1 py-2.5 rounded-2xl bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-sm font-bold text-white flex items-center justify-center gap-2 disabled:opacity-60">
-            {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก</> : action === 'deposit' ? 'ยืนยันและบันทึกมัดจำ' : 'ยืนยันและบันทึกขาย'}
+            {saving ? <><Loader2 className="w-4 h-4 animate-spin" />กำลังบันทึก</> : action === 'deposit' ? 'ยืนยันและบันทึกมัดจำ' : isCourseOnly ? 'ยืนยันใช้สิทธิ์และออกเอกสาร' : 'ยืนยันและบันทึกขาย'}
           </button>
         </div>
       </div>
@@ -2090,9 +2240,12 @@ function PaymentConfirmModal({
 
 function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: ShopInfo; onClose: () => void }) {
   const isDeposit = receipt.mode === 'deposit'
+  const isCourseOnly = !isDeposit && receipt.documentType === 'course_usage'
   const receiptShop = receipt.shopInfo ?? shop
   const receiptTitle = isDeposit
     ? 'ใบรับมัดจำ\nDeposit Receipt'
+    : isCourseOnly
+      ? 'ใบยืนยันการใช้สิทธิ์คอร์ส\nCourse Usage Receipt'
     : receipt.showVatOnReceipt
       ? 'ใบเสร็จรับเงิน / ใบกำกับภาษี\nReceipt / Tax Invoice'
       : 'ใบเสร็จรับเงิน\nReceipt'
@@ -2166,7 +2319,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
         <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-light)] shrink-0">
           <h3 className="font-bold text-[var(--text-primary)] flex items-center gap-2">
             <Check className="w-4 h-4 text-emerald-500" />
-            {isDeposit ? 'รับมัดจำสำเร็จ' : 'ชำระเงินสำเร็จ'}
+            {isDeposit ? 'รับมัดจำสำเร็จ' : isCourseOnly ? 'บันทึกใช้สิทธิ์สำเร็จ' : 'ชำระเงินสำเร็จ'}
           </h3>
           <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-[var(--bg-base)] text-[var(--text-muted)]"><X className="w-4 h-4" /></button>
         </div>
@@ -2217,6 +2370,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                       <p className="font-medium break-words">{item.name}</p>
                       {item.workGroupName && <p className="text-[10px] break-words">ชิ้นงาน / Work: {item.workGroupName}</p>}
                       {item.course && <p className="text-[10px] break-words">คอร์ส / Course: {item.course.paidUnits} + {item.course.bonusUnits} ครั้ง / sessions</p>}
+                      {item.courseRedemption && <p className="text-[10px] font-semibold text-emerald-700 break-words">ใช้สิทธิ์ / Course used: {item.courseRedemption.courseName} · {item.courseRedemption.units} ครั้ง / sessions</p>}
                       {item.sku && <p className="text-[10px] text-[var(--text-muted)]">{item.sku}</p>}
                       <p className="item-meta text-[10px] text-[var(--text-muted)]">{item.quantity} x {formatCurrency(item.price)}</p>
                       {receipt.showVatOnReceipt && item.taxType === 'non_vat' && <p className="tax-note text-[10px] text-[var(--text-muted)]">ไม่นับ VAT / Non-VAT</p>}
@@ -2235,6 +2389,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
 
             <div className="summary-box space-y-1.5 text-xs border-y border-dashed border-gray-300 py-2 mt-3">
               <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">{receipt.showVatOnReceipt ? 'รวมเป็นเงิน / Subtotal' : 'รวมเป็นเงิน / Total'}</span><span>{formatCurrency(receipt.subtotal)}</span></div>
+              {receipt.courseCoveredAmount > 0 && <div className="row flex justify-between text-emerald-700"><span>ใช้สิทธิ์คอร์ส / Course used</span><span>-{formatCurrency(receipt.courseCoveredAmount)}</span></div>}
               {receipt.discountAmt > 0 && <div className="row flex justify-between text-emerald-600"><span>ส่วนลด / Discount</span><span>-{formatCurrency(receipt.discountAmt)}</span></div>}
               {receipt.showVatOnReceipt && (
                 <>
@@ -2246,7 +2401,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                 <><div className="row flex justify-between font-semibold"><span>ยอดรวมงาน / Order Total</span><span>{formatCurrency(receipt.total)}</span></div><div className="row flex justify-between"><span className="label text-[var(--text-muted)]">หักมัดจำ / Deposit deducted</span><span>-{formatCurrency(receipt.depositAmt)}</span></div></>
               )}
               <div className="total-row flex justify-between font-bold text-base pt-2 border-t border-gray-300 mt-1">
-                <span>{!isDeposit && receipt.depositAmt > 0 ? 'ยอดที่ต้องชำระ / Amount Due' : 'รวมทั้งสิ้น / Grand Total'}</span><span className="text-[var(--pink-600)]">{formatCurrency(isDeposit ? receipt.total : receipt.remaining)}</span>
+                <span>{isCourseOnly ? 'ยอดชำระเพิ่ม / Additional Payment' : !isDeposit && receipt.depositAmt > 0 ? 'ยอดที่ต้องชำระ / Amount Due' : 'รวมทั้งสิ้น / Grand Total'}</span><span className="text-[var(--pink-600)]">{formatCurrency(isDeposit ? receipt.total : receipt.remaining)}</span>
               </div>
 
               {isDeposit && (
@@ -2260,7 +2415,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
                 </div>
               )}
 
-              <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รับเงิน / Amount Paid</span><span>{formatCurrency(receipt.paidAmount)}</span></div>
+              {!isCourseOnly && <div className="row flex justify-between"><span className="label text-[var(--text-muted)]">รับเงิน / Amount Paid</span><span>{formatCurrency(receipt.paidAmount)}</span></div>}
               {!isDeposit && receipt.depositAmt > 0 && <div className="row flex justify-between"><span>คงเหลือ / Balance</span><span>{formatCurrency(0)}</span></div>}
               {receipt.payMethod === 'cash' && (
                 <div className="change-row flex justify-between font-semibold text-emerald-600"><span>เงินทอน / Change</span><span>{formatCurrency(receipt.change)}</span></div>

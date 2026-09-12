@@ -601,6 +601,10 @@ export type PaymentStatus = 'pending' | 'confirmed' | 'rejected'
 
 export interface Sale {
   courseIds?: string[]
+  courseUsageIds?: string[]
+  documentType?: 'sale' | 'course_usage' | 'mixed'
+  grossAmount?: number
+  courseCoveredAmount?: number
   workCaseIds?: string[]
   id: string
   companyId: string
@@ -678,6 +682,7 @@ export interface SaleItem {
   workGroupId?: string
   workGroupName?: string
   course?: CourseTemplate
+  courseRedemption?: import('@/lib/courseTypes').CourseRedemptionAllocation
   type: 'product' | 'service'
   productId?: string
   serviceId?: string
