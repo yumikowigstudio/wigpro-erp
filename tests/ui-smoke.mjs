@@ -89,6 +89,18 @@ try {
   assert.equal(cartLayout.itemCount, 12)
   assert.ok(cartLayout.fullyVisible >= 5, `Expected at least five visible cart rows, received ${cartLayout.fullyVisible}`)
   assert.equal(cartLayout.scrolls, true, 'Additional cart rows should scroll inside the cart list')
+  const checkoutButton = page.getByRole('button', { name: /ไปชำระเงิน \/ บันทึกขาย/ }).first()
+  await expect(checkoutButton).toBeVisible()
+  const checkoutLayout = await checkoutButton.evaluate(element => {
+    const button = element.getBoundingClientRect()
+    const panel = document.querySelector('#pos-cart-panel')?.getBoundingClientRect()
+    return {
+      fullyInsidePanel: Boolean(panel && button.top >= panel.top && button.bottom <= panel.bottom),
+      fullyInsideViewport: button.top >= 0 && button.bottom <= window.innerHeight,
+    }
+  })
+  assert.equal(checkoutLayout.fullyInsidePanel, true, 'Checkout button must remain inside the cart panel')
+  assert.equal(checkoutLayout.fullyInsideViewport, true, 'Checkout button must remain fully visible in the viewport')
   await page.screenshot({ path: 'test-results/pos-desktop.png', fullPage: true })
   await page.getByLabel('ค้นหาทั้งระบบ').fill('0800')
   await page.getByRole('link', { name: /ทดสอบ ลูกค้า/ }).first().waitFor()

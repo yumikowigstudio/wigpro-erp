@@ -1216,7 +1216,7 @@ function POSContent() {
         <PosDrafts storageKey={`yumiko-pos:${companyId}:${branchId}:${userId}`} value={draft} itemCount={cart.length} customerName={customerName} disabled={saving || checkoutOpen} onRestore={restoreDraft} onClear={clearDraft} />
 
         {/* Items */}
-        <div aria-label="รายการในตะกร้า" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2.5 space-y-1.5 lg:min-h-64">
+        <div aria-label="รายการในตะกร้า" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2.5 space-y-1.5">
           {cart.length === 0 ? (
             <div className="h-full flex items-center justify-center flex-col gap-3 py-8 text-center">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[var(--pink-50)] to-purple-50 flex items-center justify-center">
