@@ -1075,59 +1075,53 @@ function POSContent() {
             const priceEdited = originalPrice !== item.price
             const hasItemConfig = Boolean(item.staffId)
             return (
-            <div key={itemKey} className="rounded-xl bg-white border border-[var(--border-light)] px-2.5 py-2 shadow-sm shadow-pink-50">
-              <div className="flex gap-2">
-                <div className="mt-0.5 h-8 w-8 shrink-0 rounded-lg bg-[var(--pink-50)] flex items-center justify-center">
+            <div key={itemKey} className="rounded-xl bg-white border border-[var(--border-light)] px-2 py-1.5 shadow-sm shadow-pink-50">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className="h-7 w-7 shrink-0 rounded-lg bg-[var(--pink-50)] flex items-center justify-center">
                   {item.type === 'product'
-                    ? <Package className="h-4 w-4 text-[var(--pink-400)]" />
-                    : <Scissors className="h-4 w-4 text-[var(--pink-400)]" />
+                    ? <Package className="h-3.5 w-3.5 text-[var(--pink-400)]" />
+                    : <Scissors className="h-3.5 w-3.5 text-[var(--pink-400)]" />
                   }
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="line-clamp-2 text-sm font-bold leading-snug text-[var(--text-primary)] break-words">{item.name}</p>
-                      <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                        <div className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--border-light)] bg-[var(--bg-base)] p-0.5">
-                          <button onClick={() => updateQty(item.id, item.type, item.quantity - 1)} aria-label={`ลดจำนวน ${item.name}`} className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[var(--pink-500)] shadow-sm transition-all hover:bg-[var(--pink-50)]"><Minus className="h-3 w-3" /></button>
-                          <span className="w-6 text-center text-xs font-bold text-[var(--text-primary)]">{item.quantity}</span>
-                          <button onClick={() => updateQty(item.id, item.type, item.quantity + 1)} aria-label={`เพิ่มจำนวน ${item.name}`} className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[var(--pink-500)] shadow-sm transition-all hover:bg-[var(--pink-50)]"><Plus className="h-3 w-3" /></button>
-                        </div>
-                        <span className="min-w-0 truncate text-[11px] text-[var(--text-muted)]">{formatCurrency(item.price)} / ชิ้น</span>
-                        <p className="ml-auto shrink-0 text-sm font-bold text-[var(--pink-500)]">{formatCurrency(item.price * item.quantity)}</p>
-                        <button
-                          type="button"
-                          onClick={() => setEditingCartItemId(editingCartItemId === itemKey ? '' : itemKey)}
-                          title="แก้ไขราคาและหมายเหตุ"
-                          aria-label={`แก้ไข ${item.name}`}
-                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-all ${editingCartItemId === itemKey ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-500)]'}`}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        {employees.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setExpandedCartItemId(isItemDetailOpen ? '' : itemKey)}
-                            title="ตั้งค่าผู้ขาย"
-                            aria-label={`ตั้งค่าผู้ขาย ${item.name}`}
-                            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-all ${hasItemConfig ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-500)]'}`}
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <button onClick={() => remove(item.id, item.type)} className="h-8 w-8 shrink-0 rounded-xl border border-[var(--border-light)] flex items-center justify-center text-[var(--text-muted)] hover:text-red-500 hover:bg-red-50 transition-colors" aria-label={`ลบ ${item.name}`}>
-                      <X className="w-4 h-4" />
+                  <p className="truncate text-xs font-bold leading-tight text-[var(--text-primary)]" title={item.name}>{item.name}</p>
+                  <p className="truncate text-[10px] leading-tight text-[var(--text-muted)]" title={item.note || undefined}>
+                    {formatCurrency(item.price)} / ชิ้น
+                    {priceEdited ? ` · แก้จาก ${formatCurrency(originalPrice)}` : ''}
+                    {item.note?.trim() ? ' · มีหมายเหตุ' : ''}
+                    {item.staffName ? ` · ${item.staffName}` : ''}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <div className="flex items-center gap-0.5 rounded-full border border-[var(--border-light)] bg-[var(--bg-base)] p-0.5">
+                    <button onClick={() => updateQty(item.id, item.type, item.quantity - 1)} aria-label={`ลดจำนวน ${item.name}`} className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[var(--pink-500)] shadow-sm transition-all hover:bg-[var(--pink-50)]"><Minus className="h-3 w-3" /></button>
+                    <span className="w-5 text-center text-xs font-bold text-[var(--text-primary)]">{item.quantity}</span>
+                    <button onClick={() => updateQty(item.id, item.type, item.quantity + 1)} aria-label={`เพิ่มจำนวน ${item.name}`} className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[var(--pink-500)] shadow-sm transition-all hover:bg-[var(--pink-50)]"><Plus className="h-3 w-3" /></button>
+                  </div>
+                  <p className="w-[4.75rem] text-right text-xs font-bold text-[var(--pink-500)]">{formatCurrency(item.price * item.quantity)}</p>
+                  <button
+                    type="button"
+                    onClick={() => setEditingCartItemId(editingCartItemId === itemKey ? '' : itemKey)}
+                    title="แก้ไขราคาและหมายเหตุ"
+                    aria-label={`แก้ไข ${item.name}`}
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-all ${editingCartItemId === itemKey ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-500)]'}`}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  {employees.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setExpandedCartItemId(isItemDetailOpen ? '' : itemKey)}
+                      title="ตั้งค่าผู้ขาย"
+                      aria-label={`ตั้งค่าผู้ขาย ${item.name}`}
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-all ${hasItemConfig ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-500)]'}`}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
                     </button>
-                  </div>
-                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 text-[10px] text-[var(--text-muted)]">
-                    {item.sku && <span className="max-w-[8rem] truncate rounded-full bg-[var(--bg-base)] px-1.5 py-0.5">{item.sku}</span>}
-                    <span className="rounded-full bg-blue-50 px-1.5 py-0.5 font-semibold text-blue-600">รวม VAT</span>
-                    {priceEdited && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-700">แก้จาก {formatCurrency(originalPrice)}</span>}
-                    {item.note?.trim() && <span className="max-w-[12rem] truncate rounded-full bg-[var(--bg-base)] px-1.5 py-0.5" title={item.note}>หมายเหตุ: {item.note}</span>}
-                    {item.staffName && <span className="max-w-[10rem] truncate rounded-full bg-emerald-50 px-1.5 py-0.5 text-emerald-600">ผู้ขาย {item.staffName}</span>}
-                  </div>
+                  )}
+                  <button onClick={() => remove(item.id, item.type)} title="ลบรายการ" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[var(--border-light)] text-[var(--text-muted)] transition-colors hover:bg-red-50 hover:text-red-500" aria-label={`ลบ ${item.name}`}>
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
               {editingCartItemId === itemKey && (
