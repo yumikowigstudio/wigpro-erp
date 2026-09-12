@@ -26,6 +26,8 @@ test('deposit receipt keeps all line notes, escapes user text and prints full pa
   assert.ok(html.includes('Warranty &amp; terms\nSecond line'))
   assert.ok(html.includes('Current cashier'))
   assert.ok(html.includes('0800000000'))
+  assert.ok(html.includes('10/09/2569'))
+  assert.ok(html.includes("font-family:'Noto Sans Thai'"))
   assert.match(html, /Previously Paid[^<]*<\/span><strong>฿5,000\.00/)
   assert.match(html, /This Payment[^<]*<\/span><strong>฿5,000\.00/)
   assert.match(html, /Total Paid[^<]*<\/span><strong>฿10,000\.00/)

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test tests/money.test.ts tests/branchSelection.test.ts tests/catalogScope.test.ts tests/courseMath.test.ts tests/depositReceipt.test.ts tests/pickupCalendar.test.ts",
+    "test": "tsx --test tests/money.test.ts tests/branchSelection.test.ts tests/catalogScope.test.ts tests/courseMath.test.ts tests/dateFormat.test.ts tests/depositReceipt.test.ts tests/pickupCalendar.test.ts",
     "test:emulator": "firebase emulators:exec --config firebase.test.json --project demo-yumiko-qa --only auth,firestore \"tsx --test tests/transactions.test.ts\"",
     "backup": "node scripts/backup.mjs",
     "cleanup:test": "node scripts/cleanup-test.mjs"

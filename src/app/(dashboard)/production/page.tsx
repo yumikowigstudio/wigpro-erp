@@ -43,6 +43,7 @@ import { writeActivityLog } from '@/lib/activityLog'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissionAction } from '@/hooks/usePermissionAction'
 import { CustomerSearchInput } from '@/components/CustomerSearchInput'
+import { DateInputDMY } from '@/components/DateInputDMY'
 import type { Deposit, WorkOrder } from '@/types'
 
 type ViewMode = 'calendar' | 'list'
@@ -569,7 +570,7 @@ export default function ProductionPage() {
               <section className="space-y-3 border-b border-[var(--border-light)] pb-5">
                 <div className="flex items-center gap-2"><CalendarDays className="h-4 w-4 text-[var(--pink-600)]" /><h3 className="text-sm font-bold">วันนัดรับ</h3></div>
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <input type="date" value={pickupDateDraft} onChange={event => setPickupDateDraft(event.target.value)} className={inputClass} />
+                  <DateInputDMY value={pickupDateDraft} onChange={setPickupDateDraft} ariaLabel="แก้ไขวันนัดรับ" className={inputClass} />
                   <button type="button" disabled={!pickupDateDraft || pickupDateDraft === selectedGroup.pickupDateKey || saving} onClick={() => savePickupDate(selectedGroup, pickupDateDraft)} className="shrink-0 rounded-xl bg-[var(--pink-600)] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">บันทึกวันรับ</button>
                 </div>
                 {selectedGroup.pickupDate && <button type="button" disabled={saving} onClick={() => clearPickupDate(selectedGroup)} className="text-xs font-semibold text-red-600 hover:underline">นำวันนัดรับออก</button>}
@@ -645,7 +646,7 @@ export default function ProductionPage() {
               <div className="grid gap-3 sm:grid-cols-3">
                 <div><label className="mb-1.5 block text-xs font-medium">ยอดรวม</label><input type="number" min="0" step="0.01" value={form.totalAmount} onChange={event => setForm(current => ({ ...current, totalAmount: event.target.value }))} className={inputClass} /></div>
                 <div><label className="mb-1.5 block text-xs font-medium">รับไว้แล้ว</label><input type="number" min="0" step="0.01" value={form.depositAmount} onChange={event => setForm(current => ({ ...current, depositAmount: event.target.value }))} className={inputClass} /></div>
-                <div><label className="mb-1.5 block text-xs font-medium">วันนัดรับ</label><input type="date" value={form.expectedDate} onChange={event => setForm(current => ({ ...current, expectedDate: event.target.value }))} className={inputClass} /></div>
+                <div><label className="mb-1.5 block text-xs font-medium">วันนัดรับ</label><DateInputDMY value={form.expectedDate} onChange={expectedDate => setForm(current => ({ ...current, expectedDate }))} ariaLabel="วันนัดรับ" className={inputClass} /></div>
               </div>
               <div><label className="mb-1.5 block text-xs font-medium">หมายเหตุชิ้นงาน</label><textarea rows={3} value={form.notes} onChange={event => setForm(current => ({ ...current, notes: event.target.value }))} className={`${inputClass} resize-y`} /></div>
               <div className="flex gap-3 pt-1"><button type="button" onClick={() => setShowCreateModal(false)} className="flex-1 rounded-xl border border-[var(--border-light)] py-2.5 text-sm font-semibold">ยกเลิก</button><button type="submit" disabled={saving || !selectedCustomerId} className="flex-1 rounded-xl bg-[var(--pink-600)] py-2.5 text-sm font-semibold text-white disabled:opacity-40">{saving ? 'กำลังบันทึก...' : 'เพิ่มชิ้นงาน'}</button></div>

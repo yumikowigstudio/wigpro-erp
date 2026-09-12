@@ -1,6 +1,7 @@
 import type { Deposit } from '@/types'
 import { depositPaid, depositPayments, depositRemaining, money } from './money'
 import { formatCurrency } from './utils'
+import { formatThaiReceiptDate } from './dateFormat'
 
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!)
 
@@ -38,14 +39,14 @@ export function depositReceiptHtml(deposit: Deposit, value?: number | DepositRec
   const receiptItems = selectedPayment?.receiptItems ?? deposit.items ?? []
   const receiptNote = selectedPayment?.receiptNote ?? deposit.receiptNote
   const row = (label: string, value: string, className = '') => `<div class="row ${className}"><span>${label}</span><strong>${value}</strong></div>`
-  const date = (value?: Date) => value instanceof Date ? value.toLocaleDateString('th-TH') : '-'
+  const date = (value?: Date) => formatThaiReceiptDate(value)
   const method: Record<string, string> = { cash: 'เงินสด / Cash', transfer: 'โอนเงิน / Transfer', qr: 'QR', credit_card: 'บัตร / Card' }
   return `<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${escape(deposit.depositNo)}</title><style>
-    @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
-    *{box-sizing:border-box}body{font-family:Sarabun,sans-serif;color:#111;font-size:12px;width:72mm;max-width:100%;margin:0 auto;padding:4mm 0;line-height:1.5}
-    h1{font-size:16px;margin:8px 0}h2{font-size:14px;border-block:1px solid;padding:6px 0;margin:12px 0;text-align:center}.shop{text-align:center;font-size:11px;overflow-wrap:anywhere}.shop img{width:48px;height:48px;object-fit:contain}
-    .row{display:flex;justify-content:space-between;gap:10px;padding:3px 0}.row>span{min-width:0;overflow-wrap:anywhere}.row strong{flex-shrink:0;font-weight:600;text-align:right}.total{font-size:14px;border-top:1px solid;margin-top:6px;padding-top:8px}
-    .item{padding:8px 0;border-bottom:1px dashed #ccc}.note{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;margin:3px 0}.meta{font-size:10px;color:#555}.box{border:1px solid #777;padding:7px;margin:10px 0}.signatures{display:flex;gap:12px;margin-top:24px;text-align:center;font-size:10px}.signatures>div{flex:1;border-top:1px solid;padding-top:4px}.history{margin-top:10px;border-top:1px dashed #aaa}.cancelled{text-align:center;color:#b91c1c;font-weight:bold}
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap');
+    *{box-sizing:border-box}body{font-family:'Noto Sans Thai',Tahoma,Arial,sans-serif;color:#111;font-size:13px;font-weight:500;width:72mm;max-width:100%;margin:0 auto;padding:4mm 0;line-height:1.55}
+    h1{font-size:18px;font-weight:800;line-height:1.35;margin:8px 0}h2{font-size:15px;font-weight:800;line-height:1.35;border-block:1.5px solid;padding:6px 0;margin:12px 0;text-align:center}.shop{text-align:center;font-size:11.5px;font-weight:500;line-height:1.45;overflow-wrap:anywhere}.shop img{width:48px;height:48px;object-fit:contain}
+    .row{display:flex;justify-content:space-between;gap:10px;padding:2.5px 0}.row>span{min-width:0;overflow-wrap:anywhere}.row strong{flex-shrink:0;font-weight:700;text-align:right}.total{font-size:16px;font-weight:800;border-top:1.5px solid;margin-top:7px;padding-top:8px}
+    .item{padding:10px 0;border-bottom:1px dashed #999}.item>.row>span{font-size:13.5px;font-weight:700}.item>.row>strong{font-size:13.5px;font-weight:800}.note{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11.5px;font-weight:500;line-height:1.55;margin:4px 0}.meta{font-size:11.5px;font-weight:500;color:#333}.box{border:1px solid #333;padding:8px;margin:10px 0}.signatures{display:flex;gap:12px;margin-top:26px;text-align:center;font-size:11px}.signatures>div{flex:1;border-top:1px solid;padding-top:5px}.history{margin-top:10px;border-top:1px dashed #888}.cancelled{text-align:center;color:#b91c1c;font-weight:800}
     .box .row strong{min-width:0;max-width:65%;flex-shrink:1;overflow-wrap:anywhere}.signatures>div{min-width:0;overflow-wrap:anywhere}
     @media print{@page{size:80mm auto;margin:4mm}body{padding:0}.item{break-inside:avoid}}
   </style></head><body><header class="shop">${shop?.logoUrl ? `<img src="${escape(shop.logoUrl)}" alt="Logo">` : ''}<h1>${escape(shop?.nameTh || deposit.branchName || '')}</h1>

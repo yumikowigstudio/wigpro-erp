@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { PosDrafts } from '@/components/PosDrafts'
+import { DateInputDMY } from '@/components/DateInputDMY'
 import {
   Search, Plus, Minus, X, ShoppingCart, Tag,
   Banknote, Smartphone, QrCode, CreditCard, Package,
@@ -24,6 +25,7 @@ import { CustomerSearchInput } from '@/components/CustomerSearchInput'
 import { commitCheckout } from '@/lib/checkout'
 import { depositCredit, money } from '@/lib/money'
 import { findCatalogMainBranch, getLegacyBranchStockFallback, isCatalogVisibleInBranch } from '@/lib/catalogScope'
+import { formatThaiReceiptDate } from '@/lib/dateFormat'
 
 type ProductWithStock = Product & { stockQty?: number }
 type PosMode = 'sale' | 'deposit'
@@ -1465,11 +1467,13 @@ function POSContent() {
 
                 {/* วันนัดรับวิก */}
                 <div>
-                  <label className="text-xs font-semibold text-[var(--text-secondary)] mb-1.5 flex items-center gap-1.5 block">
-                    📅 วันนัดรับวิก
+                  <label className="text-xs font-semibold text-[var(--text-secondary)] mb-1.5 block">
+                    วันนัดรับวิก
                   </label>
-                  <input type="date" value={pickupDate}
-                    onChange={e => setPickupDate(e.target.value)}
+                  <DateInputDMY
+                    value={pickupDate}
+                    onChange={setPickupDate}
+                    ariaLabel="วันนัดรับวิก"
                     min={new Date().toISOString().split('T')[0]}
                     className="w-full px-3 py-2 bg-[var(--bg-base)] border border-[var(--border-light)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)] transition-all" />
                 </div>
@@ -1895,42 +1899,45 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
       <meta charset="utf-8"/>
       <title>${isDeposit ? 'ใบมัดจำ' : 'ใบเสร็จ'} ${receipt.receiptNo}</title>
       <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
-        body{font-family:'Sarabun','Noto Sans Thai','Tahoma',sans-serif;font-size:12px;color:#181018;padding:16px;max-width:320px;margin:0 auto;line-height:1.35}
+        body{font-family:'Noto Sans Thai','Tahoma','Arial',sans-serif;font-size:13px;font-weight:500;color:#111;padding:16px;max-width:320px;margin:0 auto;line-height:1.5}
         .center{text-align:center}
         .receipt-paper{width:100%}
-        .receipt-head{padding-bottom:8px;border-bottom:1px dashed #9b8c9b}
+        .receipt-head{padding-bottom:10px;border-bottom:1px dashed #777}
         .logo{display:block;margin:0 auto 5px;height:40px;max-width:92px;object-fit:contain}
-        .shop-name{font-size:18px;font-weight:800;letter-spacing:0;color:#181018}
-        .sub{font-size:10.5px;color:#4f4350;margin-bottom:1px;white-space:pre-line}
-        .doc-type{display:block;margin:8px auto 0;padding:4px 8px;border-top:1px solid #181018;border-bottom:1px solid #181018;font-size:13px;font-weight:800;color:#181018;text-align:center;line-height:1.25;white-space:pre-line}
-        .meta-box{border:1px solid #181018;border-radius:2px;margin:9px 0 10px;padding:6px 8px}
-        .row{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:1px 0}
-        .label{color:#4f4350}
-        .table-head{display:grid;grid-template-columns:1fr 86px;gap:8px;font-size:10.5px;color:#4f4350;font-weight:700;border-bottom:1px solid #181018;padding:0 0 4px;margin-bottom:2px}
-        .item-row{font-size:11.5px;padding:7px 0;border-bottom:1px solid #eee}
+        .shop-name{font-size:18px;font-weight:800;letter-spacing:0;color:#111;line-height:1.35}
+        .sub{font-size:11px;font-weight:500;color:#333;margin-bottom:1px;white-space:pre-line;line-height:1.45}
+        .doc-type{display:block;margin:9px auto 0;padding:5px 8px;border-top:1.5px solid #111;border-bottom:1.5px solid #111;font-size:14px;font-weight:800;color:#111;text-align:center;line-height:1.3;white-space:pre-line}
+        .meta-box{border:1px solid #222;border-radius:2px;margin:10px 0 11px;padding:7px 8px}
+        .row{display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0}
+        .row strong,.row>span:last-child{font-weight:700}
+        .label{color:#222;font-weight:500!important}
+        .table-head{display:grid;grid-template-columns:1fr 86px;gap:8px;font-size:11px;color:#222;font-weight:700;border-bottom:1.5px solid #111;padding:0 0 5px;margin-bottom:2px}
+        .item-row{font-size:13px;padding:9px 0;border-bottom:1px dashed #aaa}
         .item-main{display:grid;grid-template-columns:minmax(0,1fr) 86px;gap:8px;align-items:start}
         .item-name{flex:1;min-width:0;overflow:visible;white-space:normal;padding-right:6px}
         .item-name p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important}
-        .item-meta{font-size:10px;color:#4f4350;margin-top:2px;white-space:normal}
-        .item-total{text-align:right;font-weight:800;color:#181018;white-space:nowrap}
-        .item-note{font-size:10px;color:#4f4350;margin-top:3px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;border-left:2px solid #e8d9e8;padding-left:5px}
-        .tax-note{font-size:10px;color:#555;margin-top:1px;white-space:normal}
-        .summary-box{border-top:1px dashed #9b8c9b;border-bottom:1px dashed #9b8c9b;margin-top:8px;padding:7px 0}
-        .total-row{display:flex;justify-content:space-between;font-size:16px;font-weight:900;padding:7px 0;border-top:1px solid #181018;margin-top:5px}
-        .deposit-row{display:flex;justify-content:space-between;font-size:12px;font-weight:800;padding:3px 0;color:#181018}
-        .remain-row{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;color:#181018;font-weight:800}
-        .change-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;color:#181018;font-weight:700}
-        .note-box{border:1px solid #181018;border-radius:2px;margin-top:10px;padding:7px 8px;font-size:10.5px;color:#181018;text-align:left;white-space:pre-wrap;line-height:1.45;overflow-wrap:anywhere;word-break:break-word}
-        .signature{margin-top:22px;text-align:center;font-size:10.5px;color:#181018}
-        .signature-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px;text-align:center;font-size:10.5px;color:#181018}
-        .signature-line{border-top:1px solid #181018;width:150px;margin:0 auto 4px}
+        .item-name>p:first-child{font-weight:700;line-height:1.45}
+        .item-meta{font-size:11.5px;color:#333;margin-top:2px;white-space:normal}
+        .item-total{text-align:right;font-size:13px;font-weight:800;color:#111;white-space:nowrap}
+        .item-note{font-size:11.5px;color:#222;margin-top:4px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+        .tax-note{font-size:11px;color:#333;margin-top:1px;white-space:normal}
+        .summary-box{border-top:1px dashed #777;border-bottom:1px dashed #777;margin-top:9px;padding:8px 0}
+        .total-row{display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding:8px 0;border-top:1.5px solid #111;margin-top:6px}
+        .deposit-row{display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:3px 0;color:#111}
+        .remain-row{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;color:#111;font-weight:800}
+        .change-row{display:flex;justify-content:space-between;font-size:12.5px;padding:2px 0;color:#111;font-weight:700}
+        .note-box{border:1px solid #222;border-radius:2px;margin-top:10px;padding:8px;font-size:11.5px;font-weight:500;color:#111;text-align:left;white-space:pre-wrap;line-height:1.55;overflow-wrap:anywhere;word-break:break-word}
+        .signature{margin-top:22px;text-align:center;font-size:11px;color:#111}
+        .signature-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:24px;text-align:center;font-size:11px;color:#111}
+        .signature-line{border-top:1px solid #111;width:150px;margin:0 auto 4px}
         .signature-name{font-weight:700;margin-top:2px;white-space:normal;overflow-wrap:anywhere}
-        .footer{text-align:center;margin-top:10px;font-size:10.5px;color:#555}
+        .footer{text-align:center;margin-top:10px;font-size:11px;color:#333}
         @media print{@page{margin:5mm 8mm}body{padding:0}}
       </style>
     </head><body>${el.innerHTML}
-    <script>window.onload=()=>{window.print();setTimeout(()=>window.close(),500)}<\/script>
+    <script>window.onload=async()=>{await document.fonts.ready;window.print();setTimeout(()=>window.close(),500)}<\/script>
     </body></html>`)
     win.document.close()
   }
@@ -1967,7 +1974,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
             <div className="meta-box mb-3 rounded-lg border border-gray-900/80 px-3 py-2 space-y-0.5">
               {[
                 [isDeposit ? 'เลขที่ใบมัดจำ / Deposit No.' : 'เลขที่ใบเสร็จ / Receipt No.', receipt.receiptNo],
-                ['วันที่ / Date', receipt.date.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })],
+                ['วันที่ / Date', formatThaiReceiptDate(receipt.date)],
                 ['เวลา / Time', receipt.date.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })],
                 ['ลูกค้า / Customer', receipt.customerName?.trim() || 'ลูกค้าทั่วไป / Walk-in customer'],
                 ...(receipt.customerPhone ? [['เบอร์โทร / Phone', receipt.customerPhone]] : []),
@@ -2047,7 +2054,7 @@ function ReceiptModal({ receipt, shop, onClose }: { receipt: ReceiptData; shop: 
               <div className="note-box mt-3 p-3 rounded-lg border border-gray-900/80 bg-white space-y-1.5 text-xs">
                 {receipt.pickupDate && (
                   <p className="font-bold text-gray-950">
-                    นัดรับวิก / Pickup date: {new Date(receipt.pickupDate).toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })}
+                    นัดรับวิก / Pickup date: {formatThaiReceiptDate(receipt.pickupDate)}
                   </p>
                 )}
                 {receipt.depositNote && (
