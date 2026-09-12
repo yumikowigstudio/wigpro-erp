@@ -43,10 +43,10 @@ export function PosDrafts<T>({ storageKey, value, itemCount, customerName, disab
       onRestore(draft.value); setRecovery(null); setOpen(false)
     }
   }
-  return <div className="space-y-2 border-b border-[var(--border-light)] px-4 py-2">
+  return <div className="space-y-1.5 border-b border-[var(--border-light)] px-3 py-1.5">
     <div className="flex items-center gap-2">
-      <button type="button" disabled={disabled || !itemCount || !!recovery} onClick={park} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs disabled:opacity-40"><Pause className="h-3.5 w-3.5" />พักบิล</button>
-      <button type="button" disabled={disabled} onClick={() => setOpen(!open)} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs"><RotateCcw className="h-3.5 w-3.5" />บิลที่พัก ({drafts.length})</button>
+      <button type="button" disabled={disabled || !itemCount || !!recovery} onClick={park} className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] disabled:opacity-40"><Pause className="h-3.5 w-3.5" />พักบิล</button>
+      <button type="button" disabled={disabled} onClick={() => setOpen(!open)} className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px]"><RotateCcw className="h-3.5 w-3.5" />บิลที่พัก ({drafts.length})</button>
     </div>
     {recovery && <div className="flex flex-wrap items-center gap-2 text-xs text-amber-800 bg-amber-50 p-2 rounded-lg"><span>มีตะกร้าที่ยังไม่เสร็จ: {recovery.name}</span><button disabled={disabled} onClick={() => restore(recovery)} className="underline font-semibold">เรียกคืน</button><button aria-label="ทิ้งตะกร้าที่กู้คืน" disabled={disabled} onClick={() => { if (window.confirm('ทิ้งตะกร้าที่ค้างไว้?') && write(drafts)) setRecovery(null) }}><X className="h-4 w-4" /></button></div>}
     {open && <div className="max-h-48 overflow-y-auto divide-y">

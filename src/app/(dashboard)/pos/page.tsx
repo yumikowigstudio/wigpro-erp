@@ -1058,6 +1058,7 @@ function POSContent() {
     ? cart.find(item => item.id === courseUseDialog.cartItem?.id && item.type === courseUseDialog.cartItem?.type)?.quantity
     : undefined
   const dialogMaxUnits = Math.min(selectedDialogCourse?.remainingUnits ?? 1, dialogCartQuantity ?? selectedDialogCourse?.remainingUnits ?? 1)
+  const showSummaryBreakdown = discountAmt > 0 || showVatOnReceipt || depositDeduct > 0 || (mode === 'deposit' && depositAmt > 0)
 
   return (
     <>
@@ -1151,10 +1152,10 @@ function POSContent() {
       </div>
 
       {/* ── RIGHT: Cart ── */}
-      <div id="pos-cart-panel" className="min-h-0 w-full lg:w-[520px] xl:w-[560px] 2xl:w-[600px] flex flex-col bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] overflow-hidden">
+      <div id="pos-cart-panel" className="min-h-0 w-full lg:h-full lg:w-[520px] xl:w-[560px] 2xl:w-[600px] flex flex-col bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] overflow-hidden">
 
         {/* Cart header */}
-        <div className="shrink-0 p-3 border-b border-[var(--border-light)] space-y-2.5">
+        <div className="shrink-0 border-b border-[var(--border-light)] p-2.5 space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="font-bold text-[var(--text-primary)] flex items-center gap-2">
               <ShoppingCart className="w-4 h-4 text-[var(--pink-400)]" /> ตะกร้า
@@ -1164,9 +1165,17 @@ function POSContent() {
                 </span>
               )}
             </h2>
-            {cart.length > 0 && (
-              <button disabled={saving} onClick={() => { if (window.confirm('ล้างตะกร้าปัจจุบัน?')) clearDraft() }} className="text-xs text-red-400 hover:text-red-500 font-medium">ล้างทั้งหมด</button>
-            )}
+            {cart.length > 0 && <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                title="ราคาสินค้าและบริการรวม VAT แล้ว ปุ่มนี้กำหนดเฉพาะการแสดง VAT บนใบเสร็จ"
+                onClick={() => setShowVatOnReceipt(value => !value)}
+                className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold transition-all ${showVatOnReceipt ? 'border-blue-200 bg-blue-50 text-blue-600' : 'border-[var(--border-light)] bg-white text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'}`}
+              >
+                VAT: {showVatOnReceipt ? 'แสดง' : 'ไม่แสดง'}
+              </button>
+              <button disabled={saving} onClick={() => { if (window.confirm('ล้างตะกร้าปัจจุบัน?')) clearDraft() }} className="text-[10px] font-semibold text-red-400 hover:text-red-500">ล้างทั้งหมด</button>
+            </div>}
           </div>
 
           {/* Mode toggle */}
@@ -1181,28 +1190,6 @@ function POSContent() {
             </button>
           </div>
 
-          {cart.length > 0 && (
-            <div className="rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-1.5">
-              <div className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-1.5 border border-[var(--border-light)]">
-                <div className="min-w-0">
-                  <p className="text-xs font-bold text-[var(--text-primary)]">การแสดง VAT บนใบเสร็จ</p>
-                  <p className="text-[10px] text-[var(--text-muted)]">ราคาสินค้า/บริการเป็นราคารวม VAT แล้ว ระบบไม่บวกเพิ่ม</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowVatOnReceipt(v => !v)}
-                  className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-bold transition-all ${
-                    showVatOnReceipt
-                      ? 'border-blue-200 bg-blue-50 text-blue-600'
-                      : 'border-[var(--border-light)] bg-white text-[var(--text-secondary)] hover:bg-[var(--pink-50)]'
-                  }`}
-                >
-                  {showVatOnReceipt ? 'แสดง VAT' : 'ไม่แสดง VAT'}
-                </button>
-              </div>
-            </div>
-          )}
-
           {/* Customer search */}
           <CustomerSearchInput
             companyId={companyId}
@@ -1212,30 +1199,24 @@ function POSContent() {
             onClear={() => { setWorkGroups({}); setCustomerId(''); setCustomerName(''); setCustomerPhone('') }}
             placeholder={mode === 'deposit' ? 'ค้นหาลูกค้า (แนะนำสำหรับมัดจำ)' : 'ค้นหาลูกค้า (ไม่บังคับ)'}
           />
-          {mode === 'sale' && customerId && <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-2">
-            {coursesLoading ? <div className="flex items-center gap-2 text-xs text-emerald-700"><Loader2 className="h-3.5 w-3.5 animate-spin" />กำลังตรวจสิทธิ์คอร์ส...</div>
+          {mode === 'sale' && customerId && <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-2 py-1.5">
+            {coursesLoading ? <div className="flex items-center gap-2 text-[10px] text-emerald-700"><Loader2 className="h-3 w-3 animate-spin" />กำลังตรวจสิทธิ์คอร์ส...</div>
               : availableCustomerCourses.length > 0 ? <>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="flex items-center gap-1.5 text-xs font-bold text-emerald-800"><Ticket className="h-3.5 w-3.5" />คอร์สพร้อมใช้ {availableCustomerCourses.length} คอร์ส</p>
-                  <span className="text-[10px] font-semibold text-emerald-700">เหลือรวม {availableCustomerCourses.reduce((sum, course) => sum + course.remainingUnits, 0)} สิทธิ์</span>
-                </div>
-                <div className="mt-1.5 max-h-28 overflow-y-auto divide-y divide-emerald-100">
-                  {availableCustomerCourses.map(course => <div key={course.id} className="flex items-center gap-2 py-1.5">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[11px] font-semibold text-[var(--text-primary)]">{course.name}</p>
-                      <p className="text-[10px] text-emerald-700">คงเหลือ {course.remainingUnits}/{course.totalUnits} ครั้ง{course.expiresAt ? ` · หมดอายุ ${course.expiresAt.toLocaleDateString('th-TH')}` : ' · ไม่จำกัดอายุ'}</p>
-                    </div>
-                    <button type="button" onClick={() => openCourseUse(course)} className="shrink-0 rounded-lg border border-emerald-200 bg-white px-2.5 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">ใช้สิทธิ์</button>
+                <div className="flex items-center gap-2 overflow-x-auto overscroll-x-contain">
+                  <p className="flex shrink-0 items-center gap-1 text-[10px] font-bold text-emerald-800"><Ticket className="h-3 w-3" />คอร์ส {availableCustomerCourses.length}</p>
+                  {availableCustomerCourses.map(course => <div key={course.id} className="flex min-w-[12rem] max-w-[16rem] flex-1 items-center gap-2 rounded-md border border-emerald-100 bg-white px-2 py-1">
+                    <p className="min-w-0 flex-1 truncate text-[10px] font-semibold text-[var(--text-primary)]" title={course.name}>{course.name} · เหลือ {course.remainingUnits}</p>
+                    <button type="button" onClick={() => openCourseUse(course)} className="shrink-0 rounded-md bg-emerald-600 px-2 py-1 text-[9px] font-bold text-white hover:bg-emerald-700">ใช้สิทธิ์</button>
                   </div>)}
                 </div>
-              </> : <p className="text-[11px] text-[var(--text-muted)]">ลูกค้ารายนี้ยังไม่มีคอร์สที่พร้อมใช้ในสาขานี้</p>}
+              </> : <p className="text-[10px] text-[var(--text-muted)]">ลูกค้ารายนี้ยังไม่มีคอร์สที่พร้อมใช้ในสาขานี้</p>}
           </div>}
         </div>
 
         <PosDrafts storageKey={`yumiko-pos:${companyId}:${branchId}:${userId}`} value={draft} itemCount={cart.length} customerName={customerName} disabled={saving || checkoutOpen} onRestore={restoreDraft} onClear={clearDraft} />
 
         {/* Items */}
-        <div aria-label="รายการในตะกร้า" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pt-2 space-y-1.5">
+        <div aria-label="รายการในตะกร้า" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2.5 space-y-1.5 lg:min-h-64">
           {cart.length === 0 ? (
             <div className="h-full flex items-center justify-center flex-col gap-3 py-8 text-center">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[var(--pink-50)] to-purple-50 flex items-center justify-center">
@@ -1253,7 +1234,7 @@ function POSContent() {
             const hasItemConfig = Boolean(item.staffId)
             const matchingRights = item.type === 'service' && !item.course && mode === 'sale' ? coursesForService(item.id) : []
             return (
-            <div key={itemKey} className="rounded-xl bg-white border border-[var(--border-light)] px-2 py-1.5 shadow-sm shadow-pink-50">
+            <div key={itemKey} data-cart-item className="min-h-11 rounded-lg bg-white border border-[var(--border-light)] px-2 py-1.5 shadow-sm shadow-pink-50">
               <div className="flex min-w-0 items-center gap-1.5">
                 <div className="h-7 w-7 shrink-0 rounded-lg bg-[var(--pink-50)] flex items-center justify-center">
                   {item.type === 'product'
@@ -1268,6 +1249,7 @@ function POSContent() {
                     {priceEdited ? ` · แก้จาก ${formatCurrency(originalPrice)}` : ''}
                     {item.note?.trim() ? ' · มีหมายเหตุ' : ''}
                     {item.staffName ? ` · ${item.staffName}` : ''}
+                    {matchingRights.length > 0 ? ` · ใช้สิทธิ์ได้ ${matchingRights.reduce((sum, course) => sum + course.remainingUnits, 0)}` : ''}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
@@ -1277,6 +1259,7 @@ function POSContent() {
                     <button onClick={() => updateQty(item.id, item.type, item.quantity + 1)} aria-label={`เพิ่มจำนวน ${item.name}`} className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[var(--pink-500)] shadow-sm transition-all hover:bg-[var(--pink-50)]"><Plus className="h-3 w-3" /></button>
                   </div>
                   <p className="w-[4.75rem] text-right text-xs font-bold text-[var(--pink-500)]">{formatCurrency(item.price * item.quantity)}</p>
+                  {matchingRights.length > 0 && <button type="button" onClick={() => openCourseUse(matchingRights[0], item.id, item)} title="ใช้สิทธิ์คอร์ส" aria-label="ใช้สิทธิ์" className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-emerald-600 px-2 text-[9px] font-bold text-white hover:bg-emerald-700"><Ticket className="h-3.5 w-3.5" /><span className="hidden 2xl:inline">สิทธิ์</span></button>}
                   <button
                     type="button"
                     onClick={() => setEditingCartItemId(editingCartItemId === itemKey ? '' : itemKey)}
@@ -1302,10 +1285,6 @@ function POSContent() {
                   </button>
                 </div>
               </div>
-              {matchingRights.length > 0 && <div className="mt-1.5 flex items-center justify-between gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1.5">
-                <p className="min-w-0 truncate text-[10px] font-semibold text-emerald-800">รายการนี้ใช้สิทธิ์ได้ · เหลือ {matchingRights.reduce((sum, course) => sum + course.remainingUnits, 0)} ครั้ง</p>
-                <button type="button" onClick={() => openCourseUse(matchingRights[0], item.id, item)} className="shrink-0 rounded-md bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-emerald-700">ใช้สิทธิ์</button>
-              </div>}
               {editingCartItemId === itemKey && (
                 <div className="mt-2 rounded-lg border border-[var(--pink-100)] bg-[var(--bg-base)] p-2">
                   <div className="grid grid-cols-[6.25rem_minmax(0,1fr)] gap-1.5">
@@ -1365,11 +1344,11 @@ function POSContent() {
         </div>
 
         {/* Compact summary + checkout entry */}
-        <div className="shrink-0 p-3 border-t border-[var(--border-light)] space-y-2 bg-white shadow-[0_-8px_24px_rgba(244,114,182,0.08)]">
-          <div className="rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-2.5 space-y-1.5">
-            <div className="flex justify-between text-xs text-[var(--text-secondary)]">
+        <div className="shrink-0 border-t border-[var(--border-light)] bg-white p-2 space-y-1.5 shadow-[0_-8px_24px_rgba(244,114,182,0.08)]">
+          <div className="rounded-lg border border-[var(--border-light)] bg-[var(--bg-base)] p-2 space-y-1">
+            {showSummaryBreakdown && <div className="flex justify-between text-[11px] text-[var(--text-secondary)]">
               <span>รวมเป็นเงิน</span><span>{formatCurrency(subtotal)}</span>
-            </div>
+            </div>}
             {discountAmt > 0 && (
               <div className="flex justify-between text-xs font-semibold text-emerald-600">
                 <span>ส่วนลด/คูปอง</span><span>-{formatCurrency(discountAmt)}</span>
@@ -1395,10 +1374,9 @@ function POSContent() {
                 <span>รับมัดจำ</span><span>{formatCurrency(depositAmt)}</span>
               </div>
             )}
-            <div className="flex items-end justify-between gap-3 border-t border-[var(--border-light)] pt-1.5">
+            <div className={`flex items-center justify-between gap-3 ${showSummaryBreakdown ? 'border-t border-[var(--border-light)] pt-1.5' : ''}`}>
               <div>
                 <p className="text-xs text-[var(--text-muted)]">{mode === 'sale' ? 'รวมทั้งสิ้น' : 'รวมเป็นเงิน'}</p>
-                <p className="text-[11px] text-[var(--text-light)]">กดปุ่มด้านล่างเพื่อเลือกวิธีชำระและบันทึก</p>
               </div>
               <p className="text-lg font-black text-[var(--pink-600)] whitespace-nowrap">
                 {formatCurrency(mode === 'sale' ? payNow : total)}
@@ -1423,7 +1401,7 @@ function POSContent() {
             type="button"
             onClick={() => { setPosMsg(null); if (cart.length > 0) setCheckoutOpen(true) }}
             disabled={cart.length === 0 || saving}
-            className={`w-full py-3.5 text-white font-black rounded-xl shadow-lg active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2 ${
+            className={`w-full py-2.5 text-white font-black rounded-lg shadow-lg active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2 ${
               mode === 'sale'
                 ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] shadow-pink-200'
                 : 'bg-gradient-to-r from-amber-400 to-orange-400 shadow-amber-200'

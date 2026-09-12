@@ -30,6 +30,7 @@ export function formatDate(date: Date | string | null | undefined): string {
 export function formatDateTime(date: Date | string | null | undefined): string {
   if (!date) return '-'
   const d = typeof date === 'string' ? new Date(date) : date
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '-'
   return new Intl.DateTimeFormat('th-TH', {
     year: 'numeric',
     month: 'short',

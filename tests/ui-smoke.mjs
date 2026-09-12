@@ -26,6 +26,10 @@ await env.withSecurityRulesDisabled(async context => {
     'customers/customer': { companyId: 'co', branchId: 'main', firstName: 'ทดสอบ', lastName: 'ลูกค้า', phone: '0800000000', customerId: 'C-QA001', createdAt: now },
     'deposits/dep': { companyId: 'co', branchId: 'main', depositNo: 'DEP-QA-001', customerId: 'customer', customerName: 'ทดสอบ ลูกค้า', totalAmount: 100, depositAmount: 30, paidAmount: 50, remainingAmount: 50, status: 'deposited', items: [{ productId: 'p', name: 'สินค้าทดสอบ', quantity: 1, unitPrice: 100, total: 100 }], paymentHistory: [{ id: 'initial', amount: 30, method: 'cash', confirmed: true, receivedAt: now }, { id: 'second', amount: 20, method: 'cash', confirmed: true, receivedAt: now }], createdAt: now },
   }
+  for (let index = 2; index <= 12; index++) {
+    seed[`products/p${index}`] = { companyId: 'co', branchId: 'main', name: `สินค้าทดสอบ ${index}`, sku: `QA00${index}`, sellingPrice: index * 100, costPrice: 20, isActive: true, stockQty: 10, minStockAlert: 2, images: [], createdAt: now }
+    seed[`inventory/p${index}_main`] = { companyId: 'co', branchId: 'main', productId: `p${index}`, quantity: 10 }
+  }
   for (const [path, data] of Object.entries(seed)) await db.doc(path).set(data)
 })
 await mkdir('test-results', { recursive: true })
@@ -68,6 +72,23 @@ try {
   await page.reload()
   await page.getByRole('button', { name: 'เรียกคืน', exact: true }).click()
   assert.equal(await page.locator('#pos-cart-panel').getByText('สินค้าทดสอบ', { exact: true }).count(), 1)
+  for (let index = 2; index <= 12; index++) await page.getByText(`สินค้าทดสอบ ${index}`, { exact: true }).first().click()
+  const cartList = page.getByLabel('รายการในตะกร้า')
+  const cartLayout = await cartList.evaluate(element => {
+    const bounds = element.getBoundingClientRect()
+    const rows = Array.from(element.querySelectorAll('[data-cart-item]'))
+    return {
+      itemCount: rows.length,
+      fullyVisible: rows.filter(row => {
+        const rect = row.getBoundingClientRect()
+        return rect.top >= bounds.top && rect.bottom <= bounds.bottom
+      }).length,
+      scrolls: element.scrollHeight > element.clientHeight,
+    }
+  })
+  assert.equal(cartLayout.itemCount, 12)
+  assert.ok(cartLayout.fullyVisible >= 5, `Expected at least five visible cart rows, received ${cartLayout.fullyVisible}`)
+  assert.equal(cartLayout.scrolls, true, 'Additional cart rows should scroll inside the cart list')
   await page.screenshot({ path: 'test-results/pos-desktop.png', fullPage: true })
   await page.getByLabel('ค้นหาทั้งระบบ').fill('0800')
   await page.getByRole('link', { name: /ทดสอบ ลูกค้า/ }).first().waitFor()
@@ -93,8 +114,7 @@ try {
   await page.screenshot({ path: 'test-results/activity-log.png', fullPage: true })
   const branchSelector = page.getByRole('banner').getByTitle('เลือกสาขาที่ต้องการดู')
   await branchSelector.selectOption('second')
-  await page.locator('a[href="/pos"]').first().click()
-  await page.waitForURL('**/pos')
+  await page.goto('http://localhost:3106/pos')
   await page.getByRole('button', { name: 'พักบิล', exact: true }).waitFor()
   await page.waitForTimeout(1000)
   assert.equal(await branchSelector.inputValue(), 'second', 'Navigating must retain the selected branch')
