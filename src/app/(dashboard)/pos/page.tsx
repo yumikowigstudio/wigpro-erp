@@ -8,7 +8,7 @@ import {
   Search, Plus, Minus, X, ShoppingCart, Tag,
   Banknote, Smartphone, QrCode, CreditCard, Package,
   Scissors, Check, Loader2, AlertTriangle, Printer, Wallet, Ticket,
-  UserRound, FileText, ImagePlus, Factory,
+  UserRound, FileText, ImagePlus, Factory, Pencil,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { COLLECTIONS, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
@@ -184,6 +184,7 @@ function POSContent() {
   const [discountPolicy, setDiscountPolicy] = useState<DiscountPolicy>(DEFAULT_DISCOUNT_POLICY)
   const [employees, setEmployees]     = useState<Employee[]>([])
   const [defaultStaffId, setDefaultStaffId] = useState('')   // พนักงานขายเริ่มต้น (ใส่ให้ทุกรายการที่หยิบใหม่)
+  const [editingCartItemId, setEditingCartItemId] = useState('')
   const [couponCode, setCouponCode]   = useState('')         // รหัสคูปอง
   const [appliedCoupon, setAppliedCoupon] = useState('')     // ชื่อคูปองที่ใช้แล้ว
   const [slipUrl, setSlipUrl]         = useState('')         // หลักฐานการชำระ (สลิป) สำหรับโอน/QR/บัตร
@@ -991,10 +992,10 @@ function POSContent() {
       </div>
 
       {/* ── RIGHT: Cart ── */}
-      <div id="pos-cart-panel" className="w-full lg:w-[460px] xl:w-[500px] flex flex-col bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] overflow-hidden">
+      <div id="pos-cart-panel" className="min-h-0 w-full lg:w-[520px] xl:w-[560px] 2xl:w-[600px] flex flex-col bg-white rounded-2xl border border-[var(--border-light)] shadow-[var(--shadow-card)] overflow-hidden">
 
         {/* Cart header */}
-        <div className="p-4 border-b border-[var(--border-light)] space-y-3">
+        <div className="shrink-0 p-3 border-b border-[var(--border-light)] space-y-2.5">
           <div className="flex items-center justify-between">
             <h2 className="font-bold text-[var(--text-primary)] flex items-center gap-2">
               <ShoppingCart className="w-4 h-4 text-[var(--pink-400)]" /> ตะกร้า
@@ -1012,18 +1013,18 @@ function POSContent() {
           {/* Mode toggle */}
           <div className="flex gap-1.5 p-1 bg-[var(--bg-base)] rounded-xl border border-[var(--border-light)]">
             <button onClick={() => setMode('sale')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all ${mode === 'sale' ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:bg-white'}`}>
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === 'sale' ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:bg-white'}`}>
               <ShoppingCart className="w-3.5 h-3.5" /> ขายปกติ
             </button>
             <button onClick={() => setMode('deposit')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all ${mode === 'deposit' ? 'bg-gradient-to-r from-amber-400 to-orange-400 text-white shadow-sm' : 'text-[var(--text-secondary)] hover:bg-white'}`}>
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === 'deposit' ? 'bg-gradient-to-r from-amber-400 to-orange-400 text-white shadow-sm' : 'text-[var(--text-secondary)] hover:bg-white'}`}>
               <Wallet className="w-3.5 h-3.5" /> วางมัดจำ
             </button>
           </div>
 
           {cart.length > 0 && (
-            <div className="rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-2 space-y-2">
-              <div className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 border border-[var(--border-light)]">
+            <div className="rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-1.5">
+              <div className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-1.5 border border-[var(--border-light)]">
                 <div className="min-w-0">
                   <p className="text-xs font-bold text-[var(--text-primary)]">การแสดง VAT บนใบเสร็จ</p>
                   <p className="text-[10px] text-[var(--text-muted)]">ราคาสินค้า/บริการเป็นราคารวม VAT แล้ว ระบบไม่บวกเพิ่ม</p>
@@ -1057,7 +1058,7 @@ function POSContent() {
         <PosDrafts storageKey={`yumiko-pos:${companyId}:${branchId}:${userId}`} value={draft} itemCount={cart.length} customerName={customerName} disabled={saving || checkoutOpen} onRestore={restoreDraft} onClear={clearDraft} />
 
         {/* Items */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        <div aria-label="รายการในตะกร้า" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pt-2 space-y-1.5">
           {cart.length === 0 ? (
             <div className="h-full flex items-center justify-center flex-col gap-3 py-8 text-center">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[var(--pink-50)] to-purple-50 flex items-center justify-center">
@@ -1074,9 +1075,9 @@ function POSContent() {
             const priceEdited = originalPrice !== item.price
             const hasItemConfig = Boolean(item.staffId)
             return (
-            <div key={itemKey} className="rounded-2xl bg-white border border-[var(--border-light)] p-3 shadow-sm shadow-pink-50">
-              <div className="flex gap-3">
-                <div className="mt-0.5 h-9 w-9 shrink-0 rounded-xl bg-[var(--pink-50)] flex items-center justify-center">
+            <div key={itemKey} className="rounded-xl bg-white border border-[var(--border-light)] px-2.5 py-2 shadow-sm shadow-pink-50">
+              <div className="flex gap-2">
+                <div className="mt-0.5 h-8 w-8 shrink-0 rounded-lg bg-[var(--pink-50)] flex items-center justify-center">
                   {item.type === 'product'
                     ? <Package className="h-4 w-4 text-[var(--pink-400)]" />
                     : <Scissors className="h-4 w-4 text-[var(--pink-400)]" />
@@ -1085,74 +1086,88 @@ function POSContent() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-bold text-[var(--text-primary)] leading-snug break-words">{item.name}</p>
-                      <div className="mt-2 grid grid-cols-[6.75rem_minmax(0,1fr)] gap-2">
-                        <label className="relative block">
-                          <span className="absolute left-2 top-1 text-[9px] font-semibold text-[var(--text-muted)]">ราคา</span>
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={item.price || ''}
-                            onChange={e => updatePrice(item.id, item.type, e.target.value === '' ? 0 : Number(e.target.value))}
-                            aria-label={`ราคาขาย ${item.name}`}
-                            className="h-10 w-full rounded-lg border border-[var(--border-light)] bg-white px-2 pb-1 pt-4 text-sm font-bold text-[var(--pink-600)] outline-none transition focus:border-[var(--pink-300)] focus:ring-2 focus:ring-[var(--pink-100)]"
-                          />
-                        </label>
-                        <label className="relative block min-w-0">
-                          <span className="absolute left-2 top-1 text-[9px] font-semibold text-[var(--text-muted)]">หมายเหตุ</span>
-                          <textarea
-                            value={item.note ?? ''}
-                            onChange={e => setItemNote(item.id, item.type, e.target.value)}
-                            rows={item.note && item.note.length > 48 ? 3 : 2}
-                            maxLength={360}
-                            placeholder="เช่น สี, เงื่อนไข, ขนาด, รายละเอียดงาน"
-                            aria-label={`หมายเหตุ ${item.name}`}
-                            className="min-h-10 w-full resize-y rounded-lg border border-[var(--border-light)] bg-[var(--bg-base)] px-2 pb-1.5 pt-4 text-xs leading-snug text-[var(--text-primary)] outline-none transition focus:border-[var(--pink-300)] focus:bg-white focus:ring-2 focus:ring-[var(--pink-100)]"
-                          />
-                        </label>
+                      <p className="line-clamp-2 text-sm font-bold leading-snug text-[var(--text-primary)] break-words">{item.name}</p>
+                      <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                        <div className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--border-light)] bg-[var(--bg-base)] p-0.5">
+                          <button onClick={() => updateQty(item.id, item.type, item.quantity - 1)} aria-label={`ลดจำนวน ${item.name}`} className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[var(--pink-500)] shadow-sm transition-all hover:bg-[var(--pink-50)]"><Minus className="h-3 w-3" /></button>
+                          <span className="w-6 text-center text-xs font-bold text-[var(--text-primary)]">{item.quantity}</span>
+                          <button onClick={() => updateQty(item.id, item.type, item.quantity + 1)} aria-label={`เพิ่มจำนวน ${item.name}`} className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[var(--pink-500)] shadow-sm transition-all hover:bg-[var(--pink-50)]"><Plus className="h-3 w-3" /></button>
+                        </div>
+                        <span className="min-w-0 truncate text-[11px] text-[var(--text-muted)]">{formatCurrency(item.price)} / ชิ้น</span>
+                        <p className="ml-auto shrink-0 text-sm font-bold text-[var(--pink-500)]">{formatCurrency(item.price * item.quantity)}</p>
+                        <button
+                          type="button"
+                          onClick={() => setEditingCartItemId(editingCartItemId === itemKey ? '' : itemKey)}
+                          title="แก้ไขราคาและหมายเหตุ"
+                          aria-label={`แก้ไข ${item.name}`}
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-all ${editingCartItemId === itemKey ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-500)]'}`}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        {employees.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setExpandedCartItemId(isItemDetailOpen ? '' : itemKey)}
+                            title="ตั้งค่าผู้ขาย"
+                            aria-label={`ตั้งค่าผู้ขาย ${item.name}`}
+                            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-all ${hasItemConfig ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-500)]'}`}
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                     <button onClick={() => remove(item.id, item.type)} className="h-8 w-8 shrink-0 rounded-xl border border-[var(--border-light)] flex items-center justify-center text-[var(--text-muted)] hover:text-red-500 hover:bg-red-50 transition-colors" aria-label={`ลบ ${item.name}`}>
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
-                    {item.sku && <span className="max-w-full truncate rounded-full bg-[var(--bg-base)] px-2 py-0.5">{item.sku}</span>}
-                    <span className="rounded-full bg-blue-50 px-2 py-0.5 font-semibold text-blue-600">ราคารวม VAT แล้ว</span>
-                    {priceEdited && <span className="rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700">แก้จาก {formatCurrency(originalPrice)}</span>}
-                    {item.staffName && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-600">ผู้ขาย {item.staffName}</span>}
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 text-[10px] text-[var(--text-muted)]">
+                    {item.sku && <span className="max-w-[8rem] truncate rounded-full bg-[var(--bg-base)] px-1.5 py-0.5">{item.sku}</span>}
+                    <span className="rounded-full bg-blue-50 px-1.5 py-0.5 font-semibold text-blue-600">รวม VAT</span>
+                    {priceEdited && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-700">แก้จาก {formatCurrency(originalPrice)}</span>}
+                    {item.note?.trim() && <span className="max-w-[12rem] truncate rounded-full bg-[var(--bg-base)] px-1.5 py-0.5" title={item.note}>หมายเหตุ: {item.note}</span>}
+                    {item.staffName && <span className="max-w-[10rem] truncate rounded-full bg-emerald-50 px-1.5 py-0.5 text-emerald-600">ผู้ขาย {item.staffName}</span>}
                   </div>
                 </div>
               </div>
-              <div className="mt-3 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1 rounded-full bg-[var(--bg-base)] border border-[var(--border-light)] p-1">
-                  <button onClick={() => updateQty(item.id, item.type, item.quantity - 1)} className="w-8 h-8 rounded-full flex items-center justify-center bg-white hover:bg-[var(--pink-50)] transition-all text-[var(--pink-500)] shadow-sm"><Minus className="w-3.5 h-3.5" /></button>
-                  <span className="w-8 text-center text-base font-bold text-[var(--text-primary)]">{item.quantity}</span>
-                  <button onClick={() => updateQty(item.id, item.type, item.quantity + 1)} className="w-8 h-8 rounded-full flex items-center justify-center bg-white hover:bg-[var(--pink-50)] transition-all text-[var(--pink-500)] shadow-sm"><Plus className="w-3.5 h-3.5" /></button>
+              {editingCartItemId === itemKey && (
+                <div className="mt-2 rounded-lg border border-[var(--pink-100)] bg-[var(--bg-base)] p-2">
+                  <div className="grid grid-cols-[6.25rem_minmax(0,1fr)] gap-1.5">
+                    <label className="relative block">
+                      <span className="absolute left-2 top-1 text-[9px] font-semibold text-[var(--text-muted)]">ราคา</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={item.price || ''}
+                        onChange={e => updatePrice(item.id, item.type, e.target.value === '' ? 0 : Number(e.target.value))}
+                        aria-label={`ราคาขาย ${item.name}`}
+                        className="h-9 w-full rounded-lg border border-[var(--border-light)] bg-white px-2 pb-1 pt-3 text-sm font-bold text-[var(--pink-600)] outline-none transition focus:border-[var(--pink-300)] focus:ring-2 focus:ring-[var(--pink-100)]"
+                      />
+                    </label>
+                    <label className="relative block min-w-0">
+                      <span className="absolute left-2 top-1 text-[9px] font-semibold text-[var(--text-muted)]">หมายเหตุ</span>
+                      <textarea
+                        value={item.note ?? ''}
+                        onChange={e => setItemNote(item.id, item.type, e.target.value)}
+                        rows={item.note && item.note.length > 48 ? 3 : 2}
+                        maxLength={360}
+                        placeholder="เช่น สี, เงื่อนไข, ขนาด, รายละเอียดงาน"
+                        aria-label={`หมายเหตุ ${item.name}`}
+                        className="min-h-9 w-full resize-y rounded-lg border border-[var(--border-light)] bg-white px-2 pb-1 pt-3 text-xs leading-snug text-[var(--text-primary)] outline-none transition focus:border-[var(--pink-300)] focus:ring-2 focus:ring-[var(--pink-100)]"
+                      />
+                    </label>
+                  </div>
                 </div>
-                <div className="ml-auto flex items-center gap-2">
-                  <p className="text-right text-base font-bold text-[var(--pink-500)]">{formatCurrency(item.price * item.quantity)}</p>
-                  {employees.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setExpandedCartItemId(isItemDetailOpen ? '' : itemKey)}
-                      title="ตั้งค่าผู้ขาย"
-                      className={`h-9 w-9 rounded-xl border flex items-center justify-center transition-all ${hasItemConfig ? 'border-[var(--pink-200)] bg-[var(--pink-50)] text-[var(--pink-600)]' : 'border-[var(--border-light)] bg-white text-[var(--text-muted)] hover:bg-[var(--pink-50)] hover:text-[var(--pink-500)]'}`}
-                    >
-                      <FileText className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
+              )}
               {item.type === 'product' && typeof item.stockQty === 'number' && item.quantity > item.stockQty && (
-                <div className="mt-3 flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
+                <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] font-semibold text-amber-700">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>ขายเกินสต๊อก {item.quantity - item.stockQty} ชิ้น · หลังขายจะเหลือ {item.stockQty - item.quantity}</span>
                 </div>
               )}
               {isItemDetailOpen && employees.length > 0 && (
-                <div className="mt-3 space-y-2 rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-2">
+                <div className="mt-2 space-y-2 rounded-lg border border-[var(--border-light)] bg-[var(--bg-base)] p-2">
                   {employees.length > 0 && (
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-[var(--text-muted)] shrink-0">ผู้ขาย</span>
@@ -1174,42 +1189,42 @@ function POSContent() {
         </div>
 
         {/* Compact summary + checkout entry */}
-        <div className="shrink-0 p-4 border-t border-[var(--border-light)] space-y-3 bg-white shadow-[0_-8px_24px_rgba(244,114,182,0.08)]">
-          <div className="rounded-2xl border border-[var(--border-light)] bg-[var(--bg-base)] p-3 space-y-2">
-            <div className="flex justify-between text-sm text-[var(--text-secondary)]">
+        <div className="shrink-0 p-3 border-t border-[var(--border-light)] space-y-2 bg-white shadow-[0_-8px_24px_rgba(244,114,182,0.08)]">
+          <div className="rounded-xl border border-[var(--border-light)] bg-[var(--bg-base)] p-2.5 space-y-1.5">
+            <div className="flex justify-between text-xs text-[var(--text-secondary)]">
               <span>รวมเป็นเงิน</span><span>{formatCurrency(subtotal)}</span>
             </div>
             {discountAmt > 0 && (
-              <div className="flex justify-between text-sm font-semibold text-emerald-600">
+              <div className="flex justify-between text-xs font-semibold text-emerald-600">
                 <span>ส่วนลด/คูปอง</span><span>-{formatCurrency(discountAmt)}</span>
               </div>
             )}
             {showVatOnReceipt && (
               <>
-                <div className="flex justify-between text-sm text-[var(--text-secondary)]">
+                <div className="flex justify-between text-xs text-[var(--text-secondary)]">
                   <span>มูลค่าก่อน VAT</span><span>{formatCurrency(preVatAmount)}</span>
                 </div>
-                <div className="flex justify-between text-sm text-[var(--text-secondary)]">
+                <div className="flex justify-between text-xs text-[var(--text-secondary)]">
                   <span>VAT 7% (รวมอยู่ในราคา)</span><span>{formatCurrency(vatAmt)}</span>
                 </div>
               </>
             )}
             {depositDeduct > 0 && (
-              <div className="flex justify-between text-sm font-semibold text-amber-600">
+              <div className="flex justify-between text-xs font-semibold text-amber-600">
                 <span>หักมัดจำเดิม</span><span>-{formatCurrency(depositDeduct)}</span>
               </div>
             )}
             {mode === 'deposit' && depositAmt > 0 && (
-              <div className="flex justify-between text-sm font-semibold text-amber-600">
+              <div className="flex justify-between text-xs font-semibold text-amber-600">
                 <span>รับมัดจำ</span><span>{formatCurrency(depositAmt)}</span>
               </div>
             )}
-            <div className="flex items-end justify-between gap-3 border-t border-[var(--border-light)] pt-2">
+            <div className="flex items-end justify-between gap-3 border-t border-[var(--border-light)] pt-1.5">
               <div>
                 <p className="text-xs text-[var(--text-muted)]">{mode === 'sale' ? 'รวมทั้งสิ้น' : 'รวมเป็นเงิน'}</p>
                 <p className="text-[11px] text-[var(--text-light)]">กดปุ่มด้านล่างเพื่อเลือกวิธีชำระและบันทึก</p>
               </div>
-              <p className="text-xl font-black text-[var(--pink-600)] whitespace-nowrap">
+              <p className="text-lg font-black text-[var(--pink-600)] whitespace-nowrap">
                 {formatCurrency(mode === 'sale' ? payNow : total)}
               </p>
             </div>
@@ -1232,7 +1247,7 @@ function POSContent() {
             type="button"
             onClick={() => { setPosMsg(null); if (cart.length > 0) setCheckoutOpen(true) }}
             disabled={cart.length === 0 || saving}
-            className={`w-full py-4 text-white font-black rounded-2xl shadow-lg active:scale-[0.98] transition-all disabled:opacity-40 text-base flex items-center justify-center gap-2 ${
+            className={`w-full py-3.5 text-white font-black rounded-xl shadow-lg active:scale-[0.98] transition-all disabled:opacity-40 text-sm flex items-center justify-center gap-2 ${
               mode === 'sale'
                 ? 'bg-gradient-to-r from-[#f472b6] to-[#e879a0] shadow-pink-200'
                 : 'bg-gradient-to-r from-amber-400 to-orange-400 shadow-amber-200'
