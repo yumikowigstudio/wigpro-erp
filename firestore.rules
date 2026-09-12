@@ -242,7 +242,7 @@ service cloud.firestore {
     function validCourseUse(before, after, event) {
       let sale = get(/databases/$(database)/documents/sales/$(before.saleId)).data;
       let record = getAfter(/databases/$(database)/documents/service_records/$(after.lastEventId)).data;
-      let staff = get(/databases/$(database)/documents/employees/$(event.staffId)).data;
+      let hasStaff = 'staffId' in event;
       let branch = get(/databases/$(database)/documents/branches/$(event.branchId)).data;
       return before.status == 'active' && after.status == 'active'
         && (before.expiresAt == null || before.expiresAt > request.time)
@@ -250,12 +250,17 @@ service cloud.firestore {
         && event.serviceId in before.template.serviceIds && event.units is int && event.units > 0
         && (before.template.branchIds.size() == 0 || event.branchId in before.template.branchIds)
         && (courseManager() || event.branchId == getUserData().branchId)
-        && branch.companyId == before.companyId && staff.companyId == before.companyId && staff.status == 'active'
+        && branch.companyId == before.companyId
+        && (!hasStaff || (exists(/databases/$(database)/documents/employees/$(event.staffId))
+          && get(/databases/$(database)/documents/employees/$(event.staffId)).data.companyId == before.companyId
+          && get(/databases/$(database)/documents/employees/$(event.staffId)).data.branchId == event.branchId
+          && get(/databases/$(database)/documents/employees/$(event.staffId)).data.status == 'active'))
         && branch.get('isActive', true) != false && !(branch.get('status', 'active') in ['inactive', 'archived'])
         && after.usedUnits == before.usedUnits + event.units
         && after.remainingUnits == before.remainingUnits - event.units
         && record.courseId == event.courseId && record.courseEventId == after.lastEventId
         && record.customerId == before.customerId && record.serviceId == event.serviceId
+        && ((!hasStaff && !('staffId' in record)) || (hasStaff && record.staffId == event.staffId))
         && after.activatedAt == before.activatedAt && after.expiresAt == before.expiresAt;
     }
 

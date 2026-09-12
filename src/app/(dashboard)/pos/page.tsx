@@ -14,8 +14,8 @@ import { formatCurrency } from '@/lib/utils'
 import { COLLECTIONS, convertTimestamps, generateBranchDocumentNo } from '@/lib/firestore'
 import { WigOrderFields } from '@/components/WigOrderFields'
 import { prepareWigOrders, wigGroups, type WigGroupConfig } from '@/lib/wigCheckout'
-import type { CourseTemplate } from '@/lib/courseTypes'
-import { Product, Service, Deposit, Employee, Branch, ReceiptShopSnapshot } from '@/types'
+import type { CourseTemplate, CustomerCourse } from '@/lib/courseTypes'
+import { Product, Service, Deposit, Employee, Branch, Customer, ReceiptShopSnapshot } from '@/types'
 import { collection, onSnapshot, query, where, getDoc, getDocs, doc, limit, serverTimestamp, setDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { uploadToCloudinary } from '@/lib/cloudinary'
@@ -26,6 +26,7 @@ import { commitCheckout } from '@/lib/checkout'
 import { depositCredit, money } from '@/lib/money'
 import { findCatalogMainBranch, getLegacyBranchStockFallback, isCatalogVisibleInBranch } from '@/lib/catalogScope'
 import { formatThaiReceiptDate } from '@/lib/dateFormat'
+import { redeemCourse } from '@/lib/courses'
 
 type ProductWithStock = Product & { stockQty?: number }
 type PosMode = 'sale' | 'deposit'
@@ -63,6 +64,16 @@ interface CartItem {
   isWigProduct?: boolean; wigType?: string
   staffId?: string; staffName?: string          // พนักงานที่ขายรายการนี้ (สำหรับคิดคอม)
   commissionRate?: number; commissionAmount?: number  // config คอมจากตัวสินค้า/บริการ
+}
+
+interface CourseUseDialog {
+  courseId: string
+  serviceId: string
+  units: number
+  staffId: string
+  note: string
+  cartItem?: { id: string; type: 'service' }
+  courseIds: string[]
 }
 
 interface ReceiptData {
@@ -195,13 +206,22 @@ function POSContent() {
   const [expandedCartItemId, setExpandedCartItemId] = useState('')
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [openDeposits, setOpenDeposits] = useState<Deposit[]>([])  // มัดจำค้างของลูกค้าที่เลือก
+  const [customerCourses, setCustomerCourses] = useState<CustomerCourse[]>([])
+  const [coursesLoading, setCoursesLoading] = useState(false)
+  const [courseUseDialog, setCourseUseDialog] = useState<CourseUseDialog | null>(null)
+  const [courseUseSaving, setCourseUseSaving] = useState(false)
   const [appliedDepositId, setAppliedDepositId] = useState('')     // มัดจำที่เลือกหักในบิลนี้
   const [createWorkOrder, setCreateWorkOrder] = useState(true)
   const [workGroups, setWorkGroups] = useState<Record<string, WigGroupConfig>>({})
   const [wigSpec, setWigSpec]         = useState({ wigType: '', wigColor: '', wigLength: '', wigModel: '', manufacturer: '' })
   const searchParams = useSearchParams()
   const requestedDepositId = searchParams.get('depositId') ?? ''
+  const requestedCustomerId = searchParams.get('customerId') ?? ''
+  const requestedCourseId = searchParams.get('courseId') ?? ''
+  const requestedCourseUse = searchParams.get('redeem') === '1'
   const loadedDeposit = useRef('')
+  const loadedCustomer = useRef('')
+  const openedRequestedCourse = useRef('')
   const pendingDeposit = useRef('')
   const draft = { cart, mode, customerId, customerName, customerPhone, discount, discountType, receiptNote, depositNote, pickupDate, depositInput, wigSpec, workGroups, createWorkOrder, appliedDepositId, showVatOnReceipt, payMethod, attempt: attemptSnapshot }
   const setCheckoutAttempt = (attempt: typeof attemptSnapshot) => {
@@ -217,7 +237,7 @@ function POSContent() {
     setCart([]); setCustomerId(''); setCustomerName(''); setCustomerPhone(''); setDiscount(0); setDiscountType('percent')
     setReceiptNote(''); setDepositNote(''); setPickupDate(''); setDepositInput(''); setAppliedDepositId('')
     setCash(''); setSlipUrl(''); setPaymentVerified(false); setCouponCode(''); setAppliedCoupon(''); setPosMsg(null)
-    setCheckoutAttempt(null)
+    setCourseUseDialog(null); setCheckoutAttempt(null)
   }
   const restoreDraft = (value: typeof draft) => {
     if (!Array.isArray(value.cart)) { setPosMsg({ type: 'err', text: 'บิลที่พักไว้ไม่สมบูรณ์' }); return }
@@ -250,6 +270,22 @@ function POSContent() {
     }).catch(error => { if (active) setPosMsg({ type: 'err', text: error instanceof Error ? error.message : 'โหลดมัดจำไม่สำเร็จ' }) })
     return () => { active = false }
   }, [requestedDepositId, companyId, branchId])
+
+  useEffect(() => {
+    if (!requestedCustomerId || requestedDepositId || loadedCustomer.current === requestedCustomerId || !companyId) return
+    let active = true
+    getDoc(doc(db, COLLECTIONS.CUSTOMERS, requestedCustomerId)).then(snap => {
+      if (!active) return
+      if (!snap.exists()) throw new Error('ไม่พบข้อมูลลูกค้า')
+      const customer = { id: snap.id, ...convertTimestamps(snap.data()) } as Customer
+      if (customer.companyId !== companyId) throw new Error('ลูกค้าไม่อยู่ในร้านนี้')
+      loadedCustomer.current = requestedCustomerId
+      setCustomerId(customer.id)
+      setCustomerName(`${customer.firstName || ''} ${customer.lastName || ''}`.trim())
+      setCustomerPhone(customer.phone || '')
+    }).catch(error => { if (active) setPosMsg({ type: 'err', text: error instanceof Error ? error.message : 'โหลดข้อมูลลูกค้าไม่สำเร็จ' }) })
+    return () => { active = false }
+  }, [requestedCustomerId, requestedDepositId, companyId])
 
   useEffect(() => {
     if (!companyId) return
@@ -426,6 +462,30 @@ function POSContent() {
     return unsub
   }, [customerId, companyId, branchId])
 
+  useEffect(() => {
+    setCourseUseDialog(null)
+    if (!customerId || !companyId) {
+      setCustomerCourses([])
+      setCoursesLoading(false)
+      return
+    }
+    setCoursesLoading(true)
+    const q = query(
+      collection(db, COLLECTIONS.CUSTOMER_COURSES),
+      where('companyId', '==', companyId),
+      where('customerId', '==', customerId),
+    )
+    return onSnapshot(q, snap => {
+      setCustomerCourses(snap.docs.map(item => ({ id: item.id, ...convertTimestamps(item.data()) }) as CustomerCourse)
+        .sort((a, b) => (b.createdAt?.getTime?.() || 0) - (a.createdAt?.getTime?.() || 0)))
+      setCoursesLoading(false)
+    }, error => {
+      setCustomerCourses([])
+      setCoursesLoading(false)
+      setPosMsg({ type: 'err', text: `โหลดสิทธิ์คอร์สไม่สำเร็จ: ${error.message}` })
+    })
+  }, [customerId, companyId])
+
   const appliedDeposit  = openDeposits.find(d => d.id === appliedDepositId) || null
   useEffect(() => {
     if (pendingDeposit.current && openDeposits.some(deposit => deposit.id === pendingDeposit.current)) {
@@ -435,6 +495,94 @@ function POSContent() {
 
   /* ─── พนักงานขาย / คอมมิชชั่น ─── */
   const empLabel = (e: Employee) => e.nickname || `${e.firstName} ${e.lastName ?? ''}`.trim()
+  const branchEmployees = employees.filter(employee => !employee.branchId || employee.branchId === branchId)
+  const courseIsAvailable = (course: CustomerCourse) => course.status === 'active'
+    && course.remainingUnits > 0
+    && (!course.expiresAt || course.expiresAt > new Date())
+    && (!course.template.branchIds.length || course.template.branchIds.includes(branchId))
+  const availableCustomerCourses = customerCourses.filter(courseIsAvailable)
+  const coursesForService = (serviceId: string) => availableCustomerCourses.filter(course => course.template.serviceIds.includes(serviceId))
+  const serviceLabel = (serviceId: string) => services.find(service => service.id === serviceId)?.name || serviceId
+
+  const openCourseUse = (course: CustomerCourse, serviceId?: string, cartItem?: CartItem) => {
+    const usableServiceIds = course.template.serviceIds.filter(id => visibleServices.some(service => service.id === id && service.isActive !== false && service.status !== 'deleted'))
+    const selectedServiceId = serviceId && usableServiceIds.includes(serviceId) ? serviceId : usableServiceIds[0]
+    if (!selectedServiceId) {
+      setPosMsg({ type: 'err', text: 'คอร์สนี้ไม่มีบริการที่เปิดใช้งานในสาขาปัจจุบัน' })
+      return
+    }
+    const matchingCourses = serviceId ? coursesForService(serviceId) : [course]
+    const maximumUnits = Math.min(course.remainingUnits, cartItem?.quantity ?? course.remainingUnits)
+    setCourseUseDialog({
+      courseId: course.id,
+      serviceId: selectedServiceId,
+      units: Math.max(1, Math.min(1, maximumUnits)),
+      staffId: cartItem?.staffId || defaultStaffId || '',
+      note: cartItem?.note || '',
+      cartItem: cartItem?.type === 'service' ? { id: cartItem.id, type: 'service' } : undefined,
+      courseIds: matchingCourses.map(item => item.id),
+    })
+    setPosMsg(null)
+  }
+
+  useEffect(() => {
+    if (!requestedCourseUse || !requestedCourseId || requestedCustomerId !== customerId || coursesLoading || dataLoading || openedRequestedCourse.current === requestedCourseId) return
+    const course = customerCourses.find(item => item.id === requestedCourseId)
+    if (!course) return
+    openedRequestedCourse.current = requestedCourseId
+    if (!courseIsAvailable(course)) {
+      setPosMsg({ type: 'err', text: 'คอร์สนี้ยังไม่พร้อมใช้ หมดอายุ หรือใช้ไม่ได้ที่สาขาปัจจุบัน' })
+      return
+    }
+    openCourseUse(course)
+  // openCourseUse uses the current catalog and branch data; this effect is intentionally keyed to those inputs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedCourseUse, requestedCourseId, requestedCustomerId, customerId, customerCourses, coursesLoading, dataLoading, services, branchId])
+
+  const submitCourseUse = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!courseUseDialog || courseUseSaving) return
+    const course = availableCustomerCourses.find(item => item.id === courseUseDialog.courseId)
+    if (!course) {
+      setPosMsg({ type: 'err', text: 'สิทธิ์นี้ไม่พร้อมใช้งานแล้ว กรุณาตรวจสอบยอดคงเหลืออีกครั้ง' })
+      setCourseUseDialog(null)
+      return
+    }
+    const sourceItem = courseUseDialog.cartItem
+      ? cart.find(item => item.id === courseUseDialog.cartItem?.id && item.type === courseUseDialog.cartItem?.type)
+      : undefined
+    if (sourceItem && courseUseDialog.units > sourceItem.quantity) {
+      setPosMsg({ type: 'err', text: 'จำนวนสิทธิ์มากกว่าจำนวนบริการในตะกร้า' })
+      return
+    }
+    setCourseUseSaving(true)
+    try {
+      await redeemCourse({
+        id: crypto.randomUUID(),
+        course,
+        serviceId: courseUseDialog.serviceId,
+        units: courseUseDialog.units,
+        staffId: courseUseDialog.staffId || undefined,
+        note: courseUseDialog.note,
+        actor: { userId, userName: cashierName, branchId },
+      })
+      if (sourceItem) {
+        setCart(current => current.flatMap(item => {
+          if (item.id !== sourceItem.id || item.type !== sourceItem.type) return [item]
+          const remainingQuantity = item.quantity - courseUseDialog.units
+          return remainingQuantity > 0 ? [{ ...item, quantity: remainingQuantity }] : []
+        }))
+      }
+      const remaining = course.remainingUnits - courseUseDialog.units
+      setCourseUseDialog(null)
+      setPosMsg({ type: 'ok', text: `ใช้สิทธิ์ ${serviceLabel(courseUseDialog.serviceId)} ${courseUseDialog.units} ครั้งแล้ว · คอร์สเหลือ ${remaining} ครั้ง${sourceItem ? ' · นำรายการที่ใช้สิทธิ์ออกจากยอดชำระแล้ว' : ''}` })
+    } catch (error) {
+      setPosMsg({ type: 'err', text: error instanceof Error ? error.message : 'ใช้สิทธิ์ไม่สำเร็จ กรุณาลองใหม่' })
+    } finally {
+      setCourseUseSaving(false)
+    }
+  }
+
   const setStaff = (id: string, type: string, staffId: string) => {
     const emp = employees.find(e => e.id === staffId)
     setCart(cart.map(c => c.id === id && c.type === type
@@ -901,6 +1049,15 @@ function POSContent() {
   }
 
   const isDepositReady = mode === 'deposit' && depositAmt > 0 && depositAmt <= total
+  const courseDialogOptions = courseUseDialog
+    ? availableCustomerCourses.filter(course => courseUseDialog.courseIds.includes(course.id))
+    : []
+  const selectedDialogCourse = courseUseDialog ? courseDialogOptions.find(course => course.id === courseUseDialog.courseId) : undefined
+  const dialogServiceIds = selectedDialogCourse?.template.serviceIds.filter(id => visibleServices.some(service => service.id === id && service.isActive !== false && service.status !== 'deleted')) ?? []
+  const dialogCartQuantity = courseUseDialog?.cartItem
+    ? cart.find(item => item.id === courseUseDialog.cartItem?.id && item.type === courseUseDialog.cartItem?.type)?.quantity
+    : undefined
+  const dialogMaxUnits = Math.min(selectedDialogCourse?.remainingUnits ?? 1, dialogCartQuantity ?? selectedDialogCourse?.remainingUnits ?? 1)
 
   return (
     <>
@@ -962,6 +1119,7 @@ function POSContent() {
                 const outOfStock = stock !== null && stock <= 0
                 const blockedByStock = outOfStock && !(tab === 'products' && stockPolicy.allowNegativeStock)
                 const inCart = cart.find(c => c.id === item.id && c.type === (tab === 'products' ? 'product' : 'service'))
+                const matchingRights = tab === 'services' && mode === 'sale' && customerId ? coursesForService(item.id) : []
                 return (
                   <button key={item.id}
                     onClick={() => !blockedByStock && addToCart(item as ProductWithStock | Service, tab === 'products' ? 'product' : 'service')}
@@ -973,6 +1131,7 @@ function POSContent() {
                     <p className="text-xs font-semibold text-[var(--text-primary)] line-clamp-2 leading-snug">{item.name}</p>
                     {'sku' in item && item.sku && <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{item.sku}</p>}
                     <p className="text-sm font-bold text-[var(--pink-500)] mt-1.5">{formatCurrency('sellingPrice' in item ? item.sellingPrice : item.price)}</p>
+                    {matchingRights.length > 0 && !(item as Service).course && <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-bold text-emerald-700"><Ticket className="h-2.5 w-2.5" />ใช้สิทธิ์คอร์สได้</p>}
                     {tab === 'products' && stock !== null && (
                       <div className={`flex items-center gap-1 mt-1 text-[9px] font-semibold ${outOfStock ? 'text-red-500' : stock <= ((item as ProductWithStock).minStockAlert ?? 5) ? 'text-amber-500' : 'text-emerald-500'}`}>
                         {outOfStock ? <><AlertTriangle className="w-2.5 h-2.5" />{stockPolicy.allowNegativeStock ? 'หมด · ขายติดลบได้' : 'หมด'}</> : stock <= ((item as ProductWithStock).minStockAlert ?? 5) ? <><AlertTriangle className="w-2.5 h-2.5" />เหลือ {stock}</> : <>คงเหลือ {stock}</>}
@@ -1053,6 +1212,24 @@ function POSContent() {
             onClear={() => { setWorkGroups({}); setCustomerId(''); setCustomerName(''); setCustomerPhone('') }}
             placeholder={mode === 'deposit' ? 'ค้นหาลูกค้า (แนะนำสำหรับมัดจำ)' : 'ค้นหาลูกค้า (ไม่บังคับ)'}
           />
+          {mode === 'sale' && customerId && <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-2">
+            {coursesLoading ? <div className="flex items-center gap-2 text-xs text-emerald-700"><Loader2 className="h-3.5 w-3.5 animate-spin" />กำลังตรวจสิทธิ์คอร์ส...</div>
+              : availableCustomerCourses.length > 0 ? <>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="flex items-center gap-1.5 text-xs font-bold text-emerald-800"><Ticket className="h-3.5 w-3.5" />คอร์สพร้อมใช้ {availableCustomerCourses.length} คอร์ส</p>
+                  <span className="text-[10px] font-semibold text-emerald-700">เหลือรวม {availableCustomerCourses.reduce((sum, course) => sum + course.remainingUnits, 0)} สิทธิ์</span>
+                </div>
+                <div className="mt-1.5 max-h-28 overflow-y-auto divide-y divide-emerald-100">
+                  {availableCustomerCourses.map(course => <div key={course.id} className="flex items-center gap-2 py-1.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[11px] font-semibold text-[var(--text-primary)]">{course.name}</p>
+                      <p className="text-[10px] text-emerald-700">คงเหลือ {course.remainingUnits}/{course.totalUnits} ครั้ง{course.expiresAt ? ` · หมดอายุ ${course.expiresAt.toLocaleDateString('th-TH')}` : ' · ไม่จำกัดอายุ'}</p>
+                    </div>
+                    <button type="button" onClick={() => openCourseUse(course)} className="shrink-0 rounded-lg border border-emerald-200 bg-white px-2.5 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">ใช้สิทธิ์</button>
+                  </div>)}
+                </div>
+              </> : <p className="text-[11px] text-[var(--text-muted)]">ลูกค้ารายนี้ยังไม่มีคอร์สที่พร้อมใช้ในสาขานี้</p>}
+          </div>}
         </div>
 
         <PosDrafts storageKey={`yumiko-pos:${companyId}:${branchId}:${userId}`} value={draft} itemCount={cart.length} customerName={customerName} disabled={saving || checkoutOpen} onRestore={restoreDraft} onClear={clearDraft} />
@@ -1074,6 +1251,7 @@ function POSContent() {
             const originalPrice = item.originalPrice ?? item.price
             const priceEdited = originalPrice !== item.price
             const hasItemConfig = Boolean(item.staffId)
+            const matchingRights = item.type === 'service' && !item.course && mode === 'sale' ? coursesForService(item.id) : []
             return (
             <div key={itemKey} className="rounded-xl bg-white border border-[var(--border-light)] px-2 py-1.5 shadow-sm shadow-pink-50">
               <div className="flex min-w-0 items-center gap-1.5">
@@ -1108,7 +1286,7 @@ function POSContent() {
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
-                  {employees.length > 0 && (
+                  {branchEmployees.length > 0 && (
                     <button
                       type="button"
                       onClick={() => setExpandedCartItemId(isItemDetailOpen ? '' : itemKey)}
@@ -1124,6 +1302,10 @@ function POSContent() {
                   </button>
                 </div>
               </div>
+              {matchingRights.length > 0 && <div className="mt-1.5 flex items-center justify-between gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1.5">
+                <p className="min-w-0 truncate text-[10px] font-semibold text-emerald-800">รายการนี้ใช้สิทธิ์ได้ · เหลือ {matchingRights.reduce((sum, course) => sum + course.remainingUnits, 0)} ครั้ง</p>
+                <button type="button" onClick={() => openCourseUse(matchingRights[0], item.id, item)} className="shrink-0 rounded-md bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-emerald-700">ใช้สิทธิ์</button>
+              </div>}
               {editingCartItemId === itemKey && (
                 <div className="mt-2 rounded-lg border border-[var(--pink-100)] bg-[var(--bg-base)] p-2">
                   <div className="grid grid-cols-[6.25rem_minmax(0,1fr)] gap-1.5">
@@ -1160,15 +1342,15 @@ function POSContent() {
                   <span>ขายเกินสต๊อก {item.quantity - item.stockQty} ชิ้น · หลังขายจะเหลือ {item.stockQty - item.quantity}</span>
                 </div>
               )}
-              {isItemDetailOpen && employees.length > 0 && (
+              {isItemDetailOpen && branchEmployees.length > 0 && (
                 <div className="mt-2 space-y-2 rounded-lg border border-[var(--border-light)] bg-[var(--bg-base)] p-2">
-                  {employees.length > 0 && (
+                  {branchEmployees.length > 0 && (
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-[var(--text-muted)] shrink-0">ผู้ขาย</span>
                       <select value={item.staffId ?? ''} onChange={e => setStaff(item.id, item.type, e.target.value)}
                         className="flex-1 px-3 py-2 bg-white border border-[var(--border-light)] rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
                         <option value="">— ไม่ระบุ —</option>
-                        {employees.map(e => <option key={e.id} value={e.id}>{empLabel(e)}</option>)}
+                        {branchEmployees.map(e => <option key={e.id} value={e.id}>{empLabel(e)}</option>)}
                       </select>
                       {commission > 0 && (
                         <span className="text-xs font-semibold text-emerald-600 shrink-0">คอม {formatCurrency(commission)}</span>
@@ -1290,11 +1472,11 @@ function POSContent() {
               <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--bg-base)] p-4 space-y-3">
 
           {/* พนักงานขายเริ่มต้น — ใส่ให้ทุกรายการที่หยิบใหม่ */}
-          {employees.length > 0 && (
+          {branchEmployees.length > 0 && (
             <select value={defaultStaffId} onChange={e => setDefaultStaffId(e.target.value)}
               className="w-full px-3 py-1.5 bg-white border border-[var(--border-light)] rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-[var(--pink-200)]">
               <option value="">เลือกพนักงานขายเริ่มต้น (ไม่บังคับ)</option>
-              {employees.map(e => <option key={e.id} value={e.id}>{empLabel(e)}</option>)}
+              {branchEmployees.map(e => <option key={e.id} value={e.id}>{empLabel(e)}</option>)}
             </select>
           )}
 
@@ -1703,7 +1885,7 @@ function POSContent() {
       </div>
     </div>
 
-    {cart.length > 0 && !checkoutOpen && !paymentConfirm && !receipt && (
+    {cart.length > 0 && !checkoutOpen && !paymentConfirm && !receipt && !courseUseDialog && (
       <div className="lg:hidden fixed inset-x-3 bottom-3 z-30 rounded-2xl border border-[var(--border-light)] bg-white/95 p-2 shadow-2xl shadow-pink-200/50 backdrop-blur">
         <div className="flex items-center gap-2">
           <button
@@ -1735,6 +1917,55 @@ function POSContent() {
         </div>
       </div>
     )}
+
+    {courseUseDialog && selectedDialogCourse && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
+      <form role="dialog" aria-modal="true" aria-label="ใช้สิทธิ์คอร์สที่ POS" onSubmit={submitCourseUse} className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-[var(--text-primary)]">ใช้สิทธิ์คอร์ส</h2>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">{customerName} · สาขา {currentBranch?.name || shopInfo.branchName || ''}</p>
+          </div>
+          <button type="button" disabled={courseUseSaving} onClick={() => setCourseUseDialog(null)} aria-label="ปิดหน้าต่างใช้สิทธิ์" className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-light)] text-[var(--text-muted)]"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="mt-4 space-y-3">
+          <label className="block text-xs font-semibold text-[var(--text-secondary)]">คอร์ส
+            <select value={courseUseDialog.courseId} onChange={event => {
+              const course = courseDialogOptions.find(item => item.id === event.target.value)
+              if (!course) return
+              const serviceId = course.template.serviceIds.includes(courseUseDialog.serviceId) ? courseUseDialog.serviceId : course.template.serviceIds[0] || ''
+              setCourseUseDialog({ ...courseUseDialog, courseId: course.id, serviceId, units: Math.min(courseUseDialog.units, course.remainingUnits) })
+            }} className="mt-1 w-full rounded-lg border border-[var(--border-light)] bg-white px-3 py-2.5 text-sm">
+              {courseDialogOptions.map(course => <option key={course.id} value={course.id}>{course.name} · เหลือ {course.remainingUnits} ครั้ง</option>)}
+            </select>
+          </label>
+          <label className="block text-xs font-semibold text-[var(--text-secondary)]">บริการ
+            <select required value={courseUseDialog.serviceId} onChange={event => setCourseUseDialog({ ...courseUseDialog, serviceId: event.target.value })} className="mt-1 w-full rounded-lg border border-[var(--border-light)] bg-white px-3 py-2.5 text-sm">
+              {dialogServiceIds.map(id => <option key={id} value={id}>{serviceLabel(id)}</option>)}
+            </select>
+          </label>
+          <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
+            <label className="block text-xs font-semibold text-[var(--text-secondary)]">จำนวนครั้ง
+              <input required type="number" min={1} max={dialogMaxUnits} value={courseUseDialog.units} onChange={event => setCourseUseDialog({ ...courseUseDialog, units: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-[var(--border-light)] bg-white px-3 py-2.5 text-sm" />
+            </label>
+            <label className="block text-xs font-semibold text-[var(--text-secondary)]">พนักงานผู้ให้บริการ <span className="font-normal text-[var(--text-muted)]">(ไม่บังคับ)</span>
+              <select value={courseUseDialog.staffId} onChange={event => setCourseUseDialog({ ...courseUseDialog, staffId: event.target.value })} className="mt-1 w-full rounded-lg border border-[var(--border-light)] bg-white px-3 py-2.5 text-sm">
+                <option value="">ไม่ระบุพนักงาน</option>
+                {branchEmployees.map(employee => <option key={employee.id} value={employee.id}>{empLabel(employee)}</option>)}
+              </select>
+            </label>
+          </div>
+          <label className="block text-xs font-semibold text-[var(--text-secondary)]">หมายเหตุ <span className="font-normal text-[var(--text-muted)]">(ไม่บังคับ)</span>
+            <textarea rows={3} maxLength={1000} value={courseUseDialog.note} onChange={event => setCourseUseDialog({ ...courseUseDialog, note: event.target.value })} placeholder="รายละเอียดการใช้บริการ" className="mt-1 w-full resize-y rounded-lg border border-[var(--border-light)] bg-white px-3 py-2.5 text-sm" />
+          </label>
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+            หลังยืนยันจะเหลือ {selectedDialogCourse.remainingUnits - courseUseDialog.units} ครั้ง{courseUseDialog.cartItem ? ' และนำจำนวนที่ใช้สิทธิ์ออกจากยอดชำระในตะกร้า' : ''}
+          </div>
+          <button disabled={courseUseSaving || courseUseDialog.units < 1 || courseUseDialog.units > dialogMaxUnits || !dialogServiceIds.includes(courseUseDialog.serviceId)} className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-40">
+            {courseUseSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}ยืนยันใช้สิทธิ์
+          </button>
+        </div>
+      </form>
+    </div>}
 
     {paymentConfirm && (
       <PaymentConfirmModal

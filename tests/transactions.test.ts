@@ -214,9 +214,10 @@ test('isolated transaction and tenant regression suite', { timeout: 120000 }, as
       await seed(`users/${user.uid}`, { companyId: 'co', branchId: 'main', role: 'sales', isActive: true })
       const course = await read('customer_courses/course-pending_0_0') as CustomerCourse
       const actor = { userId: user.uid, userName: 'Staff', branchId: 'main' }
-      const input = { id: 'staff-course-use', course, serviceId: 'service', units: 1, staffId: 'staff', note: '', actor }
+      const input = { id: 'staff-course-use', course, serviceId: 'service', units: 1, staffId: '', note: '', actor }
       await redeemCourse(input)
       const event = await read('course_events/staff-course-use') as CourseEvent
+      assert.equal(event.staffId, undefined)
       await assert.rejects(reverseCourseUse(course, event, actor, 'no manager permission'))
       await assert.rejects(cancelCourseRights(course, actor, 'no manager permission'))
       await assert.rejects(redeemCourse({ ...input, id: 'wrong-branch-use', actor: { ...actor, branchId: 'other' } }))
@@ -243,7 +244,7 @@ test('isolated transaction and tenant regression suite', { timeout: 120000 }, as
       assert.equal((await getDoc(doc(db, 'inventory/archive-p_main'))).data()?.quantity, 9)
       await archiveCatalogItems({ ...actor, kind: 'services', ids: ['course', 'service'], operationId: 'archive-services', reason: 'wrong import' })
       const course = await read('customer_courses/course-pending_0_0') as CustomerCourse
-      await redeemCourse({ id: 'archived-course-use', course, serviceId: 'service', units: 1, staffId: 'staff', note: '', actor })
+      await redeemCourse({ id: 'archived-course-use', course, serviceId: 'service', units: 1, staffId: '', note: '', actor })
       assert.equal((await getDoc(doc(db, 'customer_courses', course.id))).data()?.remainingUnits, 10)
       assert.ok((await getDoc(doc(db, 'customers/customer'))).exists())
     })

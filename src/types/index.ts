@@ -310,7 +310,7 @@ export interface ServiceRecord {
   customerId: string
   serviceId: string
   serviceName: string
-  staffId: string
+  staffId?: string
   result?: string
   beforeImages?: string[]
   afterImages?: string[]

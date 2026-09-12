@@ -64,9 +64,9 @@ export function writeCourseCancellation(tx: Transaction, snap: DocumentSnapshot,
     courseId: snap.id, kind: 'cancel', units: data.remainingUnits, balance: 0, note: reason, ...actor, createdAt: serverTimestamp() })
 }
 
-export async function redeemCourse(input: { id: string; course: CustomerCourse; serviceId: string; units: number; staffId: string; note: string; actor: CourseActor }) {
-  if (!input.staffId) throw new Error('กรุณาเลือกพนักงานผู้ให้บริการ')
-  const matches = (data: Record<string, unknown>) => data.companyId === input.course.companyId && data.courseId === input.course.id && data.kind === 'use' && data.units === input.units && data.serviceId === input.serviceId && data.staffId === input.staffId && data.branchId === input.actor.branchId && data.note === input.note.trim()
+export async function redeemCourse(input: { id: string; course: CustomerCourse; serviceId: string; units: number; staffId?: string; note: string; actor: CourseActor }) {
+  const staffId = input.staffId?.trim() || ''
+  const matches = (data: Record<string, unknown>) => data.companyId === input.course.companyId && data.courseId === input.course.id && data.kind === 'use' && data.units === input.units && data.serviceId === input.serviceId && String(data.staffId || '') === staffId && data.branchId === input.actor.branchId && data.note === input.note.trim()
   await runIdempotentTransaction(doc(db, COLLECTIONS.COURSE_EVENTS, input.id), matches, async tx => {
     const ref = doc(db, COLLECTIONS.CUSTOMER_COURSES, input.course.id)
     const eventRef = doc(db, COLLECTIONS.COURSE_EVENTS, input.id)
@@ -82,20 +82,21 @@ export async function redeemCourse(input: { id: string; course: CustomerCourse; 
     const sale = await tx.get(doc(db, COLLECTIONS.SALES, course.saleId))
     if (!sale.exists() || sale.data().status === 'cancelled' || sale.data().paymentStatus !== 'confirmed') throw new Error('บิลต้นทางยังไม่ยืนยันชำระหรือถูกยกเลิก')
     const service = await tx.get(doc(db, COLLECTIONS.SERVICES, input.serviceId))
-    const staff = await tx.get(doc(db, COLLECTIONS.EMPLOYEES, input.staffId))
+    const staff = staffId ? await tx.get(doc(db, COLLECTIONS.EMPLOYEES, staffId)) : null
     const branch = await tx.get(doc(db, COLLECTIONS.BRANCHES, input.actor.branchId))
     if (!service.exists() || service.data().companyId !== course.companyId || service.data().course) throw new Error('ไม่พบบริการที่ใช้สิทธิ์')
-    if (!staff.exists() || staff.data().companyId !== course.companyId || staff.data().status !== 'active') throw new Error('พนักงานไม่พร้อมให้บริการ')
+    if (staff && (!staff.exists() || staff.data().companyId !== course.companyId || staff.data().status !== 'active' || staff.data().branchId !== input.actor.branchId)) throw new Error('พนักงานไม่พร้อมให้บริการในสาขานี้')
     if (!branch.exists() || branch.data().companyId !== course.companyId || branch.data().isActive === false || ['inactive', 'archived'].includes(branch.data().status)) throw new Error('ไม่พบสาขาที่เปิดใช้งาน')
     const balance = course.remainingUnits - input.units
-    const staffName = String(staff.data().displayName || `${staff.data().firstName || ''} ${staff.data().lastName || ''}`).trim()
+    const staffName = staff ? String(staff.data().displayName || `${staff.data().firstName || ''} ${staff.data().lastName || ''}`).trim() : ''
     tx.update(ref, { usedUnits: course.usedUnits + input.units, remainingUnits: balance, lastEventId: input.id, updatedAt: serverTimestamp() })
     tx.set(eventRef, { companyId: course.companyId, customerId: course.customerId, courseId: course.id, kind: 'use',
-      units: input.units, balance, serviceId: input.serviceId, serviceName: service.data().name, staffId: input.staffId, staffName,
+      units: input.units, balance, serviceId: input.serviceId, serviceName: service.data().name,
+      ...(staffId ? { staffId, staffName } : {}),
       note: input.note.trim(), ...input.actor, createdAt: serverTimestamp() })
     tx.set(doc(db, COLLECTIONS.SERVICE_RECORDS, input.id), { companyId: course.companyId, customerId: course.customerId,
       courseId: course.id, courseEventId: input.id, branchId: input.actor.branchId, serviceId: input.serviceId,
-      serviceName: service.data().name, staffId: input.staffId, notes: input.note.trim(), beforeImages: [], afterImages: [],
+      serviceName: service.data().name, ...(staffId ? { staffId } : {}), notes: input.note.trim(), beforeImages: [], afterImages: [],
       reversed: false, createdAt: serverTimestamp(), updatedAt: serverTimestamp() })
     writeTransactionLog(tx, { companyId: course.companyId, ...input.actor, action: 'update', module: 'คอร์ส',
       recordId: course.id, recordType: 'course', description: `ใช้คอร์ส ${course.name} ${input.units} ครั้ง คงเหลือ ${balance} ครั้ง` })
