@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { calculateReturn, depositCredit, depositPaid, depositPayments, depositRemaining, saleLineAmounts, saleCashReceived } from '../src/lib/money'
 import { cashbook } from '../src/lib/cashbook'
+import { summarizeDashboardFinance } from '../src/lib/dashboardFinance'
 import type { Deposit, Sale } from '../src/types'
 
 const sale = (changes: Partial<Sale> = {}) => ({ id: 'sale', companyId: 'company', branchId: 'main', receiptNo: 'RCP-1',
@@ -67,4 +68,32 @@ test('cancellation preserves actual cash until a real refund is recorded', () =>
   const cancelled = { ...sale(), status: 'cancelled', paymentStatus: 'rejected', refundDue: 300, cashReceivedAmount: 300 } as Sale
   assert.equal(cashbook([cancelled], [], [{ id: 'refund', companyId: 'company', branchId: 'main', refundTotal: 100, method: 'cash', createdAt: new Date() }]).reduce((sum, entry) => sum + entry.amount, 0), 200)
   assert.equal(saleCashReceived({ ...cancelled, cashReceivedAmount: 0 } as Sale), 0)
+})
+
+test('dashboard separates sales, deposits and actual receipts without counting applied deposits twice', () => {
+  const start = new Date('2026-09-13T00:00:00+07:00')
+  const end = new Date('2026-09-13T23:59:59.999+07:00')
+  const completedSale = sale({
+    createdAt: new Date('2026-09-12T15:00:00+07:00'),
+    paymentConfirmedAt: new Date('2026-09-13T09:00:00+07:00'),
+    totalAmount: 1_000,
+    depositDeducted: 400,
+  })
+  const deposit = {
+    id: 'deposit', companyId: 'company', branchId: 'main', depositNo: 'DEP-1', totalAmount: 1_000,
+    status: 'deposited', createdAt: new Date('2026-09-12T10:00:00+07:00'),
+    paymentHistory: [
+      { id: 'first', amount: 400, method: 'cash', confirmed: true, receivedAt: new Date('2026-09-12T10:00:00+07:00') },
+      { id: 'extra', amount: 100, method: 'cash', confirmed: true, receivedAt: new Date('2026-09-13T10:00:00+07:00') },
+    ],
+  } as Deposit
+  const summary = summarizeDashboardFinance([completedSale], [deposit], start, end, 'main')
+  assert.deepEqual(summary, {
+    salesTotal: 0,
+    salesCount: 0,
+    saleReceived: 600,
+    depositReceived: 100,
+    depositCount: 1,
+    totalReceived: 700,
+  })
 })

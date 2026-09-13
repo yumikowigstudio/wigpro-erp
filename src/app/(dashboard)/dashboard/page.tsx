@@ -5,7 +5,7 @@ import StatCard from '@/components/dashboard/StatCard'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import {
   TrendingUp, Users, Factory, Calendar,
-  AlertTriangle, Scissors, Phone, ChevronRight, Building2, CreditCard,
+  AlertTriangle, Scissors, Phone, ChevronRight, Building2, CreditCard, Wallet, Banknote,
 } from 'lucide-react'
 import Link from 'next/link'
 import {
@@ -17,7 +17,8 @@ import { db } from '@/lib/firebase'
 import { COLLECTIONS, convertTimestamps } from '@/lib/firestore'
 import { isCountableSale } from '@/lib/sales'
 import { getLegacyBranchStockFallback, findCatalogMainBranch, isCatalogVisibleInBranch } from '@/lib/catalogScope'
-import { Appointment, Inventory, Product, Sale, WorkOrder } from '@/types'
+import { summarizeDashboardFinance, type DashboardFinanceSummary } from '@/lib/dashboardFinance'
+import { Appointment, Deposit, Inventory, Product, Sale, WorkOrder } from '@/types'
 
 const PROD_COLORS: Record<string, string> = {
   pending: '#fbbf24', in_progress: '#c084fc', qc: '#60a5fa', ready: '#4ade80'
@@ -60,7 +61,7 @@ export default function DashboardPage() {
   const [period, setPeriod]       = useState<Period>('month')
 
   /* Period-dependent data */
-  const [periodSales,       setPeriodSales]       = useState<Sale[]>([])
+  const [periodFinance,     setPeriodFinance]     = useState<DashboardFinanceSummary>({ salesTotal: 0, salesCount: 0, saleReceived: 0, depositReceived: 0, depositCount: 0, totalReceived: 0 })
   const [periodApts,        setPeriodApts]        = useState<Appointment[]>([])
   const [periodNewCust,     setPeriodNewCust]     = useState(0)
 
@@ -74,12 +75,15 @@ export default function DashboardPage() {
     { name: 'เม.ย.', sales: 0 }, { name: 'พ.ค.', sales: 0 }, { name: 'มิ.ย.', sales: 0 },
   ])
   const [sixMonthTotal, setSixMonthTotal] = useState(0)
-  const [branchStats, setBranchStats] = useState<Array<{ id: string; name: string; salesToday: number; pendingPayments: number; activeWorkOrders: number }>>([])
+  const [branchStats, setBranchStats] = useState<Array<{ id: string; name: string; salesToday: number; depositsToday: number; receivedToday: number; pendingPayments: number; activeWorkOrders: number }>>([])
 
   /* ─── Period-dependent queries ─── */
   useEffect(() => {
     if (!companyId || !branchId) return
     const { start, end } = getPeriodRange(period)
+    let financeSales: Sale[] = []
+    let financeDeposits: Deposit[] = []
+    const updateFinance = () => setPeriodFinance(summarizeDashboardFinance(financeSales, financeDeposits, start, end, branchId))
 
     const saleQ = query(
       collection(db, COLLECTIONS.SALES),
@@ -87,12 +91,8 @@ export default function DashboardPage() {
       where('branchId', '==', branchId),
     )
     const u1 = onSnapshot(saleQ, snap => {
-      const list = (snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[])
-        .filter(s => {
-          const d = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt)
-          return d >= start && d <= end && isCountableSale(s)
-        })
-      setPeriodSales(list)
+      financeSales = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Sale[]
+      updateFinance()
     }, () => {})
 
     const aptPeriodQ = query(
@@ -128,7 +128,17 @@ export default function DashboardPage() {
       setPeriodNewCust(count)
     }, () => {})
 
-    return () => { u1(); u2(); u3() }
+    const depositQ = query(
+      collection(db, COLLECTIONS.DEPOSITS),
+      where('companyId', '==', companyId),
+      where('branchId', '==', branchId),
+    )
+    const u4 = onSnapshot(depositQ, snap => {
+      financeDeposits = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Deposit[]
+      updateFinance()
+    }, () => {})
+
+    return () => { u1(); u2(); u3(); u4() }
   }, [branchId, period, companyId])
 
   /* ─── Static queries (run once) ─── */
@@ -244,20 +254,20 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!companyId || !user || !['owner', 'super_admin'].includes(user.role)) return
     const today = new Date(); today.setHours(0,0,0,0)
+    const endToday = new Date(today); endToday.setHours(23,59,59,999)
     let sales: Sale[] = []
+    let deposits: Deposit[] = []
     let workOrders: WorkOrder[] = []
     const updateStats = () => {
       setBranchStats(branches.map(branch => {
         const branchSales = sales.filter(s => s.branchId === branch.id)
+        const finance = summarizeDashboardFinance(sales, deposits, today, endToday, branch.id)
         return {
           id: branch.id,
           name: branch.name,
-          salesToday: branchSales
-            .filter(s => {
-              const d = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt)
-              return d >= today && isCountableSale(s)
-            })
-            .reduce((sum, s) => sum + (s.totalAmount ?? 0), 0),
+          salesToday: finance.salesTotal,
+          depositsToday: finance.depositReceived,
+          receivedToday: finance.totalReceived,
           pendingPayments: branchSales.filter(s => isCountableSale(s) && (s.paymentStatus === 'pending' || s.status === 'pending')).length,
           activeWorkOrders: workOrders.filter(w => w.branchId === branch.id && !['delivered', 'cancelled'].includes(w.status ?? '')).length,
         }
@@ -271,10 +281,13 @@ export default function DashboardPage() {
       workOrders = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as WorkOrder[]
       updateStats()
     }, () => {})
-    return () => { u1(); u2() }
+    const u3 = onSnapshot(query(collection(db, COLLECTIONS.DEPOSITS), where('companyId', '==', companyId)), snap => {
+      deposits = snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as Deposit[]
+      updateStats()
+    }, () => {})
+    return () => { u1(); u2(); u3() }
   }, [branches, companyId, user])
 
-  const periodSalesTotal  = periodSales.reduce((s, r) => s + (r.totalAmount ?? 0), 0)
   const totalProdPending  = productionData.reduce((s, p) => s + p.value, 0)
   const { label: periodLabel } = getPeriodRange(period)
 
@@ -309,30 +322,42 @@ export default function DashboardPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         <StatCard
           title={`ยอดขาย${periodLabel}`}
-          value={formatCurrency(periodSalesTotal)}
-          subtitle={`${periodSales.length} รายการ`}
-          icon={TrendingUp} trend={{ value: 0, label: '' }} color="pink"
+          value={formatCurrency(periodFinance.salesTotal)}
+          subtitle={`${periodFinance.salesCount} บิล · มูลค่าการขาย`}
+          icon={TrendingUp} color="pink"
+        />
+        <StatCard
+          title={`รับมัดจำ${periodLabel}`}
+          value={formatCurrency(periodFinance.depositReceived)}
+          subtitle={`${periodFinance.depositCount} ใบที่รับเงิน`}
+          icon={Wallet} color="amber"
+        />
+        <StatCard
+          title={`รับเงินรวม${periodLabel}`}
+          value={formatCurrency(periodFinance.totalReceived)}
+          subtitle={`ขาย ${formatCurrency(periodFinance.saleReceived)} · มัดจำ ${formatCurrency(periodFinance.depositReceived)}`}
+          icon={Banknote} color="green"
         />
         <StatCard
           title={`คิว${periodLabel}`}
           value={periodApts.length}
           subtitle={`${periodApts.filter(a => a.status === 'pending').length} รอยืนยัน`}
-          icon={Calendar} trend={{ value: 0, label: '' }} color="teal"
+          icon={Calendar} color="teal"
         />
         <StatCard
           title="งานผลิตค้าง"
           value={totalProdPending}
           subtitle={`${productionData.find(p => p.name === 'พร้อมส่ง')?.value ?? 0} พร้อมส่ง`}
-          icon={Factory} color="amber"
+          icon={Factory} color="blue"
         />
         <StatCard
           title={`ลูกค้าใหม่${periodLabel}`}
           value={periodNewCust}
           subtitle={periodLabel}
-          icon={Users} trend={{ value: 0, label: '' }} color="purple"
+          icon={Users} color="purple"
         />
       </div>
 
@@ -344,7 +369,7 @@ export default function DashboardPage() {
                 <Building2 className="w-4 h-4 text-[var(--pink-500)]" />
                 ภาพรวมทุกสาขา
               </h3>
-              <p className="text-xs text-[var(--text-muted)] mt-0.5">ยอดขายวันนี้ บิลรอชำระ และงานผลิตค้าง</p>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">แยกยอดขาย รับมัดจำ และเงินที่รับจริงของวันนี้</p>
             </div>
             <Link href="/reports" className="text-xs text-[var(--pink-400)] hover:text-[var(--pink-500)] flex items-center gap-0.5 font-medium">
               ดูรายงาน <ChevronRight className="w-3 h-3" />
@@ -356,19 +381,21 @@ export default function DashboardPage() {
                 <p className="text-sm font-bold text-[var(--text-primary)] truncate">{branch.name}</p>
                 <div className="grid grid-cols-3 gap-2 mt-3">
                   <div>
-                    <p className="text-[10px] text-[var(--text-muted)]">ยอดวันนี้</p>
+                    <p className="text-[10px] text-[var(--text-muted)]">ยอดขาย</p>
                     <p className="text-sm font-bold text-[var(--pink-600)]">{formatCurrency(branch.salesToday)}</p>
                   </div>
                   <div>
-                    <p className="text-[10px] text-[var(--text-muted)]">รอชำระ</p>
-                    <p className="text-sm font-bold text-amber-600 flex items-center gap-1">
-                      <CreditCard className="w-3 h-3" /> {branch.pendingPayments}
-                    </p>
+                    <p className="text-[10px] text-[var(--text-muted)]">รับมัดจำ</p>
+                    <p className="text-sm font-bold text-amber-600">{formatCurrency(branch.depositsToday)}</p>
                   </div>
                   <div>
-                    <p className="text-[10px] text-[var(--text-muted)]">งานค้าง</p>
-                    <p className="text-sm font-bold text-purple-600">{branch.activeWorkOrders}</p>
+                    <p className="text-[10px] text-[var(--text-muted)]">รับเงินรวม</p>
+                    <p className="text-sm font-bold text-emerald-600">{formatCurrency(branch.receivedToday)}</p>
                   </div>
+                </div>
+                <div className="mt-3 flex items-center justify-between border-t border-[var(--border-light)] pt-2 text-xs text-[var(--text-muted)]">
+                  <span className="flex items-center gap-1"><CreditCard className="h-3 w-3" />รอชำระ {branch.pendingPayments}</span>
+                  <span>งานผลิตค้าง {branch.activeWorkOrders}</span>
                 </div>
               </div>
             ))}
